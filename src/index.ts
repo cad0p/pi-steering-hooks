@@ -89,12 +89,17 @@ const DEFAULT_RULES: Rule[] = [
 
 // ─── Override Detection ────────────────────────────────────────────
 
-function extractOverride(cmd: string, ruleName: string): string | null {
+/**
+ * Search text for a steering-override comment matching the given rule name.
+ * Supports common comment syntaxes: # // /* <!-- -- %% ;; (single-line scan).
+ */
+function extractOverride(text: string, ruleName: string): string | null {
+  // Match override after any common comment leader: # // /* <!-- -- %% ;;
   const pattern = new RegExp(
-    `#\\s*steering-override:\\s*${ruleName}\\s*[—–-]\\s*(.+)`,
-    "i",
+    `(?:#|//|/\\*|<!--|--|%%|;;)\\s*steering-override:\\s*${ruleName}\\s*[—–-]\\s*(.+?)\\s*(?:\\*/|-->)?\\s*$`,
+    "im",
   );
-  const match = cmd.match(pattern);
+  const match = text.match(pattern);
   return match ? match[1].trim() : null;
 }
 
@@ -175,17 +180,54 @@ export default function (pi: ExtensionAPI) {
         const value = rule.field === "path" ? event.input.path : event.input.content;
         if (!testRule(rule, value)) continue;
 
+        // Check override in file content
+        if (!rule.noOverride) {
+          const overrideReason = extractOverride(event.input.content || "", rule.name);
+          if (overrideReason) {
+            pi.appendEntry("steering-override", {
+              rule: rule.name,
+              reason: overrideReason,
+              path: event.input.path,
+              timestamp: new Date().toISOString(),
+            });
+            return;
+          }
+        }
+
+        const overrideHint = rule.noOverride
+          ? ""
+          : ` To override, include a comment in the file content: // steering-override: ${rule.name} — <reason>`;
+
         return {
           block: true,
-          reason: `[steering:${rule.name}] ${rule.reason}`,
+          reason: `[steering:${rule.name}] ${rule.reason}${overrideHint}`,
         };
       }
 
       if (rule.tool === "edit" && isToolCallEventType("edit", event)) {
         if (rule.field === "path" && testRule(rule, event.input.path)) {
+          // Check override in any edit's newText
+          if (!rule.noOverride && Array.isArray(event.input.edits)) {
+            const allNewText = event.input.edits.map((e: { newText?: string }) => e.newText || "").join("\n");
+            const overrideReason = extractOverride(allNewText, rule.name);
+            if (overrideReason) {
+              pi.appendEntry("steering-override", {
+                rule: rule.name,
+                reason: overrideReason,
+                path: event.input.path,
+                timestamp: new Date().toISOString(),
+              });
+              return;
+            }
+          }
+
+          const overrideHint = rule.noOverride
+            ? ""
+            : ` To override, include a comment in the edit's newText: // steering-override: ${rule.name} — <reason>`;
+
           return {
             block: true,
-            reason: `[steering:${rule.name}] ${rule.reason}`,
+            reason: `[steering:${rule.name}] ${rule.reason}${overrideHint}`,
           };
         }
       }

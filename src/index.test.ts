@@ -21,12 +21,12 @@ function testRule(rule: Rule, value: string): boolean {
   return true;
 }
 
-function extractOverride(cmd: string, ruleName: string): string | null {
+function extractOverride(text: string, ruleName: string): string | null {
   const pattern = new RegExp(
-    `#\\s*steering-override:\\s*${ruleName}\\s*[—–-]\\s*(.+)`,
-    "i",
+    `(?:#|//|/\\*|<!--|--|%%|;;)\\s*steering-override:\\s*${ruleName}\\s*[—–-]\\s*(.+?)\\s*(?:\\*/|-->)?\\s*$`,
+    "im",
   );
-  const match = cmd.match(pattern);
+  const match = text.match(pattern);
   return match ? match[1].trim() : null;
 }
 
@@ -206,5 +206,108 @@ describe("override extraction", () => {
       "no-force-push",
     );
     assert.equal(reason, null);
+  });
+
+  it("extracts override with // comment syntax", () => {
+    const reason = extractOverride(
+      'const x = 1;\n// steering-override: no-env-write — needed for config',
+      "no-env-write",
+    );
+    assert.equal(reason, "needed for config");
+  });
+
+  it("extracts override with /* */ comment syntax", () => {
+    const reason = extractOverride(
+      '/* steering-override: no-env-write — needed for config */\nconst x = 1;',
+      "no-env-write",
+    );
+    assert.equal(reason, "needed for config");
+  });
+
+  it("extracts override with <!-- --> comment syntax", () => {
+    const reason = extractOverride(
+      '<!-- steering-override: no-html-edit — fixing layout -->\n<div>hello</div>',
+      "no-html-edit",
+    );
+    assert.equal(reason, "fixing layout");
+  });
+
+  it("extracts override from multiline content", () => {
+    const content = `line 1
+line 2
+# steering-override: my-rule — good reason
+line 4`;
+    const reason = extractOverride(content, "my-rule");
+    assert.equal(reason, "good reason");
+  });
+});
+
+// ─── Write/Edit override scenarios ─────────────────────────────────
+
+describe("write tool override scenarios", () => {
+  const noEnvWrite: Rule = {
+    name: "no-env-write",
+    tool: "write",
+    field: "content",
+    pattern: "SECRET_KEY",
+    reason: "don't write secrets to files",
+  };
+
+  const noEnvWriteHard: Rule = {
+    name: "no-env-write-hard",
+    tool: "write",
+    field: "content",
+    pattern: "SECRET_KEY",
+    reason: "don't write secrets to files",
+    noOverride: true,
+  };
+
+  it("write rule triggers on matching content", () => {
+    assert.ok(testRule(noEnvWrite, "SECRET_KEY=abc123"));
+  });
+
+  it("write override is extractable from file content with # comment", () => {
+    const content = "# steering-override: no-env-write — placeholder for testing\nSECRET_KEY=placeholder";
+    const reason = extractOverride(content, "no-env-write");
+    assert.equal(reason, "placeholder for testing");
+  });
+
+  it("write override is extractable from file content with // comment", () => {
+    const content = "// steering-override: no-env-write — needed for dev\nexport const SECRET_KEY = 'dev';";
+    const reason = extractOverride(content, "no-env-write");
+    assert.equal(reason, "needed for dev");
+  });
+
+  it("noOverride rule has no extractable override", () => {
+    // The override comment is there but the rule has noOverride: true
+    // so it should still block (logic is in the hook, not extractOverride)
+    assert.ok(noEnvWriteHard.noOverride);
+  });
+});
+
+describe("edit tool override scenarios", () => {
+  const noProtectedEdit: Rule = {
+    name: "no-protected-edit",
+    tool: "edit",
+    field: "path",
+    pattern: "\\.lock$",
+    reason: "don't manually edit lock files",
+  };
+
+  it("edit rule triggers on matching path", () => {
+    assert.ok(testRule(noProtectedEdit, "package-lock.json.lock"));
+    assert.ok(!testRule(noProtectedEdit, "src/index.ts"));
+  });
+
+  it("edit override is extractable from newText", () => {
+    const newText = "updated: true\n// steering-override: no-protected-edit — fixing corrupted lock";
+    const reason = extractOverride(newText, "no-protected-edit");
+    assert.equal(reason, "fixing corrupted lock");
+  });
+
+  it("edit override works across multiple edits joined", () => {
+    const combined = "first edit text\nsecond edit with # steering-override: no-protected-edit — emergency fix";
+    const reason = extractOverride(combined, "no-protected-edit");
+    assert.equal(reason, "emergency fix");
   });
 });
