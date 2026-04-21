@@ -36,7 +36,7 @@ const noForcePush: Rule = {
   name: "no-force-push",
   tool: "bash",
   field: "command",
-  pattern: "\\bgit\\s+push\\b.*--force",
+  pattern: "\\bgit\\s+push\\b.*--force(?!-with-lease)",
   reason: "no force push",
 };
 
@@ -79,8 +79,8 @@ describe("no-force-push", () => {
   it("blocks git push --force", () => {
     assert.ok(testRule(noForcePush, "git push --force origin main"));
   });
-  it("blocks git push --force-with-lease (still matches --force)", () => {
-    assert.ok(testRule(noForcePush, "git push --force-with-lease origin main"));
+  it("allows git push --force-with-lease", () => {
+    assert.ok(!testRule(noForcePush, "git push --force-with-lease origin main"));
   });
   it("allows normal git push", () => {
     assert.ok(!testRule(noForcePush, "git push origin main"));

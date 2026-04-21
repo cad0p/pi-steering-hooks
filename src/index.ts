@@ -53,7 +53,7 @@ const DEFAULT_RULES: Rule[] = [
     name: "no-force-push",
     tool: "bash",
     field: "command",
-    pattern: "\\bgit\\s+push\\b.*--force",
+    pattern: "\\bgit\\s+push\\b.*--force(?!-with-lease)",
     reason: "Force push rewrites remote history and can destroy teammates' work. Use `git push --force-with-lease` if you must, or better yet, create a new commit.",
   },
   {
