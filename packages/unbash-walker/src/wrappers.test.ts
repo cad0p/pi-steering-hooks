@@ -74,6 +74,14 @@ describe("expandWrapperCommands", () => {
 			const out = expanded("nohup node server.js");
 			assert.ok(out.includes("node server.js"), `got: ${JSON.stringify(out)}`);
 		});
+
+		it("expands strace (passthrough with -e value flag)", () => {
+			const out = expanded("strace -e trace=open cmd arg1");
+			assert.ok(
+				out.some((s) => /^cmd arg1/.test(s)),
+				`expected a 'cmd arg1' entry; got: ${JSON.stringify(out)}`,
+			);
+		});
 	});
 
 	describe("find -exec / fd -x", () => {
@@ -85,8 +93,40 @@ describe("expandWrapperCommands", () => {
 			);
 		});
 
+		it("extracts the -ok body from find (interactive variant of -exec)", () => {
+			const out = expanded("find . -ok rm {} \\;");
+			assert.ok(
+				out.some((s) => s.startsWith("rm")),
+				`got: ${JSON.stringify(out)}`,
+			);
+		});
+
 		it("extracts the -x body from fd", () => {
 			const out = expanded("fd . -e ts -x rm");
+			assert.ok(
+				out.some((s) => s.startsWith("rm")),
+				`got: ${JSON.stringify(out)}`,
+			);
+		});
+
+		it("extracts the --exec body from fd (long form)", () => {
+			const out = expanded("fd . --exec rm {}");
+			assert.ok(
+				out.some((s) => s.startsWith("rm")),
+				`got: ${JSON.stringify(out)}`,
+			);
+		});
+
+		it("extracts the -X body from fd (capital, batch form)", () => {
+			const out = expanded("fd . -X rm {}");
+			assert.ok(
+				out.some((s) => s.startsWith("rm")),
+				`got: ${JSON.stringify(out)}`,
+			);
+		});
+
+		it("extracts the --exec-batch body from fd (long, batch form)", () => {
+			const out = expanded("fd . --exec-batch rm {}");
 			assert.ok(
 				out.some((s) => s.startsWith("rm")),
 				`got: ${JSON.stringify(out)}`,
