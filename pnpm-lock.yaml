@@ -20,6 +20,9 @@ importers:
       '@mariozechner/pi-coding-agent':
         specifier: '*'
         version: 0.73.0(ws@8.20.0)(zod@4.4.3)
+      unbash:
+        specifier: ^3.0.0
+        version: 3.0.0
       unbash-walker:
         specifier: workspace:*
         version: link:../unbash-walker

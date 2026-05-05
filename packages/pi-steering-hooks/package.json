@@ -39,10 +39,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "echo \"(no tests yet — scaffold)\" && exit 0",
+    "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "unbash": "^3.0.0",
     "unbash-walker": "workspace:*"
   },
   "peerDependencies": {
