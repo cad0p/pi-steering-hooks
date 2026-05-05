@@ -328,4 +328,21 @@ describe("effectiveCwd", () => {
 			assert.equal(cmd?.[1], "/start", "branches disagree → cmd sees pre-if cwd");
 		});
 	});
+
+	describe("background & (documented over-match)", () => {
+		it("`cd /x & cmd` — cmd sees /x (we treat & like ;)", () => {
+			// In real bash, `cd /x &` runs cd in a backgrounded subshell; cmd
+			// sees the initial cwd. Our walker does NOT isolate backgrounded
+			// commands — it threads cd effects through & the same way it does
+			// through `;`. This is a documented over-match (safer failure mode
+			// for a guardrail: report /x for cmd even though cmd won't actually
+			// run there, triggering a more conservative cwdPattern check).
+			//
+			// This test pins the current behavior. If semantics ever change to
+			// model background as subshell-like isolation, update this test and
+			// the 'Not modelled' list in effective-cwd.ts at the same time.
+			const cwds = cwdByName("cd /x & cmd", "/start");
+			assert.equal(cwds["cmd"], "/x");
+		});
+	});
 });
