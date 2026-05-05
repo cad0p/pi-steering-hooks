@@ -40,8 +40,12 @@ import type { CommandRef } from "./types.ts";
  *     escapes out or across peers
  *   - `(A; B)` — subshell; cd effects are isolated to the subshell body
  *   - `{ A; B; }` — group; cd effects DO propagate to surrounding scope
- *   - control flow (if / while / for / select / case) — body runs in current
- *     scope, cd effects propagate (conservative)
+ *   - control flow (if / while / for / select / case) — conservative
+ *     branch-merge: walk every branch/body so inner commands are recorded,
+ *     but only propagate cd effects out of the construct when all branches
+ *     agree on a final cwd (if/case), or never (while/for/select: body
+ *     may run zero times). If/case fall back to the post-clause cwd when
+ *     branches disagree; while/for/select fall back to the pre-loop cwd.
  *
  * Not modelled (out of scope — documented for future work):
  *   - `pushd`/`popd` directory stack
@@ -126,35 +130,45 @@ function walk(
 
 		case "If": {
 			const n = node as Extract<Node, { type: "If" }>;
-			// Conservative: propagate the clause's cwd into both branches; take
-			// the last-branch cwd forward. Runtime picks one branch; static
-			// analysis can't know which, so we thread like a sequence.
-			let c = walk(n.clause, cwd, byNode);
-			c = walk(n.then, c, byNode);
-			if (n.else) c = walk(n.else, c, byNode);
-			return c;
+			// Bash runs exactly one branch (then XOR else), chosen at runtime.
+			// The clause's commands always execute, so thread cwd through it.
+			// Then walk each branch from the post-clause cwd. If all branches
+			// agree on a final cwd, propagate it; otherwise fall back to the
+			// post-clause cwd (conservative: avoids inventing a cwd that may
+			// not hold for this particular run).
+			const clauseCwd = walk(n.clause, cwd, byNode);
+			const thenCwd = walk(n.then, clauseCwd, byNode);
+			const elseCwd = n.else ? walk(n.else, clauseCwd, byNode) : clauseCwd;
+			return thenCwd === elseCwd ? thenCwd : clauseCwd;
 		}
 
 		case "While": {
 			const n = node as Extract<Node, { type: "While" }>;
-			let c = walk(n.clause, cwd, byNode);
-			c = walk(n.body, c, byNode);
-			return c;
+			// The body may run zero or more times. Walk it so inner commands
+			// get recorded at their apparent cwd, but don't propagate the
+			// body's cwd forward — the body may not have executed at all.
+			const clauseCwd = walk(n.clause, cwd, byNode);
+			walk(n.body, clauseCwd, byNode);
+			return clauseCwd;
 		}
 
 		case "For":
 		case "Select": {
 			const n = node as Extract<Node, { type: "For" | "Select" }>;
-			return walk(n.body, cwd, byNode);
+			// Body iterates zero or more times; don't propagate cd effects out.
+			walk(n.body, cwd, byNode);
+			return cwd;
 		}
 
 		case "Case": {
 			const n = node as Extract<Node, { type: "Case" }>;
-			let c = cwd;
-			for (const item of n.items) {
-				c = walk(item.body, c, byNode);
-			}
-			return c;
+			// Exactly one case item runs (or none). Walk each from the
+			// pre-case cwd; if all items agree on a final cwd, thread it
+			// forward; otherwise fall back to the pre-case cwd.
+			const itemCwds = n.items.map((item) => walk(item.body, cwd, byNode));
+			if (itemCwds.length === 0) return cwd;
+			const first = itemCwds[0]!;
+			return itemCwds.every((c) => c === first) ? first : cwd;
 		}
 
 		case "Function":

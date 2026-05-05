@@ -192,4 +192,77 @@ describe("effectiveCwd", () => {
 			assert.equal(cd?.[1], "/start");
 		});
 	});
+
+	describe("control-flow branch merge", () => {
+		it("`if ...; then cd /a; else cd /b; fi; cmd` — branches disagree → cmd sees initial cwd", () => {
+			const cwds = cwdByName(
+				"if test -f x; then cd /a; else cd /b; fi; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("`if ...; then cd /a; else cd /a; fi; cmd` — branches agree → cmd sees /a", () => {
+			const cwds = cwdByName(
+				"if test -f x; then cd /a; else cd /a; fi; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/a");
+		});
+
+		it("`if ...; then cd /a; fi; cmd` (no else) — branches disagree → cmd sees initial cwd", () => {
+			// Implicit else is "no-op" = post-clause cwd. Then-branch cwd = /a;
+			// they disagree; cmd must see the initial cwd.
+			const cwds = cwdByName(
+				"if test -f x; then cd /a; fi; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("`while true; do cd /loop; done; cmd` — loop may not have run → cmd sees initial cwd", () => {
+			const cwds = cwdByName(
+				"while true; do cd /loop; done; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("`for i in a b; do cd /loop; done; cmd` — body may not iterate → cmd sees initial cwd", () => {
+			const cwds = cwdByName(
+				"for i in a b; do cd /loop; done; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("`case $x in a) cd /a ;; b) cd /a ;; esac; cmd` — items agree → cmd sees /a", () => {
+			const cwds = cwdByName(
+				"case $x in a) cd /a ;; b) cd /a ;; esac; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/a");
+		});
+
+		it("`case $x in a) cd /a ;; b) cd /b ;; esac; cmd` — items disagree → cmd sees initial cwd", () => {
+			const cwds = cwdByName(
+				"case $x in a) cd /a ;; b) cd /b ;; esac; cmd",
+				"/start",
+			);
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("commands INSIDE an if branch still see their branch's cwd", () => {
+			const ordered = cwdByOrder(
+				"if test -f x; then cd /a && inner1; else cd /b && inner2; fi; cmd",
+				"/start",
+			);
+			const inner1 = ordered.find(([n]) => n === "inner1");
+			const inner2 = ordered.find(([n]) => n === "inner2");
+			const cmd = ordered.find(([n]) => n === "cmd");
+			assert.equal(inner1?.[1], "/a", "inner1 runs after cd /a in then-branch");
+			assert.equal(inner2?.[1], "/b", "inner2 runs after cd /b in else-branch");
+			assert.equal(cmd?.[1], "/start", "branches disagree → cmd sees pre-if cwd");
+		});
+	});
 });
