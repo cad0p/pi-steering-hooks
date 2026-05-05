@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Originally authored by Jason Diamond as part of jdiamond/pi-guard.
-// Extracted and repackaged by cad0p as unbash-walker, with additional
-// effective-cwd walker. See README for acknowledgments.
+// Part of unbash-walker.
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
