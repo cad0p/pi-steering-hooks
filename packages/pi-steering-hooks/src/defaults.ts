@@ -41,8 +41,10 @@ export const DEFAULT_RULES: Rule[] = [
 		name: "no-rm-rf-slash",
 		tool: "bash",
 		field: "command",
-		// rm with any flag combo containing both `r` and `f`, operating on `/`.
-		pattern: "\\brm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+/(?:\\s|$)",
+		// rm with any flag combo containing both `r` and `f`, in either order,
+		// operating on `/`.
+		pattern:
+			"\\brm\\s+-[a-zA-Z]*(?:r[a-zA-Z]*f|f[a-zA-Z]*r)[a-zA-Z]*\\s+/(?:\\s|$)",
 		reason:
 			"Recursive force-delete from root is catastrophic and irreversible. Specify a safe path (e.g. a subdirectory of the project or a temp dir).",
 		noOverride: true,
