@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { parse as parseBash } from "unbash";
 import { effectiveCwd } from "./effective-cwd.ts";
+import { extractAllCommandsFromAST } from "./extract.ts";
 import { getBasename } from "./resolve.ts";
 
 /** Map "name" → cwd for easier assertions; if the same name appears twice,
@@ -163,6 +164,68 @@ describe("effectiveCwd", () => {
 		}
 		const names = Array.from(map.keys()).map((r) => getBasename(r));
 		assert.deepEqual(names, ["a", "b", "c"]);
+	});
+
+	describe("caller-supplied refs[]", () => {
+		it("when refs are passed, the returned Map's keys ARE those refs (===)", () => {
+			const raw = "cd /x && cmd1 && cd /y && cmd2";
+			const ast = parseBash(raw);
+			const externalRefs = extractAllCommandsFromAST(ast, raw);
+			const map = effectiveCwd(ast, "/start", externalRefs);
+
+			const mapKeys = Array.from(map.keys());
+			assert.equal(
+				mapKeys.length,
+				externalRefs.length,
+				"every external ref should appear in the cwd map",
+			);
+			for (const ref of externalRefs) {
+				assert.ok(
+					mapKeys.includes(ref),
+					`external ref for ${getBasename(ref)} must be a key by identity`,
+				);
+			}
+		});
+
+		it("when refs are passed, values are correct per external ref", () => {
+			const raw = "cd /x && cmd1 && cd /y && cmd2";
+			const ast = parseBash(raw);
+			const externalRefs = extractAllCommandsFromAST(ast, raw);
+			const map = effectiveCwd(ast, "/start", externalRefs);
+
+			const byName = new Map<string, string>();
+			for (const ref of externalRefs) {
+				const cwd = map.get(ref);
+				assert.ok(cwd !== undefined, `${getBasename(ref)} should have a cwd`);
+				byName.set(getBasename(ref), cwd);
+			}
+			assert.equal(byName.get("cmd1"), "/x");
+			assert.equal(byName.get("cmd2"), "/y");
+		});
+
+		it("omitting refs preserves pre-existing behavior (fresh refs as keys)", () => {
+			const raw = "cd /x && cmd";
+			const ast = parseBash(raw);
+			const externalRefs = extractAllCommandsFromAST(ast, raw);
+			const map = effectiveCwd(ast, "/start");
+
+			// Map keys are NOT the external refs (different extraction), but they
+			// share the underlying Command nodes.
+			const mapKeys = Array.from(map.keys());
+			for (const ref of externalRefs) {
+				assert.ok(
+					!mapKeys.includes(ref),
+					"without passing refs, external refs should NOT be identity keys",
+				);
+			}
+			const nodesInMap = mapKeys.map((r) => r.node);
+			for (const ref of externalRefs) {
+				assert.ok(
+					nodesInMap.includes(ref.node),
+					"but the underlying AST nodes should be shared",
+				);
+			}
+		});
 	});
 
 	describe("unresolvable cd targets", () => {

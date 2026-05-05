@@ -53,13 +53,23 @@ import type { CommandRef } from "./types.ts";
  *   - `env -C DIR cmd` (env's per-command cwd override)
  *   - background `&` separator (treated like `;`)
  *
- * The returned map is keyed by CommandRef—those refs are freshly created by
- * this function. Iterate the map (`for (const [ref, cwd] of map)`) or read
- * `Array.from(map.keys())` to enumerate commands; do **not** try to look up
- * refs obtained from a separate `extractAllCommandsFromAST` call on the same
- * tree, since CommandRef identity is per-extraction. If you need to correlate
- * with external refs, match on `ref.node` (the underlying unbash Command node
- * is shared across extractions of the same AST).
+ * The returned map is keyed by CommandRef. By default those refs are freshly
+ * created by this function via an internal `extractAllCommandsFromAST` call.
+ * If you already have refs from your own `extractAllCommandsFromAST` call on
+ * the same script AST, pass them as the third argument and the Map will be
+ * keyed by *those* refs (matched by `.node` identity). This lets callers
+ * correlate cwd results with other per-ref state without an extra lookup.
+ *
+ * Note: `refs` should be the output of `extractAllCommandsFromAST` on the
+ * same Script. Wrapper-expanded refs (produced by `expandWrapperCommands`)
+ * are NOT automatically included — the Map contains entries for top-level
+ * commands that appear in the AST walk. Whether to also attach cwds to
+ * wrapper-expanded inner refs is a Phase 2 decision point.
+ *
+ * If you omit `refs`, iterate the map (`for (const [ref, cwd] of map)`) or
+ * read `Array.from(map.keys())` to enumerate commands; do **not** try to
+ * look up refs obtained from a *separate* extract call, since CommandRef
+ * identity is per-extraction.
  *
  * The effective cwd recorded for a `cd` command is the cwd **as it starts**,
  * i.e. before its own effect is applied. For `cd A && cmd B && cd C`, `cmd B`
@@ -68,13 +78,14 @@ import type { CommandRef } from "./types.ts";
 export function effectiveCwd(
 	script: Script,
 	initialCwd: string,
+	refs?: readonly CommandRef[],
 ): Map<CommandRef, string> {
-	const refs = extractAllCommandsFromAST(script, "");
+	const ownRefs = refs ?? extractAllCommandsFromAST(script, "");
 	const byNode = new Map<Command, string>();
 	walk(script, initialCwd, byNode);
 
 	const result = new Map<CommandRef, string>();
-	for (const ref of refs) {
+	for (const ref of ownRefs) {
 		const cwd = byNode.get(ref.node);
 		if (cwd !== undefined) result.set(ref, cwd);
 	}
