@@ -1,103 +1,79 @@
-# pi-steering-hooks
+# pi-steering-hooks — PoC monorepo
 
-Deterministic tool-call guardrails for [pi](https://github.com/badlogic/pi-mono). Enforce rules with before-tool hooks instead of prompts — zero token cost, 100% reliability.
+PoC workspace for two related packages:
 
-Prompt-based rules ("never force push") work most of the time. Steering hooks work every time. They intercept tool calls before execution and block violations deterministically, with an override escape hatch for when the agent has a good reason.
+- **[`packages/pi-steering-hooks/`](packages/pi-steering-hooks/)** — AST-backed steering engine for [pi](https://github.com/mariozechner/pi-coding-agent). Deterministic tool-call guardrails with command-level effective-cwd scoping. Eventual npm package: `@cad0p/pi-steering-hooks`.
+- **[`packages/unbash-walker/`](packages/unbash-walker/)** — utility for walking [unbash](https://github.com/webpro-nl/unbash) ASTs. Planned to be extracted into its own repo once the PoC proves the value.
 
-Inspired by [Strands Agents: Steering Accuracy Beats Prompts](https://strandsagents.com/blog/steering-accuracy-beats-prompts-workflows/).
+Both packages are currently `private: true`. Publishing is gated on PoC completion and upstream-coordination decisions (see "Status" below).
 
-## Install
+## Why a monorepo?
+
+`unbash-walker` is general-purpose infrastructure — it's useful to any agent or tool that inspects bash commands (permission systems, steering engines, shell linters). `@cad0p/pi-steering-hooks` is one of several consumers we expect.
+
+During the PoC, keeping both in one repo lets us:
+
+- Iterate on the API of `unbash-walker` while its only consumer evolves too.
+- Prove the "extraction is valuable" thesis with working code before asking an upstream to absorb the split.
+- Keep `workspace:*` as the dependency spec — swapping to a published version later is a one-line change.
+
+Once the PoC ships and the extraction path is clear, `unbash-walker` moves out.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│  unbash  (bash AST parser, 3rd-party)        │
+└──────────────────────────────────────────────┘
+                     ▲
+                     │
+┌──────────────────────────────────────────────┐
+│  unbash-walker  (this repo, Phase 1)          │
+│    extractAllCommandsFromAST                 │
+│    expandWrapperCommands                     │
+│    effectiveCwd                              │
+│    CommandRef + basename normalization       │
+└──────────────────────────────────────────────┘
+                     ▲
+                     │
+┌──────────────────────────────────────────────┐
+│  @cad0p/pi-steering-hooks  (this repo,       │
+│                             Phase 2)          │
+│    rule schema (pattern / requires /         │
+│      unless / cwdPattern / reason)           │
+│    walk-up + merge + session_start loader    │
+│    inline override comments + audit          │
+└──────────────────────────────────────────────┘
+```
+
+## Getting started
+
+> Once Phase 1 lands and real code exists, these commands will actually do something.
 
 ```bash
-pi install @samfp/pi-steering-hooks
+pnpm install
+pnpm -r typecheck
+pnpm -r build
+pnpm -r test
 ```
 
-## Default Rules
+Requires Node ≥ 20 and [pnpm](https://pnpm.io/) ≥ 10.
 
-| Rule | Tool | What it blocks |
-|------|------|---------------|
-| `no-force-push` | bash | `git push --force` (destructive history rewrite) |
-| `no-hard-reset` | bash | `git reset --hard` (discards uncommitted work) |
-| `no-rm-rf-slash` | bash | `rm -rf /` (catastrophic, no override allowed) |
-| `conventional-commits` | bash | Non-conventional `git commit -m` messages |
-| `no-long-running-commands` | bash | Dev servers and watchers that block the agent |
+## Status
 
-## Override Mechanism
+**PoC, scaffold phase.** The monorepo structure and tooling exist; package internals are placeholders until subsequent phases land:
 
-When a rule fires, the agent can retry with an override comment:
+- [x] Phase 0 — Scaffold pnpm monorepo (this PR)
+- [ ] Phase 1 — Port `unbash-walker` from [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) + adversarial test matrix
+- [ ] Phase 2 — Build the steering engine
+- [ ] Phase 3 — Port rule-pack examples
+- [ ] Phase 4 — READMEs, docs, publish-decision gate
 
-```bash
-git push --force origin main  # steering-override: no-force-push — deploying hotfix to unblock prod
-```
+## Related projects
 
-The override is allowed through but logged to the session for audit. Rules with `noOverride: true` (like `no-rm-rf-slash`) cannot be overridden.
-
-## Custom Rules
-
-Create `steering.json` in your project root or `~/.pi/agent/`:
-
-```json
-{
-  "disable": ["conventional-commits"],
-  "rules": [
-    {
-      "name": "no-git-push",
-      "tool": "bash",
-      "field": "command",
-      "pattern": "\\bgit\\s+push\\b",
-      "reason": "Use `cr` instead of `git push`."
-    },
-    {
-      "name": "aws-requires-profile",
-      "tool": "bash",
-      "field": "command",
-      "pattern": "\\baws\\s+[a-z]",
-      "unless": "(--profile|AWS_PROFILE=|\\baws\\s+(sts\\s+get-caller-identity|configure)\\b)",
-      "reason": "Always use --profile or AWS_PROFILE with aws CLI commands."
-    },
-    {
-      "name": "no-write-env-files",
-      "tool": "write",
-      "field": "path",
-      "pattern": "\\.env",
-      "reason": "Don't overwrite .env files — they may contain secrets.",
-      "noOverride": true
-    }
-  ]
-}
-```
-
-### Rule Format
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Unique rule identifier |
-| `tool` | `"bash"` \| `"write"` \| `"edit"` | Which tool to intercept |
-| `field` | `"command"` \| `"path"` \| `"content"` | Which input field to test |
-| `pattern` | string | Regex — if it matches, the rule fires (violation) |
-| `requires` | string? | Additional regex that must also match (AND condition) |
-| `unless` | string? | Regex exemption — if this matches, rule doesn't fire |
-| `reason` | string | Message shown to the agent when blocked |
-| `noOverride` | boolean? | If true, no override escape hatch |
-
-### Config Locations
-
-Checked in order (first found wins):
-
-1. `./steering.json` (project root)
-2. `~/.pi/agent/steering.json` (global)
-
-## How It Works
-
-1. Extension registers a `tool_call` hook
-2. On every bash/write/edit call, rules are evaluated against the tool input
-3. If a rule matches: block the call and return the reason to the agent
-4. Agent sees the block message and adjusts its approach
-5. If the agent has a legitimate reason, it can retry with `# steering-override: rule-name — reason`
-6. Overrides are logged via `appendEntry` for audit
-
-No tokens spent on rule enforcement. No prompt drift. No "oops, the model forgot the rule this time."
+- [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks) — this repo's history originates here. A simpler, regex-based steering package with session-level cwd. Both approaches are legitimate; pick based on need.
+- [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) — permission system for pi. Its `src/ast/` module is the source we port from for `unbash-walker`. An extraction proposal is planned once the PoC demonstrates the value.
 
 ## License
 
-MIT
+MIT. Code ported from upstream projects retains dual credit in the files it touches. See [`LICENSE`](LICENSE).

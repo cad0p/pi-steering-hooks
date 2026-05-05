@@ -1,0 +1,54 @@
+{
+  "name": "@cad0p/pi-steering-hooks",
+  "version": "0.0.0-poc.0",
+  "private": true,
+  "description": "AST-backed steering hooks for pi — deterministic tool-call guardrails with command-level effective-cwd. Scaffolded; implementation arrives in Phase 2.",
+  "keywords": [
+    "pi-package",
+    "extension",
+    "steering",
+    "guardrails",
+    "safety",
+    "hooks",
+    "ast",
+    "bash"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "echo \"(no tests yet — scaffold)\" && exit 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "unbash-walker": "workspace:*"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
