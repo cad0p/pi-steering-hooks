@@ -41,9 +41,13 @@ import type { CommandRef } from "./types.ts";
  *   - `env -C DIR cmd` (env's per-command cwd override)
  *   - background `&` separator (treated like `;`)
  *
- * The returned map is keyed by CommandRef (as returned by
- * `extractAllCommandsFromAST`), so callers can look up the effective cwd for
- * any extracted command without re-walking the tree.
+ * The returned map is keyed by CommandRef—those refs are freshly created by
+ * this function. Iterate the map (`for (const [ref, cwd] of map)`) or read
+ * `Array.from(map.keys())` to enumerate commands; do **not** try to look up
+ * refs obtained from a separate `extractAllCommandsFromAST` call on the same
+ * tree, since CommandRef identity is per-extraction. If you need to correlate
+ * with external refs, match on `ref.node` (the underlying unbash Command node
+ * is shared across extractions of the same AST).
  *
  * The effective cwd recorded for a `cd` command is the cwd **as it starts**,
  * i.e. before its own effect is applied. For `cd A && cmd B && cd C`, `cmd B`
