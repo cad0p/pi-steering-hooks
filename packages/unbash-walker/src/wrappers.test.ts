@@ -171,4 +171,47 @@ describe("expandWrapperCommands", () => {
 			assert.ok(out.includes("rm /tmp/x"), `got: ${JSON.stringify(out)}`);
 		});
 	});
+
+	describe("false-positive regressions", () => {
+		it("does not treat `sudo` appearing in an argument as a wrapper", () => {
+			// `echo` is not a wrapper; `sudo` is just an arg here. We must not
+			// recurse into "sudo rm /tmp/x" and pretend there's a real `rm`.
+			const out = expanded("echo sudo rm /tmp/x");
+			assert.equal(
+				out.length,
+				1,
+				`expected one command, got: ${JSON.stringify(out)}`,
+			);
+			assert.ok(
+				out[0]?.startsWith("echo"),
+				`expected 'echo ...', got: ${JSON.stringify(out)}`,
+			);
+		});
+
+		it("does not match wrapper names with prefix/suffix variants", () => {
+			// `my-sudo-wrapper` contains "sudo" as a substring but is a
+			// different executable. Matching must be whole-basename.
+			const out = expanded("my-sudo-wrapper arg");
+			assert.equal(
+				out.length,
+				1,
+				`expected one command, got: ${JSON.stringify(out)}`,
+			);
+			assert.ok(
+				out[0]?.startsWith("my-sudo-wrapper"),
+				`expected 'my-sudo-wrapper ...', got: ${JSON.stringify(out)}`,
+			);
+		});
+
+		it("does not match `findutils` or similar as `find`", () => {
+			const out = expanded("findutils -exec rm {} \\;");
+			// Whole-basename match: `findutils` must not trigger find's exec
+			// extraction. Single entry in output.
+			assert.equal(
+				out.length,
+				1,
+				`expected one command, got: ${JSON.stringify(out)}`,
+			);
+		});
+	});
 });
