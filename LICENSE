@@ -1,6 +1,14 @@
 MIT License
 
+Copyright (c) 2026 Pier Carlo Cadoppi (cad0p)
+  — monorepo scaffolding, effective-cwd walker, and unbash-walker packaging
+
+Copyright (c) 2026 Jason Diamond (jdiamond)
+  — portions of unbash-walker ported from jdiamond/pi-guard (MIT)
+
 Copyright (c) 2026 samfp
+  — fork parent: samfoy/pi-steering-hooks (original sources not currently
+    present in this codebase; retained for git-fork-history)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
