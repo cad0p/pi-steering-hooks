@@ -2,7 +2,7 @@
   "name": "unbash-walker",
   "version": "0.0.0-poc.0",
   "private": true,
-  "description": "Utility for walking unbash ASTs — extract commands, expand wrappers, resolve effective cwd. Scaffolded; implementation arrives in Phase 1.",
+  "description": "Utility for walking unbash ASTs — extract commands, expand wrappers, resolve effective cwd.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -22,8 +22,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "echo \"(no tests yet — scaffold)\" && exit 0",
+    "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "unbash": "^3.0.0"
   },
   "devDependencies": {
     "typescript": "^5.4.5"
