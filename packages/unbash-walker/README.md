@@ -71,6 +71,8 @@ Static analysis; some bash constructs are deliberately under- or over-approximat
 
 ## Acknowledgments
 
+Built on top of [`unbash`](https://github.com/webpro-nl/unbash) by [Lars Kappert](https://github.com/webpro) (also maintainer of [knip](https://github.com/webpro-nl/knip)). `unbash-walker` is strictly a consumer — `unbash` handles every piece of parsing.
+
 The command-extraction and wrapper-expansion logic was originally authored by [Jason Diamond](https://github.com/jdiamond) as part of [pi-guard](https://github.com/jdiamond/pi-guard). This package is a refactor-and-extraction of that work with the addition of an `effectiveCwd` walker and a `getBasename` helper. Both the original files and the additions are MIT-licensed. File headers carry dual credit.
 
 ## Status
