@@ -125,7 +125,10 @@ describe("adversarial matrix (unbash + wrappers)", () => {
 			// Intentionally skipped — unbash preserves `\--force` verbatim in
 			// `value`, so a literal-arg matcher cannot see this as --force.
 			// Documented in REPORT.md §2 as the one case both regex and AST
-			// approaches miss today.
+			// approaches miss today. No fix planned. Rule engines consuming
+			// unbash-walker should treat commands with unusual escapes as
+			// suspicious and fall back to `ask` or deny rather than silently
+			// allowing.
 			it.skip(`${c.id}: ${c.label}`, () => {});
 			continue;
 		}
