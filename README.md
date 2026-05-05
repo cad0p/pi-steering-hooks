@@ -48,8 +48,6 @@ Once the PoC ships and the extraction path is clear, `unbash-walker` moves out.
 
 ## Getting started
 
-> Once Phase 1 lands and real code exists, these commands will actually do something.
-
 ```bash
 pnpm install
 pnpm -r typecheck
@@ -61,10 +59,10 @@ Requires Node ≥ 20 and [pnpm](https://pnpm.io/) ≥ 10.
 
 ## Status
 
-**PoC, scaffold phase.** The monorepo structure and tooling exist; package internals are placeholders until subsequent phases land:
+**PoC, Phase 1 complete.** The `unbash-walker` package is fully ported and tested; the steering engine itself is next.
 
-- [x] Phase 0 — Scaffold pnpm monorepo (this PR)
-- [ ] Phase 1 — Port `unbash-walker` from [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) + adversarial test matrix
+- [x] Phase 0 — Scaffold pnpm monorepo
+- [x] Phase 1 — Port `unbash-walker` from [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) + adversarial test matrix
 - [ ] Phase 2 — Build the steering engine
 - [ ] Phase 3 — Port rule-pack examples
 - [ ] Phase 4 — READMEs, docs, publish-decision gate
