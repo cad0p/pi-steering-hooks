@@ -46,11 +46,13 @@ export const DEFAULT_RULES: Rule[] = [
 		name: "no-rm-rf-slash",
 		tool: "bash",
 		field: "command",
-		// rm with any flag combo containing both `r` and `f`, in either order,
-		// operating on `/`. Anchored to the basename so `echo 'rm -rf /'`
-		// (an echoed string, not an actual deletion) is not flagged.
+		// rm with recursive AND force flags in any form, operating on `/`.
+		// Uses two independent lookaheads so separated flags (`-r -f`),
+		// long-form flags (`--recursive --force`), mixed case (`-Rf`), and
+		// reversed order (`-fr`) are all caught. Anchored to the basename
+		// so `echo 'rm -rf /'` (basename=echo) is NOT flagged.
 		pattern:
-			"^rm\\s+-[a-zA-Z]*(?:r[a-zA-Z]*f|f[a-zA-Z]*r)[a-zA-Z]*\\s+/(?:\\s|$)",
+			"^rm\\b(?=.*(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive))(?=.*(?:-[A-Za-z]*f[A-Za-z]*|--force)).*\\s/(?:\\s|$)",
 		reason:
 			"Recursive force-delete from root is catastrophic and irreversible. Specify a safe path (e.g. a subdirectory of the project or a temp dir).",
 		noOverride: true,

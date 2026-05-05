@@ -103,8 +103,35 @@ describe("DEFAULT_RULES pattern spot-checks", () => {
 		assert.equal(pattern("no-rm-rf-slash").test("rm -fr /"), true);
 	});
 
+	it("no-rm-rf-slash matches `rm -r -f /` (separated flags)", () => {
+		assert.equal(pattern("no-rm-rf-slash").test("rm -r -f /"), true);
+	});
+
+	it("no-rm-rf-slash matches `rm --recursive --force /` (long-form flags)", () => {
+		assert.equal(
+			pattern("no-rm-rf-slash").test("rm --recursive --force /"),
+			true,
+		);
+	});
+
+	it("no-rm-rf-slash matches `rm -Rf /` (uppercase R)", () => {
+		assert.equal(pattern("no-rm-rf-slash").test("rm -Rf /"), true);
+	});
+
 	it("no-rm-rf-slash does NOT match `rm -rf /tmp`", () => {
 		assert.equal(pattern("no-rm-rf-slash").test("rm -rf /tmp"), false);
+	});
+
+	it("no-rm-rf-slash does NOT match `rm /tmp` (no flags)", () => {
+		assert.equal(pattern("no-rm-rf-slash").test("rm /tmp"), false);
+	});
+
+	it("no-rm-rf-slash does NOT match `rm -r /tmp` (missing force flag)", () => {
+		assert.equal(pattern("no-rm-rf-slash").test("rm -r /tmp"), false);
+	});
+
+	it("no-rm-rf-slash does NOT match `rm -f /` (missing recursive flag)", () => {
+		assert.equal(pattern("no-rm-rf-slash").test("rm -f /"), false);
 	});
 
 	it("no-rm-rf-slash does NOT match `rm -rf .`", () => {
