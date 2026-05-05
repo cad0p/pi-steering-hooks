@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: MIT
+// Part of @cad0p/pi-steering-hooks.
+
+/**
+ * Rule schema for the steering engine.
+ *
+ * Samfoy-inspired (pattern / requires / unless / reason / noOverride +
+ * inline override comment), with two additions that justify the AST backend:
+ *
+ *   - `pattern` for the `bash` tool is applied to the AST-extracted command
+ *     string (`name + " " + args.join(" ")`) — not the raw input. This avoids
+ *     the silent-bypass classes that regex-on-raw-text has (quoted args,
+ *     `sh -c` / `bash -c`, nested `sudo xargs`, …).
+ *   - `cwdPattern` is tested against the *effective* cwd of the command.
+ *     For bash, that's the cwd computed by unbash-walker's `effectiveCwd`
+ *     walker (so `cd ~/personal && git commit --amend` sees `~/personal`).
+ *     For write/edit, `cwdPattern` tests against the session cwd directly.
+ */
+
+/** A single steering rule evaluated per tool call. */
+export interface Rule {
+	/** Unique rule identifier. Used in override comments and audit logs. */
+	name: string;
+	/** Which pi tool to intercept. */
+	tool: "bash" | "write" | "edit";
+	/**
+	 * Which field of the tool input to test. Included for forward compatibility
+	 * with richer rules; current evaluator derives the test target from `tool`
+	 * but readers/authors benefit from the explicit declaration.
+	 */
+	field: "command" | "path" | "content";
+	/**
+	 * Regex pattern string. For the `bash` tool, applied to the AST-extracted
+	 * command string (`name + " " + args.join(" ")`) per extracted command —
+	 * NOT the raw user-supplied command string. For `write` / `edit`, applied
+	 * to the raw field value.
+	 */
+	pattern: string;
+	/** Optional: additional regex that must also match (AND condition). */
+	requires?: string;
+	/** Optional: regex exemption — if this matches, rule doesn't fire. */
+	unless?: string;
+	/**
+	 * Optional: regex tested against the effective cwd of the command.
+	 * For the `bash` tool: uses `effectiveCwd` from unbash-walker per command
+	 * ref. For `write` / `edit`: uses the session cwd directly.
+	 * Rule only fires if `cwdPattern` matches.
+	 */
+	cwdPattern?: string;
+	/** Message shown to the agent when blocked. Should be actionable. */
+	reason: string;
+	/** If true, no override escape hatch. Hard block. */
+	noOverride?: boolean;
+}
+
+/**
+ * `steering.json` contents. Merged across the global baseline, any ancestor
+ * directories between `$HOME` and the session cwd, and the session cwd itself
+ * (outermost-first, inner layers override by rule name).
+ */
+export interface SteeringConfig {
+	/** Disable specific default rules by name. Additive across layers. */
+	disable?: string[];
+	/** Additional custom rules. Later layers override earlier ones by `name`. */
+	rules?: Rule[];
+}
