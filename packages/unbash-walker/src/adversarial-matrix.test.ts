@@ -30,7 +30,30 @@ import { expandWrapperCommands } from "./wrappers.ts";
 
 type Verdict = "BLOCK" | "ALLOW";
 
-/** Real-world-shaped matcher: git + push + --force with --force-with-lease exemption. */
+/**
+ * Matcher for the adversarial-matrix tests.
+ *
+ * This helper implements a **structured** match on the extracted command:
+ * basename equality on the command name (so `/usr/bin/git` and `"git"`
+ * both resolve to `git`), literal membership checks on the args array
+ * (so `--force-with-lease` is distinguishable from `--force`), and an
+ * explicit exemption for `--force-with-lease[=ref]`.
+ *
+ * pi-guard's own matcher on `main` is subsequence-on-args (via an
+ * `isSubsequence` helper) — a slightly different shape. For the 24-case
+ * matrix from /tmp/bash-research/REPORT.md, the REPORT's
+ * "unbash + wrappers" column was measured against pi-guard's subsequence
+ * matcher. All 24 cases have `push` appearing before `--force` in arg
+ * order, so `.includes()` here produces the same verdicts as subsequence.
+ * A downstream consumer of unbash-walker may pick either shape; this
+ * test pins the structured variant as the reference.
+ *
+ * A naive regex over `name + " " + args.join(" ")` would over-match
+ * cases 8 (echo'd text) and 23 (alias definition) because it can't
+ * tell data from command args. This test is also, implicitly, a proof
+ * that extracting commands before matching gets those two cases right.
+ * See REPORT.md §2 for the full adversarial breakdown.
+ */
 function matchesGitPushForce(cmd: CommandRef): boolean {
 	if (getBasename(cmd) !== "git") return false;
 	const args = getCommandArgs(cmd);
