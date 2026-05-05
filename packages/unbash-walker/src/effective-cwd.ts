@@ -12,6 +12,8 @@ import type {
 	Script,
 	Statement,
 	Subshell,
+	Word,
+	WordPart,
 } from "unbash";
 import { extractAllCommandsFromAST } from "./extract.ts";
 import type { CommandRef } from "./types.ts";
@@ -27,6 +29,12 @@ import type { CommandRef } from "./types.ts";
  *   - `cd` with no args — go to `$HOME`
  *   - `cd -` — no-op (we don't track OLDPWD; errs toward over-matching, which
  *     is the safer failure mode for a guardrail consumer)
+ *   - `cd` with an unresolvable target (parameter expansion, command
+ *     substitution, arithmetic expansion, process substitution, etc.) — the
+ *     target can't be computed statically, so we stop propagating cd effects
+ *     from this point. The `cd` command itself is recorded at the pre-cd cwd,
+ *     and subsequent commands see the pre-cd cwd unchanged (conservative:
+ *     avoids inventing a bogus path like `/start/$VAR`).
  *   - `A && B`, `A || B`, `A ; B`, `A\nB` — left-to-right; cd effects propagate
  *   - `A | B` — each pipeline peer runs in its own subshell; no cd effect
  *     escapes out or across peers
@@ -185,20 +193,51 @@ function handleCommand(
 	const name = node.name?.value ?? node.name?.text;
 	if (name !== "cd") return cwd;
 
-	const args = node.suffix.map((w) => w.value ?? w.text);
+	const targetWord = node.suffix[0];
 
 	// `cd` with no arguments → HOME (or initialCwd if HOME unset)
-	if (args.length === 0) {
+	if (targetWord === undefined) {
 		return resolveHome(cwd);
 	}
 
-	const target = args[0];
+	// If the target is statically unresolvable (contains parameter/command/
+	// arithmetic expansion, process substitution, etc.), stop propagating cd
+	// effects. Record this `cd` at the pre-cd cwd and return cwd unchanged.
+	if (!isStaticallyResolvable(targetWord)) {
+		return cwd;
+	}
+
+	const target = targetWord.value ?? targetWord.text;
 	if (target === undefined || target === "-") {
 		// `cd -`: jumps to OLDPWD, which we don't track. No-op.
 		return cwd;
 	}
 
 	return resolveTarget(cwd, target);
+}
+
+/**
+ * True if this word's value can be determined from the source text alone
+ * (no runtime expansion). Pure literals and single-quoted strings qualify.
+ * Double-quoted strings qualify only if every inner part is itself static.
+ * ParameterExpansion / CommandExpansion / ArithmeticExpansion / SimpleExpansion
+ * (`$VAR`) / ProcessSubstitution / BraceExpansion / ExtendedGlob / ANSI-C /
+ * LocaleString etc. are all treated as unresolvable — we do not invent values
+ * for them.
+ */
+function isStaticallyResolvable(w: Word | undefined): boolean {
+	if (!w) return true; // no arg = HOME, resolvable
+	if (!w.parts || w.parts.length === 0) return true; // pure literal
+	return w.parts.every(isStaticPart);
+}
+
+function isStaticPart(p: WordPart): boolean {
+	if (p.type === "Literal") return true;
+	if (p.type === "SingleQuoted") return true;
+	if (p.type === "DoubleQuoted") {
+		return (p.parts ?? []).every((child) => isStaticPart(child as WordPart));
+	}
+	return false;
 }
 
 /** Expand `~` / `~/...` using `process.env.HOME`, falling back to `cwd`. */

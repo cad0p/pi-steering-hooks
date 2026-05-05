@@ -164,4 +164,32 @@ describe("effectiveCwd", () => {
 		const names = Array.from(map.keys()).map((r) => getBasename(r));
 		assert.deepEqual(names, ["a", "b", "c"]);
 	});
+
+	describe("unresolvable cd targets", () => {
+		it("`cd $VAR && cmd` — cmd sees initial cwd (parameter expansion)", () => {
+			const cwds = cwdByName("cd $VAR && cmd", "/start");
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it('`cd "$HOME/x" && cmd` — cmd sees initial cwd (double-quoted expansion)', () => {
+			const cwds = cwdByName('cd "$HOME/x" && cmd', "/start");
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("`cd 'literal-with-$VAR' && cmd` — single-quoted is statically resolvable", () => {
+			const cwds = cwdByName("cd 'literal-with-$VAR' && cmd", "/start");
+			assert.equal(cwds["cmd"], "/start/literal-with-$VAR");
+		});
+
+		it("`cd $(pwd) && cmd` — cmd sees initial cwd (command substitution)", () => {
+			const cwds = cwdByName("cd $(pwd) && cmd", "/start");
+			assert.equal(cwds["cmd"], "/start");
+		});
+
+		it("the unresolvable `cd` itself is still recorded at the pre-cd cwd", () => {
+			const ordered = cwdByOrder("cd $VAR && cmd", "/start");
+			const cd = ordered.find(([n]) => n === "cd");
+			assert.equal(cd?.[1], "/start");
+		});
+	});
 });
