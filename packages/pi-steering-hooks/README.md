@@ -1,30 +1,141 @@
 # @cad0p/pi-steering-hooks
 
-AST-backed steering hooks for [pi](https://github.com/mariozechner/pi-coding-agent) — deterministic tool-call guardrails with command-level effective-cwd scoping.
+AST-backed steering hooks for [pi](https://github.com/mariozechner/pi-coding-agent) — evaluates rules against bash command ASTs instead of raw strings, supports per-rule `cwdPattern` predicates, and audits inline overrides.
+
+Inspired by [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks) (schema + override-comment + defaults); the evaluator backend is swapped out for an AST pipeline (via [`unbash-walker`](../unbash-walker/)) so rules survive quoting tricks, wrapper commands, and `cd`-prefixed chains.
+
+## Why AST over regex-on-raw
+
+samfoy's evaluator runs regex directly against the raw command string. That works well for the common case, but has four known silent-bypass classes once the agent starts chaining or wrapping commands (pinned by [`unbash-walker`'s adversarial matrix](../unbash-walker/src/adversarial-matrix.test.ts)) — e.g. `sh -c 'git push --force'`, `echo something | sudo xargs git push --force`, or `cd ~/personal && git commit --amend` (where samfoy's `cwd` check sees the *session* cwd, not the cwd that `git commit` actually runs under).
+
+This package parses the command with [`unbash`](https://github.com/webpro-nl/unbash), extracts every command ref, recursively expands known wrappers (`sh -c`, `bash -c`, `sudo`, `xargs`, `env`, …), and runs each rule against each ref with that ref's *effective* cwd. The rule still pays a small runtime cost, but the semantics are deterministic.
+
+## Install
+
+> During the PoC, the package is `private: true` and lives inside the monorepo. Once published:
+>
+> ```bash
+> pi install @cad0p/pi-steering-hooks
+> ```
+
+For local development inside this repo, it's picked up automatically as a workspace package.
+
+## Quick start
+
+Drop a `steering.json` in `~/.pi/agent/` (the global baseline):
+
+```json
+{
+  "rules": [
+    {
+      "name": "no-amend-in-personal",
+      "tool": "bash",
+      "field": "command",
+      "pattern": "^git\\s+commit\\b.*--amend",
+      "reason": "Don't rewrite history in personal repos.",
+      "cwdPattern": "/personal/"
+    }
+  ]
+}
+```
+
+Any `cd ~/personal/foo && git commit --amend` — no matter how it's wrapped — now gets blocked. `git commit --amend` in a work tree is unaffected.
+
+You can also drop a `steering.json` in any ancestor directory between `$HOME` and the session cwd. Inner layers override outer ones by rule `name`.
+
+## Rule schema
+
+```ts
+interface Rule {
+  name: string;          // unique id, used in override comments and audit logs
+  tool: "bash" | "write" | "edit";
+  field: "command" | "path" | "content";
+  pattern: string;       // regex string
+  requires?: string;     // optional AND-predicate regex
+  unless?: string;       // optional exemption regex
+  cwdPattern?: string;   // regex against effective cwd (per-command for bash)
+  reason: string;        // message shown to the agent when blocked
+  noOverride?: boolean;  // hard block — no escape hatch
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique id. Appears in block reason, override comments, and audit entries. |
+| `tool` | Which pi tool to intercept — `bash`, `write`, or `edit`. |
+| `field` | For `bash`: always `command`. For `write`/`edit`: `path` or `content`. |
+| `pattern` | Regex string. For `bash`: applied to the AST-extracted command text (`basename + " " + args.join(" ")`), per extracted ref. Anchor with `^` to match the basename. For `write`/`edit`: applied to the raw field value. |
+| `requires` | Optional. Must ALSO match. |
+| `unless` | Optional. Exemption — if this matches, the rule does not fire. |
+| `cwdPattern` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
+| `reason` | Human- and agent-readable message shown when blocked. Write it for the *agent*. |
+| `noOverride` | If `true`, no override escape hatch. Defaults to `false`. |
+
+## Default rules
+
+| Name | Tool | Blocks |
+|------|------|--------|
+| `no-force-push` | bash | `git push --force` / `git push -f`. Allows `--force-with-lease`. |
+| `no-hard-reset` | bash | `git reset --hard`. |
+| `no-rm-rf-slash` | bash | `rm -rf /` (any flag-letter order). **`noOverride: true`** — hard block. |
+| `no-long-running-commands` | bash | `npm run dev`, `yarn start`, `tsc --watch`, `nodemon`, etc. — blocks dev servers and watchers that deadlock the agent loop. |
+
+All defaults are anchored to the extracted command basename (`^git...`), so `echo 'git push --force'` is not a false positive.
+
+Disable any default via `steering.json`:
+
+```json
+{ "disable": ["no-long-running-commands"] }
+```
+
+Samfoy's `conventional-commits` default is intentionally omitted — it's project policy rather than general safety. Add it back to your own config if you want it.
+
+## Config composition
+
+Precedence, outermost-first (later layers override earlier ones by rule `name`):
+
+1. Built-in `DEFAULT_RULES`
+2. `$HOME/.pi/agent/steering.json` (global baseline)
+3. Ancestor `steering.json` between `$HOME` and the session cwd (outermost first)
+4. `./steering.json` at the session cwd
+
+`disable[]` entries are additive (union across all layers) — once a rule is disabled at any layer, no downstream layer can re-enable it by omission.
+
+Malformed JSON in one layer is treated as an empty config for that layer; other layers still load. The loader is best-effort by design.
+
+## Override comments
+
+Any blocked command (unless `noOverride: true`) can be unblocked by adding an inline comment:
+
+```bash
+git push --force # steering-override: no-force-push — hotfix revert, coordinated on #infra
+```
+
+Syntax: `<leader> steering-override: <rule-name> <sep> <reason>`
+
+- Leaders: `#`, `//`, `/*`, `<!--`, `--`, `%%`, `;;`
+- Separators: `—` (em dash), `–` (en dash), `-` (hyphen)
+
+When accepted, the extension calls `pi.appendEntry("steering-override", { rule, reason, command|path, timestamp })` so overrides are auditable from the session transcript. `noOverride: true` rules skip this path entirely — the command stays blocked regardless of comments.
+
+## Relationship to [`@samfp/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)
+
+- **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
+- **Changed**: the evaluator backend. samfoy runs regex on the raw command string; this package runs regex on AST-extracted command refs (post wrapper-expansion, with effective cwd per ref).
+- **Added**: `cwdPattern` field. Per-command effective cwd via [`unbash-walker`](../unbash-walker/). `write` and `edit` tool support.
+
+Both approaches are legitimate. samfoy's is simpler, faster, and covers the 80% case. This package trades some runtime cost for closing the documented silent-bypass classes.
+
+## Relationship to [`pi-guard`](https://github.com/jdiamond/pi-guard)
+
+`pi-guard` is a *permission* system (prompt-before-run, allowlists/denylists). This package is a *steering* system (block-with-reason, inline overrides, audit log). They operate at different points of the lifecycle and compose: pi-guard decides whether the agent is *allowed* to run a command; pi-steering-hooks decides whether the agent *should* run it given project context.
+
+They share AST infrastructure through [`unbash-walker`](../unbash-walker/), which was ported from pi-guard's `src/ast/` module.
 
 ## Status
 
-**Scaffolded. Implementation arrives in Phase 2.**
-
-This package is currently an empty shell inside the [`pi-steering-hooks` PoC monorepo](../../README.md). It will be filled in with:
-
-- [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks)-inspired rule schema (`pattern`, `requires`, `unless`, `reason`, `noOverride`, override-comment)
-- Regex evaluated against AST-extracted command strings (via [`unbash-walker`](../unbash-walker/README.md))
-- Per-command `cwdPattern` predicate using `effectiveCwd`
-- Config walk-up + merge + `session_start` loader
-- Inline override comments with audit logging
-
-The design contrasts with samfoy's upstream package (simple regex, session-level cwd) by adding an AST backend and command-level scoping. Both approaches are legitimate — pick based on need.
-
-## Why `private: true` for now
-
-This package is not yet published to npm. Publishing is gated on:
-
-1. PoC end-to-end works (all phases complete, examples pass smoke tests)
-2. Upstream extraction decision on [`unbash-walker`](../unbash-walker/README.md) is resolved
-
-See the [repo-level README](../../README.md) for the broader plan.
+PoC, private. See the [monorepo README](../../README.md) for the broader plan and roadmap.
 
 ## License
 
-MIT. Dual credit for ported code lands with the implementation.
+MIT. See [`LICENSE`](../../LICENSE).
