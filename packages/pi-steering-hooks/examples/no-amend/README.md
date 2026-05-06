@@ -20,7 +20,7 @@ The AST backend also sees through wrappers — `sh -c 'git commit --amend'` and 
 
 ## Variant: cwd-scoped (`steering.cwd-scoped.json`)
 
-If you want to apply the rule only to specific directory trees (e.g. a monorepo where some sub-projects enforce linear history and others don't), use `cwdPattern`:
+If you want to apply the rule only to specific directory trees (e.g. a monorepo where some sub-projects enforce linear history and others don't), use `when.cwd`:
 
 ```json
 {
@@ -30,14 +30,14 @@ If you want to apply the rule only to specific directory trees (e.g. a monorepo 
       "tool": "bash",
       "field": "command",
       "pattern": "^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+commit\\b.*--amend\\b",
-      "cwdPattern": "^/home/[^/]+/projects/personal/",
+      "when": { "cwd": "^/home/[^/]+/projects/personal/" },
       "reason": "In personal/shared repos, don't rewrite history. Create a new commit instead."
     }
   ]
 }
 ```
 
-`cwdPattern` is the feature that distinguishes this engine from a regex-on-raw approach: it's tested against the **effective** cwd of each extracted command, so even `cd /home/me/projects/personal/site && git commit --amend` — run from a different session cwd — is still caught. The walker handles `&&`, `;`, subshells, and wrapper arguments.
+`when.cwd` is the feature that distinguishes this engine from a regex-on-raw approach: it's tested against the **effective** cwd of each extracted command, so even `cd /home/me/projects/personal/site && git commit --amend` — run from a different session cwd — is still caught. The walker handles `&&`, `;`, subshells, and wrapper arguments.
 
 ## When to use
 
@@ -47,4 +47,4 @@ If you want to apply the rule only to specific directory trees (e.g. a monorepo 
 
 ## Install
 
-Drop `steering.json` at `~/.pi/agent/steering.json` (global) or at the root of a project (scoped via walk-up loader). For the cwd-scoped variant, rename `steering.cwd-scoped.json` → `steering.json` and adjust the `cwdPattern` regex to match your tree.
+Drop `steering.json` at `~/.pi/agent/steering.json` (global) or at the root of a project (scoped via walk-up loader). For the cwd-scoped variant, rename `steering.cwd-scoped.json` → `steering.json` and adjust the `when.cwd` regex to match your tree.

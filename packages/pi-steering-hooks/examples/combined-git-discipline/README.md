@@ -47,4 +47,4 @@ Use this as a starting point and carve out exceptions with inline override comme
 
 ## Install
 
-Drop the file at `~/.pi/agent/steering.json` (global) or at a project root (scoped via walk-up loader). For tighter scoping, add `cwdPattern` to individual rules — see [`../no-amend`](../no-amend) for an example.
+Drop the file at `~/.pi/agent/steering.json` (global) or at a project root (scoped via walk-up loader). For tighter scoping, add `when.cwd` to individual rules — see [`../no-amend`](../no-amend) for an example.

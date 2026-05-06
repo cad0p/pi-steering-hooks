@@ -358,7 +358,7 @@ describe("register(): user-defined rules via steering.json", () => {
 		assert.match(result?.reason ?? "", /no-debugger/);
 	});
 
-	it("cwdPattern gates whether the rule fires", () => {
+	it("when.cwd gates whether the rule fires", () => {
 		mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
 		writeFileSync(
 			join(tmpHome, ".pi", "agent", "steering.json"),
@@ -370,7 +370,7 @@ describe("register(): user-defined rules via steering.json", () => {
 						field: "command",
 						pattern: "\\becho\\b",
 						reason: "echo not allowed in special tree",
-						cwdPattern: "/special/",
+						when: { cwd: "/special/" },
 					},
 				],
 			}),

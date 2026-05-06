@@ -21,4 +21,4 @@ Curated `steering.json` examples for common workflows. Each subdirectory has its
 
 The quickest smoke-check: run the example's blocked command inside a pi session and confirm the agent surfaces the `[steering:<rule-name>] …` block message. The engine's own test suite (`src/examples.test.ts`) exercises each example's rules against realistic inputs — a good read-through for seeing exactly what does and doesn't fire.
 
-See the [package README](../README.md) for the schema details (`pattern`, `requires`, `unless`, `cwdPattern`, `reason`, `noOverride`) and the [repo README](../../../README.md) for the overall architecture.
+See the [package README](../README.md) for the schema details (`pattern`, `requires`, `unless`, `when.cwd`, `reason`, `noOverride`) and the [repo README](../../../README.md) for the overall architecture.

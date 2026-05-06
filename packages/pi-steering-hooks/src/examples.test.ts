@@ -134,7 +134,7 @@ describe("examples/no-amend (cwd-scoped variant)", () => {
 	const rules = rulesFor("no-amend", "steering.cwd-scoped.json");
 	const rule = () => getRule("no-amend-in-personal", rules);
 
-	it("blocks `git commit --amend` inside the cwdPattern tree", () => {
+	it("blocks `git commit --amend` inside the when.cwd tree", () => {
 		assert.equal(
 			evaluateBashRule(
 				rule(),
@@ -145,7 +145,7 @@ describe("examples/no-amend (cwd-scoped variant)", () => {
 		);
 	});
 
-	it("allows `git commit --amend` outside the cwdPattern tree", () => {
+	it("allows `git commit --amend` outside the when.cwd tree", () => {
 		assert.equal(
 			evaluateBashRule(
 				rule(),

@@ -1,6 +1,6 @@
 # @cad0p/pi-steering-hooks
 
-AST-backed steering hooks for [pi](https://github.com/mariozechner/pi-coding-agent) — evaluates rules against bash command ASTs instead of raw strings, supports per-rule `cwdPattern` predicates, and audits inline overrides.
+AST-backed steering hooks for [pi](https://github.com/mariozechner/pi-coding-agent) — evaluates rules against bash command ASTs instead of raw strings, supports per-rule `when.cwd` predicates, and audits inline overrides.
 
 Inspired by [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks) (schema + override-comment + defaults); the evaluator backend is swapped out for an AST pipeline (via [`unbash-walker`](../unbash-walker/)) so rules survive quoting tricks, wrapper commands, and `cd`-prefixed chains.
 
@@ -33,7 +33,7 @@ Drop a `steering.json` in `~/.pi/agent/` (the global baseline):
       "field": "command",
       "pattern": "^git\\s+commit\\b.*--amend",
       "reason": "Don't rewrite history in personal repos.",
-      "cwdPattern": "/personal/"
+      "when": { "cwd": "/personal/" }
     }
   ]
 }
@@ -53,7 +53,7 @@ interface Rule {
   pattern: string;       // regex string
   requires?: string;     // optional AND-predicate regex
   unless?: string;       // optional exemption regex
-  cwdPattern?: string;   // regex against effective cwd (per-command for bash)
+  when?: { cwd?: string }; // regex against effective cwd (per-command for bash)
   reason: string;        // message shown to the agent when blocked
   noOverride?: boolean;  // hard block — no escape hatch
 }
@@ -67,9 +67,11 @@ interface Rule {
 | `pattern` | Regex matched against the AST-extracted command string (`basename + " " + args.join(" ")`). **Anchor with `^` to match the basename; unanchored patterns match inside joined args.** For `write`/`edit`, applied to the raw field value. |
 | `requires` | Optional. Must ALSO match. |
 | `unless` | Optional. Exemption — if this matches, the rule does not fire. |
-| `cwdPattern` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
+| `when.cwd` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
 | `reason` | Human- and agent-readable message shown when blocked. Write it for the *agent*. |
 | `noOverride` | If `true`, no override escape hatch. Defaults to `false`. |
+
+The `when` key is nested for forward extensibility: predicates like `branch`, `env`, or `time-of-day` can be added as peer keys under `when` without another schema migration. Unknown keys under `when` are reserved for future use — the current evaluator ignores them and emits a one-time `console.warn` per rule so authors notice typos.
 
 ## Writing your own patterns
 
@@ -163,12 +165,12 @@ This package originated as a fork of samfoy's and shares its schema DNA. The two
 
 - **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
 - **Changed**: the evaluator backend. samfoy runs regex on the raw command string; this package runs regex on AST-extracted command refs (post wrapper-expansion, with effective cwd per ref).
-- **Added**: `cwdPattern` field. Per-command effective cwd via [`unbash-walker`](../unbash-walker/). `write` and `edit` tool support.
+- **Added**: `when.cwd` predicate. Per-command effective cwd via [`unbash-walker`](../unbash-walker/). `write` and `edit` tool support.
 
 Two-track approach:
 
 - **Track S** (samfoy upstream) — contribute the smaller, schema-level improvements (walk-up + merge + `session_start`, session-level `when: { cwd }`) that fit samfoy's regex-on-raw model. These PRs land in his repo.
-- **Track P** (this package) — the AST-backed sibling. Keeps its own release cadence and exposes the `cwdPattern` / per-command effective-cwd features that only make sense with the AST pipeline.
+- **Track P** (this package) — the AST-backed sibling. Keeps its own release cadence and exposes the `when.cwd` / per-command effective-cwd features that only make sense with the AST pipeline.
 
 Both approaches are legitimate. samfoy's is simpler, faster, and covers the 80% case. This package trades some runtime cost for closing the documented silent-bypass classes.
 

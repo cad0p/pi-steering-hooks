@@ -11,10 +11,10 @@
  *     string (`name + " " + args.join(" ")`) — not the raw input. This avoids
  *     the silent-bypass classes that regex-on-raw-text has (quoted args,
  *     `sh -c` / `bash -c`, nested `sudo xargs`, …).
- *   - `cwdPattern` is tested against the *effective* cwd of the command.
+ *   - `when.cwd` is tested against the *effective* cwd of the command.
  *     For bash, that's the cwd computed by unbash-walker's `effectiveCwd`
  *     walker (so `cd ~/personal && git commit --amend` sees `~/personal`).
- *     For write/edit, `cwdPattern` tests against the session cwd directly.
+ *     For write/edit, `when.cwd` tests against the session cwd directly.
  */
 
 /** A single steering rule evaluated per tool call. */
@@ -41,12 +41,23 @@ export interface Rule {
 	/** Optional: regex exemption — if this matches, rule doesn't fire. */
 	unless?: string;
 	/**
-	 * Optional: regex tested against the effective cwd of the command.
-	 * For the `bash` tool: uses `effectiveCwd` from unbash-walker per command
-	 * ref. For `write` / `edit`: uses the session cwd directly.
-	 * Rule only fires if `cwdPattern` matches.
+	 * Optional predicates that must all match for the rule to fire.
+	 *
+	 * Nested for future extensibility: predicates like `branch`, `env`, or
+	 * `time-of-day` can be added as peer keys without another schema
+	 * migration. Unknown keys under `when` are reserved for future use and
+	 * are ignored by the current evaluator (a one-time console.warn is
+	 * emitted per rule so authors notice typos).
 	 */
-	cwdPattern?: string;
+	when?: {
+		/**
+		 * Regex tested against the effective cwd of the command.
+		 * For the `bash` tool: uses `effectiveCwd` from unbash-walker per
+		 * command ref. For `write` / `edit`: uses the session cwd directly.
+		 * Rule only fires if this matches.
+		 */
+		cwd?: string;
+	};
 	/** Message shown to the agent when blocked. Should be actionable. */
 	reason: string;
 	/** If true, no override escape hatch. Hard block. */

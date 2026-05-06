@@ -40,7 +40,7 @@ Once the PoC ships and the extraction path is clear, `unbash-walker` moves out.
 │  @cad0p/pi-steering-hooks  (this repo,       │
 │                             Phase 2)          │
 │    rule schema (pattern / requires /         │
-│      unless / cwdPattern / reason)           │
+│      unless / when.cwd / reason)             │
 │    walk-up + merge + session_start loader    │
 │    inline override comments + audit          │
 └──────────────────────────────────────────────┘
@@ -74,7 +74,7 @@ Both packages remain `private: true`. See [`packages/pi-steering-hooks/PUBLISHIN
 Two coordination tracks run in parallel once the PoC is reviewed:
 
 - **Extraction proposal to [`jdiamond/pi-guard`](https://github.com/jdiamond/pi-guard)** — propose factoring `src/ast/` into a shared `unbash-walker` package that both pi-guard and this repo depend on. A basename-normalization bugfix is planned to land first as a smaller good-faith contribution. A fallback plan exists in case the extraction isn't accepted (publish `unbash-walker` independently and keep pi-guard's fork as-is).
-- **Scoped PRs to [`samfoy/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)** — contribute the smaller, schema-level improvements (walk-up + merge + `session_start`, session-level `when: { cwd }`) that fit samfoy's regex-on-raw model. The divergent features (AST backend, per-command `cwdPattern`, `write`/`edit` tool support) stay in this repo's sibling package.
+- **Scoped PRs to [`samfoy/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)** — contribute the smaller, schema-level improvements (walk-up + merge + `session_start`, session-level `when: { cwd }`) that fit samfoy's regex-on-raw model. The divergent features (AST backend, per-command `when.cwd`, `write`/`edit` tool support) stay in this repo's sibling package.
 
 Publishing decisions wait on both of these reaching a resolution or a two-week timeout, as documented in [`PUBLISHING.md`](packages/pi-steering-hooks/PUBLISHING.md).
 

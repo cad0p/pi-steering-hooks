@@ -65,7 +65,7 @@ Static analysis; some bash constructs are deliberately under- or over-approximat
 - **Unresolvable `cd` targets** (`cd $VAR`, `cd "$HOME/x"`, `cd $(pwd)`) — the target is computed at runtime, so we stop propagating cd effects. The `cd` itself is recorded at the pre-cd cwd; subsequent commands see the pre-cd cwd unchanged.
 - **`if` / `case` branches** — exactly one branch runs at runtime; we propagate a cwd forward only if *all* branches agree. Otherwise we fall back to the pre-branch cwd. Commands inside each branch still see that branch's own cwd.
 - **`while` / `for` / `select`** — the body may iterate zero times; we never propagate body cwd forward. Commands inside the body are walked (and recorded) from the loop's starting cwd.
-- **Background `&`** — treated like `;` (cd effects propagate). In real bash, `cd /x &` runs in a backgrounded subshell and cmd would see the initial cwd. This is a deliberate over-match: a guardrail sees the more conservative cwd and fires cwdPattern checks.
+- **Background `&`** — treated like `;` (cd effects propagate). In real bash, `cd /x &` runs in a backgrounded subshell and cmd would see the initial cwd. This is a deliberate over-match: a guardrail sees the more conservative cwd and fires `when.cwd` checks.
 - **`cd -`** — treated as a no-op (we don't track OLDPWD).
 - **Not modelled at all:** `pushd`/`popd`, `eval`, `source`/`.`, `env -C DIR cmd`, function bodies (walked only when defined, not when invoked).
 

@@ -336,7 +336,7 @@ describe("effectiveCwd", () => {
 			// commands — it threads cd effects through & the same way it does
 			// through `;`. This is a documented over-match (safer failure mode
 			// for a guardrail: report /x for cmd even though cmd won't actually
-			// run there, triggering a more conservative cwdPattern check).
+			// run there, triggering a more conservative when.cwd check).
 			//
 			// This test pins the current behavior. If semantics ever change to
 			// model background as subshell-like isolation, update this test and

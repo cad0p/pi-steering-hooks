@@ -76,24 +76,24 @@ describe("evaluateRuleForCommand (bash)", () => {
 		assert.equal(fires(rule, "git push --force"), true);
 	});
 
-	it("respects cwdPattern (fires only when cwd matches)", () => {
+	it("respects when.cwd (fires only when cwd matches)", () => {
 		const rule: Rule = {
 			...NO_FORCE_PUSH,
 			name: "no-force-push-personal",
-			cwdPattern: "/personal/",
+			when: { cwd: "/personal/" },
 		};
 		assert.equal(fires(rule, "git push --force", "/home/me/personal/proj"), true);
 		assert.equal(fires(rule, "git push --force", "/home/me/work/proj"), false);
 	});
 
-	it("cwdPattern sees the per-command effective cwd (cd X && cmd)", () => {
+	it("when.cwd sees the per-command effective cwd (cd X && cmd)", () => {
 		const rule: Rule = {
 			name: "no-amend-in-personal",
 			tool: "bash",
 			field: "command",
 			pattern: "\\bgit\\s+commit\\b.*--amend",
 			reason: "don't amend in personal repos",
-			cwdPattern: "/personal/",
+			when: { cwd: "/personal/" },
 		};
 		// Session starts in /work. `cd` to /home/me/personal/foo inside the
 		// same command string \u2192 effectiveCwd for the amend ref is that path.
@@ -173,14 +173,14 @@ describe("evaluateRule (write / edit)", () => {
 		assert.equal(evaluateRule(rule, input, { cwd: "/repo" }), true);
 	});
 
-	it("respects cwdPattern for write", () => {
+	it("respects when.cwd for write", () => {
 		const rule: Rule = {
 			name: "no-secrets-prod",
 			tool: "write",
 			field: "content",
 			pattern: "TODO",
 			reason: "no TODOs in prod tree",
-			cwdPattern: "/prod/",
+			when: { cwd: "/prod/" },
 		};
 		const input: ToolInput = { tool: "write", path: "x", content: "TODO later" };
 		assert.equal(evaluateRule(rule, input, { cwd: "/repo/prod/api" }), true);

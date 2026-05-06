@@ -13,7 +13,7 @@
  *     extracted CommandRef with that ref's stringified command and its
  *     effective cwd.
  *   - `evaluateRule(rule, input, ctx)` — for write / edit. Applies pattern
- *     directly to the chosen field value and cwdPattern to ctx.cwd.
+ *     directly to the chosen field value and `when.cwd` to ctx.cwd.
  *
  * `extractOverride` parses inline override comments of the form:
  *   # steering-override: <rule-name> — <reason>
@@ -23,6 +23,37 @@
  */
 
 import type { Rule } from "./schema.ts";
+
+/**
+ * Set of rule names that have already emitted an "unknown `when` key" warning
+ * during this process. Using a module-level Set avoids spamming the console
+ * on every tool call while still letting the first occurrence surface typos.
+ */
+const warnedWhenKeys = new Set<string>();
+
+/**
+ * Emit a one-time console.warn for any unrecognized keys under `rule.when`.
+ *
+ * The current evaluator only understands `when.cwd`; future peers (`branch`,
+ * `env`, `time-of-day`, ...) are reserved but not yet implemented. Flagging
+ * unknowns early catches typos (e.g. `when.cdw`) before they silently
+ * short-circuit evaluation.
+ */
+function checkWhenKeys(rule: Rule): void {
+	if (!rule.when) return;
+	if (warnedWhenKeys.has(rule.name)) return;
+	const known = new Set(["cwd"]);
+	const unknown: string[] = [];
+	for (const key of Object.keys(rule.when)) {
+		if (!known.has(key)) unknown.push(key);
+	}
+	if (unknown.length === 0) return;
+	warnedWhenKeys.add(rule.name);
+	console.warn(
+		`[steering:${rule.name}] ignoring unknown \`when\` key(s): ${unknown.join(", ")}. ` +
+			`Known keys: cwd. Peers for branch/env/time-of-day are reserved for future use.`,
+	);
+}
 
 /** Pi tool input union, reduced to the fields the evaluator touches. */
 export interface ToolInput {
@@ -65,7 +96,9 @@ export function evaluateRuleForCommand(
 	if (!new RegExp(rule.pattern).test(commandText)) return false;
 	if (rule.requires && !new RegExp(rule.requires).test(commandText)) return false;
 	if (rule.unless && new RegExp(rule.unless).test(commandText)) return false;
-	if (rule.cwdPattern && !new RegExp(rule.cwdPattern).test(refCwd)) return false;
+	checkWhenKeys(rule);
+	const cwdPattern = rule.when?.cwd;
+	if (cwdPattern && !new RegExp(cwdPattern).test(refCwd)) return false;
 
 	return true;
 }
@@ -94,7 +127,9 @@ export function evaluateRule(
 	if (!new RegExp(rule.pattern).test(target)) return false;
 	if (rule.requires && !new RegExp(rule.requires).test(target)) return false;
 	if (rule.unless && new RegExp(rule.unless).test(target)) return false;
-	if (rule.cwdPattern && !new RegExp(rule.cwdPattern).test(ctx.cwd)) return false;
+	checkWhenKeys(rule);
+	const cwdPattern = rule.when?.cwd;
+	if (cwdPattern && !new RegExp(cwdPattern).test(ctx.cwd)) return false;
 
 	return true;
 }

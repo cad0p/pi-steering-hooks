@@ -151,14 +151,14 @@ describe("no-long-running-commands default rule", () => {
 	});
 });
 
-describe("user-defined rule: no-amend scoped with cwdPattern", () => {
+describe("user-defined rule: no-amend scoped with when.cwd", () => {
 	const rule: Rule = {
 		name: "no-amend-in-personal",
 		tool: "bash",
 		field: "command",
 		pattern: "\\bgit\\s+commit\\b.*--amend",
 		reason: "don't amend in personal repos",
-		cwdPattern: "/personal/",
+		when: { cwd: "/personal/" },
 	};
 
 	it("blocks `git commit --amend` in a personal directory", () => {
