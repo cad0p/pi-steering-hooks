@@ -125,6 +125,35 @@ Precedence, outermost-first (later layers override earlier ones by rule `name`):
 
 Malformed JSON in one layer is treated as an empty config for that layer; other layers still load. The loader is best-effort by design.
 
+## Rule precedence and multi-rule events
+
+Within a single tool call, rules are evaluated in the **merged list order** described above (defaults first, then global, then ancestor layers outer→inner, then cwd). A single event that could violate multiple rules only ever surfaces one at a time:
+
+1. The first rule whose pattern matches **any** extracted command blocks the tool call and stops evaluation.
+2. Other rules are not evaluated for that event.
+3. If the first matching rule is **overridden** via an inline comment, evaluation continues to the next rule — which will still block if it also matches.
+
+**Rationale.** Sequential attention lets the agent address one violation at a time; the block reason names exactly the rule to satisfy next. A command firing two rules is usually a sign of defense-in-depth overlap (e.g. `no-force-push` and `no-push`) — the most conservative rule (earliest in precedence) wins. After an operator acknowledges and overrides that rule, any remaining rule violations still surface one by one.
+
+A concrete example. With the defaults enabled plus a user rule `no-push` that blocks any `git push`:
+
+```bash
+# Both no-force-push (default) and no-push (user) would match; only the
+# former surfaces.
+$ git push --force origin main
+[steering:no-force-push] ...
+
+# Overriding the force-push rule advances evaluation to the next rule,
+# which also blocks.
+$ git push --force origin main # steering-override: no-force-push — hotfix
+[steering:no-push] ...
+
+# Overriding both unblocks the call (and audits both overrides).
+$ git push --force origin main \
+    # steering-override: no-force-push — hotfix \
+    # steering-override: no-push — emergency channel
+```
+
 ## Override comments
 
 Any blocked command (unless `noOverride: true`) can be unblocked by adding an inline comment:

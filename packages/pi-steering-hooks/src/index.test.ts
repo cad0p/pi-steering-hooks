@@ -441,6 +441,152 @@ describe("register(): unrelated tool calls pass through", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Multi-rule firing: precedence + override-then-continue                     */
+/* -------------------------------------------------------------------------- */
+
+// Covers the intended "one steering at a time" semantics:
+//   1. When multiple rules could match a single event, only the first
+//      matching rule (in merged-list order) fires; others are not evaluated.
+//   2. When the first matching rule is overridden via inline comment,
+//      evaluation CONTINUES with the next rule — so if a second rule also
+//      matches, it still blocks. This means an operator can address one
+//      violation at a time without a single override silencing all of them.
+describe("register(): multi-rule firing semantics", () => {
+	useIsolatedHome();
+
+	it("first matching rule wins: later matching rules don't fire or surface", () => {
+		mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+		// Add a user rule `no-push` that would also match `git push --force`.
+		// DEFAULT_RULES contains `no-force-push` first, and buildRules appends
+		// user rules after defaults — so `no-force-push` is the first matcher.
+		writeFileSync(
+			join(tmpHome, ".pi", "agent", "steering.json"),
+			JSON.stringify({
+				rules: [
+					{
+						name: "no-push",
+						tool: "bash",
+						field: "command",
+						pattern: "^git\\s+push\\b",
+						reason: "pushes are gated by CI only",
+					},
+				],
+			}),
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		fireSessionStart(mock, tmpHome);
+
+		const result = fireBashToolCall(mock, "git push --force origin main", tmpHome);
+		assert.equal(result?.block, true);
+		assert.match(
+			result?.reason ?? "",
+			/no-force-push/,
+			"first matching rule (no-force-push) wins",
+		);
+		assert.doesNotMatch(
+			result?.reason ?? "",
+			/no-push/,
+			"second matching rule (no-push) is not evaluated",
+		);
+	});
+
+	it("chained commands: first rule that matches ANY extracted command wins", () => {
+		mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+		// Two user rules; the first one present in the merged list wins when
+		// both would match *different* commands in the same chain. We add
+		// `no-amend` as a user rule on top of the default `no-force-push`.
+		writeFileSync(
+			join(tmpHome, ".pi", "agent", "steering.json"),
+			JSON.stringify({
+				rules: [
+					{
+						name: "no-amend",
+						tool: "bash",
+						field: "command",
+						pattern: "^git\\s+commit\\b.*--amend",
+						reason: "no amend",
+					},
+				],
+			}),
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		fireSessionStart(mock, tmpHome);
+
+		// Chain fires two rules (no-force-push for push --force, no-amend for
+		// commit --amend). Only no-force-push should surface — it's first in
+		// the merged rule list (defaults come before user rules).
+		const result = fireBashToolCall(
+			mock,
+			"cd /tmp/A && git push --force && cd /tmp/B && git commit --amend",
+			tmpHome,
+		);
+		assert.equal(result?.block, true);
+		assert.match(result?.reason ?? "", /no-force-push/);
+		assert.doesNotMatch(result?.reason ?? "", /no-amend/);
+	});
+
+	it("overriding first rule advances to next: the second rule still blocks if it matches", () => {
+		mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+		// Second user rule `no-push` also matches a force-push. Overriding
+		// `no-force-push` should let evaluation continue to `no-push`, which
+		// then blocks (no override for it).
+		writeFileSync(
+			join(tmpHome, ".pi", "agent", "steering.json"),
+			JSON.stringify({
+				rules: [
+					{
+						name: "no-push",
+						tool: "bash",
+						field: "command",
+						pattern: "^git\\s+push\\b",
+						reason: "pushes are gated by CI only",
+					},
+				],
+			}),
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		fireSessionStart(mock, tmpHome);
+
+		const cmd =
+			"git push --force origin main # steering-override: no-force-push — hotfix";
+		const result = fireBashToolCall(mock, cmd, tmpHome);
+		assert.equal(result?.block, true, "second rule no-push still blocks after override");
+		assert.match(result?.reason ?? "", /no-push/);
+		assert.doesNotMatch(result?.reason ?? "", /no-force-push/);
+
+		// And the override audit entry was recorded before the second block.
+		const overrideEntry = mock.entries.find(
+			(e) =>
+				e.kind === "steering-override" &&
+				(e.data as { rule: string }).rule === "no-force-push",
+		);
+		assert.ok(
+			overrideEntry,
+			"accepted override for no-force-push was audited before no-push blocked",
+		);
+	});
+
+	it("overriding first rule advances to next: allow when the next rule doesn't match", () => {
+		mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+		// Only the default no-force-push applies; override makes it allow.
+		const mock = makeMockPi();
+		register(mock.api as never);
+		fireSessionStart(mock, tmpHome);
+
+		const cmd =
+			"git push --force origin main # steering-override: no-force-push — hotfix";
+		const result = fireBashToolCall(mock, cmd, tmpHome);
+		assert.equal(result, undefined, "override lets the command through");
+	});
+});
+
+/* -------------------------------------------------------------------------- */
 /* Public re-exports                                                          */
 /* -------------------------------------------------------------------------- */
 
