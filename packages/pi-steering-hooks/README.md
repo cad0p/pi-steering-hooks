@@ -123,7 +123,7 @@ interface Rule {
 
 The `when` key is nested for forward extensibility: predicates like `branch`, `env`, or `time-of-day` can be added as peer keys under `when` without another schema migration. Unknown keys under `when` are reserved for future use — the current evaluator ignores them and emits a one-time `console.warn` per rule so authors notice typos.
 
-Note: `defaultNoOverride` is a [**`SteeringConfig`**](#config-level-override-default) field, not a `Rule` field — it lives at the top level of `steering.json`, alongside `disable` and `rules`. Easy to confuse with per-rule `noOverride`.
+Note: `defaultNoOverride` is a [**`SteeringConfig`**](#config-level-override-default) field, not a `Rule` field — it lives at the top level of `steering.json`, alongside `disable` and `rules`.
 
 ## Writing your own patterns
 
@@ -161,8 +161,6 @@ Disable any default via `steering.json`:
 ```json
 { "disable": ["no-long-running-commands"] }
 ```
-
-Samfoy's `conventional-commits` default is intentionally omitted — it's project policy rather than general safety. Add it back to your own config if you want it.
 
 ## Config composition
 
