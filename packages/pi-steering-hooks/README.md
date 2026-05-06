@@ -60,6 +60,14 @@ And these two cwd-scoped rules:
 
 When a single tool call could violate multiple rules, the first matching rule blocks and evaluation stops. Overriding it advances evaluation to the next violation — so the agent addresses one concern at a time, and the block reason always names exactly the rule to satisfy next. See [Rule precedence and multi-rule events](#rule-precedence-and-multi-rule-events) for a worked example.
 
+### Performance
+
+The AST pipeline costs ~4 µs per tool-call with the default 4-rule config and ~6 µs at 50 rules (warm, measured on Node 22 / linux arm64). Against a typical 1–5 s agent turn (network + inference), evaluator overhead is under 0.001% — effectively invisible. The 4 µs of parse cost closes the silent-bypass classes that regex-on-raw has on common agent emissions (`cd X && git push --force`, `sh -c '...'`, quoted args).
+
+Rule count is close to free: the AST pipeline runs once per tool call (not once per rule), so adding rules adds only ~40 ns of regex work each. Against `samfoy/pi-steering-hooks@0.2.0`'s shipped evaluator — which compiles the regex on every call — this package is faster beyond ~8 rules and ~3.8× faster at 50 rules.
+
+Performance is not the differentiator though. The reason to choose the AST path is correctness on real agent inputs; the runtime cost is just low enough to make that correctness essentially free.
+
 ## Install
 
 > During the PoC, the package is `private: true` and lives inside the monorepo. Once published:
@@ -271,16 +279,29 @@ The comment still records intent and populates the audit log, which is the point
 
 This package originated as a fork of samfoy's and shares its schema DNA. The two have since diverged enough that we treat them as sibling approaches rather than a fork-and-PR-back. Discussion of the split lives on [samfoy#2](https://github.com/samfoy/pi-steering-hooks/issues/2) — cwd-aware rules as a motivating example.
 
-- **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
-- **Changed**: the evaluator backend. samfoy runs regex on the raw command string; this package runs regex on AST-extracted command refs (post wrapper-expansion, with effective cwd per ref).
-- **Added**: `when.cwd` predicate. Per-command effective cwd via [`unbash-walker`](../unbash-walker/). `write` and `edit` tool support.
+Both packages expose the same rule schema (`pattern`, `requires`, `unless`, `reason`, `noOverride`, `when.cwd`). They differ in how `pattern` is evaluated and what `when.cwd` matches against:
 
-Two-track approach:
+| | `@samfp/pi-steering-hooks` | `@cad0p/pi-steering-hooks` (this) |
+|---|---|---|
+| Evaluator | Regex against the raw command string | Regex against AST-extracted commands, after wrapper expansion (`sh -c`, `sudo`, `xargs`, …) |
+| `cd /repo && git push --force` | Silent bypass (anchored pattern) or false-positive (unanchored) | Caught |
+| `sh -c 'git push --force'` | Silent bypass | Caught |
+| `echo 'git push --force'` | False positive if the pattern is unanchored | Correctly not triggered |
+| `git push "--force"` | False negative if the pattern expects unquoted `--force` | Caught |
+| `when.cwd` predicate | Session-launch directory only (does not re-evaluate after `cd`) | Per-command effective cwd (tracks `cd` across the command chain) |
+| Overhead per call | <1 µs (if regex cached) or ~20 µs (shipped today, compiles per call) | ~4 µs at the default 4-rule config, ~6 µs at 50 rules |
+| Runtime dependencies | zero | `unbash-walker` (which depends only on `unbash`) |
 
-- **Track S** (samfoy upstream) — contribute the smaller, schema-level improvements (walk-up + merge + `session_start`, session-level `when: { cwd }`) that fit samfoy's regex-on-raw model. These PRs land in his repo.
-- **Track P** (this package) — the AST-backed sibling. Keeps its own release cadence and exposes the `when.cwd` / per-command effective-cwd features that only make sense with the AST pipeline.
+`samfoy/pi-steering-hooks` is the lightweight choice when your agent doesn't emit `cd` chains or `sh -c`-style wrappers and you're comfortable with session-level cwd scoping. This package is the choice when you want correctness guarantees against the ways real agents emit bash — especially when rules should gate on the directory a command actually runs in, not the directory pi was launched from.
 
-Both approaches are legitimate. samfoy's is simpler, faster, and covers the 80% case. This package trades some runtime cost for closing the documented silent-bypass classes.
+The packages share a schema deliberately so rules migrate without edits. Moving from samfoy to this package is a dependency swap; moving back is the same, with the caveat that session-level `when.cwd` can only approximate command-level scoping.
+
+Two-track contribution model:
+
+- **Track S** (samfoy upstream) — contribute the schema-level improvements (walk-up + merge + `session_start` loader) that fit samfoy's regex-on-raw model. PRs land in his repo.
+- **Track P** (this package) — the AST-backed sibling. Keeps its own release cadence and exposes the features that only make sense with the AST pipeline.
+
+Both approaches are legitimate. samfoy's is simpler and has a smaller surface area. This package trades ~3 µs per tool call for closing the documented silent-bypass classes and for command-level cwd scoping.
 
 ## Relationship to [`pi-guard`](https://github.com/jdiamond/pi-guard)
 
