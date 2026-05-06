@@ -50,7 +50,11 @@ export const DEFAULT_RULES: Rule[] = [
 		name: "no-hard-reset",
 		tool: "bash",
 		field: "command",
-		pattern: "^git\\s+reset\\s+--hard\\b",
+		// Same pre-subcommand flag broadening as `no-force-push` so
+		// `git -C /other reset --hard` and `git -c key=val reset --hard`
+		// are also caught.
+		pattern:
+			"^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+reset\\s+--hard\\b",
 		reason:
 			"Hard reset discards uncommitted changes permanently. Use `git stash` to save work first, or `git reset --soft` to keep changes staged.",
 	},

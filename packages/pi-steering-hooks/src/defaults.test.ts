@@ -124,12 +124,32 @@ describe("DEFAULT_RULES pattern spot-checks", () => {
 		);
 	});
 
+	it("no-hard-reset matches `git reset --hard`", () => {
+		assert.equal(pattern("no-hard-reset").test("git reset --hard"), true);
+	});
+
 	it("no-hard-reset matches `git reset --hard HEAD`", () => {
 		assert.equal(pattern("no-hard-reset").test("git reset --hard HEAD"), true);
 	});
 
 	it("no-hard-reset does NOT match `git reset --soft`", () => {
 		assert.equal(pattern("no-hard-reset").test("git reset --soft HEAD~1"), false);
+	});
+
+	it("no-hard-reset matches `git -C /other reset --hard` (pre-subcommand flag)", () => {
+		assert.equal(
+			pattern("no-hard-reset").test("git -C /other reset --hard"),
+			true,
+		);
+	});
+
+	it("no-hard-reset matches `git -c rerere.enabled=false reset --hard` (key=val config)", () => {
+		assert.equal(
+			pattern("no-hard-reset").test(
+				"git -c rerere.enabled=false reset --hard",
+			),
+			true,
+		);
 	});
 
 	it("no-rm-rf-slash matches `rm -rf /`", () => {
