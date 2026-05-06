@@ -47,4 +47,4 @@ If you want to apply the rule only to specific directory trees (e.g. a monorepo 
 
 ## Install
 
-Drop `steering.json` at `~/.pi/agent/steering.json` (global) or at the root of a project (scoped via walk-up loader). For the cwd-scoped variant, rename `steering.cwd-scoped.json` → `steering.json` and adjust the `when.cwd` regex to match your tree.
+Drop `steering.json` at `~/.pi/agent/steering.json` (global) or at `<project-root>/.pi/steering.json` (scoped via walk-up loader). For the cwd-scoped variant, copy `steering.cwd-scoped.json` to the same destination (renamed to `steering.json`) and adjust the `when.cwd` regex to match your tree.

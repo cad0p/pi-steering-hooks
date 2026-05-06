@@ -91,7 +91,7 @@ Drop a `steering.json` in `~/.pi/agent/` (the global baseline):
 
 Any `cd ~/personal/foo && git commit --amend` — no matter how it's wrapped — now gets blocked. `git commit --amend` in a work tree is unaffected.
 
-You can also drop a `steering.json` in any ancestor directory between `$HOME` and the session cwd. Inner layers override outer ones by rule `name`.
+You can also drop a `.pi/steering.json` in any ancestor directory between `$HOME` and the session cwd. Inner layers override outer ones by rule `name`. The project-local location follows pi's extension convention — same place `.pi/extensions/` and `.pi/settings.json` live.
 
 ## Rule schema
 
@@ -168,8 +168,8 @@ Precedence, outermost-first (later layers override earlier ones by rule `name`):
 
 1. Built-in `DEFAULT_RULES`
 2. `$HOME/.pi/agent/steering.json` (global baseline)
-3. Ancestor `steering.json` between `$HOME` and the session cwd (outermost first)
-4. `./steering.json` at the session cwd
+3. `<ancestor>/.pi/steering.json` between `$HOME` and the session cwd (outermost first)
+4. `./.pi/steering.json` at the session cwd
 
 `disable[]` entries are additive (union across all layers) — once a rule is disabled at any layer, no downstream layer can re-enable it by omission.
 

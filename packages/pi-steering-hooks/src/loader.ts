@@ -5,9 +5,15 @@
  * Config discovery and merging.
  *
  * Walks from the session cwd up to `$HOME` / filesystem root collecting
- * `steering.json` files, plus a global baseline at `~/.pi/agent/steering.json`.
- * Configs are returned outermost-first so `buildRules` can apply later
- * layers (inner ancestors, then cwd) on top of earlier ones.
+ * `.pi/steering.json` files, plus a global baseline at
+ * `~/.pi/agent/steering.json`. Configs are returned outermost-first so
+ * `buildRules` can apply later layers (inner ancestors, then cwd) on top of
+ * earlier ones.
+ *
+ * Path convention follows pi's extension layout: global config lives under
+ * `~/.pi/agent/` (shared by extensions, skills, hooks), while project-local
+ * config lives under `.pi/` directly (no `agent/` segment — matches how pi
+ * itself discovers `.pi/extensions/`, `.pi/settings.json`, etc.).
  *
  * Precedence (applied by `buildRules`):
  *   defaults → global → outermost ancestor → ... → cwd
@@ -45,11 +51,16 @@ export function parseConfig(path: string): SteeringConfig {
 
 /**
  * Walk from `cwd` up to `$HOME` (or filesystem root, whichever comes first),
- * collecting every `steering.json` found. Returns the ordered list
+ * collecting every `.pi/steering.json` found. Returns the ordered list
  * `[global, outermost-ancestor, ..., cwd]` — so inner layers come last.
  *
- * The global baseline lives at `$HOME/.pi/agent/steering.json`. If `$HOME` is
- * unset we still walk to the filesystem root.
+ * The global baseline lives at `$HOME/.pi/agent/steering.json` (pi’s
+ * established location for user-wide agent config). Project-local layers
+ * live at `<ancestor>/.pi/steering.json` — matching pi’s project-local
+ * extension path convention (`.pi/extensions/`, `.pi/settings.json`). A bare
+ * `<ancestor>/steering.json` at any ancestor is intentionally ignored.
+ *
+ * If `$HOME` is unset we still walk to the filesystem root.
  */
 export function loadConfigs(cwd: string): SteeringConfig[] {
 	const home = process.env.HOME ?? "";
@@ -77,7 +88,7 @@ export function loadConfigs(cwd: string): SteeringConfig[] {
 	ancestors.reverse(); // outermost first
 
 	for (const dir of ancestors) {
-		const p = join(dir, "steering.json");
+		const p = join(dir, ".pi", "steering.json");
 		if (existsSync(p)) configs.push(parseConfig(p));
 	}
 

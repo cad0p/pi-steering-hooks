@@ -37,4 +37,4 @@ Blocking `gh pr create` without `--draft` prevents the failure mode where an age
 
 ## Install
 
-Drop the file at `~/.pi/agent/steering.json` (global), at a project root (project-scoped), or merge into an existing `steering.json`.
+Drop the file at `~/.pi/agent/steering.json` (global), at `<project-root>/.pi/steering.json` (project-scoped), or merge into an existing `steering.json`.

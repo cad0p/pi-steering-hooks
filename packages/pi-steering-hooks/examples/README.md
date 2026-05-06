@@ -13,7 +13,7 @@ Curated `steering.json` examples for common workflows. Each subdirectory has its
 
 1. **Copy** the `steering.json` from an example directory into one of:
    - `~/.pi/agent/steering.json` — applies globally
-   - `<your-project>/steering.json` — applies to this project tree (and subdirectories, via the walk-up loader)
+   - `<your-project>/.pi/steering.json` — applies to this project tree (and subdirectories, via the walk-up loader)
 2. **Merge** with any existing rules — rules are looked up by `name`, so later layers override earlier ones. `disable[]` unions across layers.
 3. **Verify** the rule is active by running `pi` in the target directory; the rules load on `session_start`.
 

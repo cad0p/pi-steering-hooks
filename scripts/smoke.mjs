@@ -20,7 +20,7 @@
 // Usage:
 //   pnpm -r build                                   # build the extension
 //   node scripts/smoke.mjs                          # run against defaults only
-//   node scripts/smoke.mjs /path/to/steering-dir    # + user rules from that dir's steering.json
+//   node scripts/smoke.mjs /path/to/steering-dir    # + user rules from that dir's .pi/steering.json
 
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -155,10 +155,12 @@ async function main() {
 		sessionDir = resolve(userRulesDir);
 	} else {
 		// Create an isolated session dir with a user rule so the requiresUserRule
-		// case has something to load.
+		// case has something to load. Project-local config lives under `.pi/`,
+		// matching pi's extension layout (same place as `.pi/extensions/`).
 		sessionDir = mkdtempSync(join(tmpdir(), "pi-poc-smoke-"));
+		mkdirSync(join(sessionDir, ".pi"), { recursive: true });
 		writeFileSync(
-			join(sessionDir, "steering.json"),
+			join(sessionDir, ".pi", "steering.json"),
 			JSON.stringify(
 				{
 					rules: [

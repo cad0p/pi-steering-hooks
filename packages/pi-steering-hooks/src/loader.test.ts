@@ -68,31 +68,32 @@ describe("loadConfigs", () => {
 	it("collects ancestor configs outermost-first between $HOME and cwd", () => {
 		const outer = join(tmpRoot, "a");
 		const inner = join(tmpRoot, "a", "b");
-		mkdirSync(inner, { recursive: true });
+		mkdirSync(join(outer, ".pi"), { recursive: true });
+		mkdirSync(join(inner, ".pi"), { recursive: true });
 		writeFileSync(
-			join(outer, "steering.json"),
+			join(outer, ".pi", "steering.json"),
 			JSON.stringify({
 				rules: [{ name: "outer", tool: "bash", field: "command", pattern: "o", reason: "o" }],
 			}),
 		);
 		writeFileSync(
-			join(inner, "steering.json"),
+			join(inner, ".pi", "steering.json"),
 			JSON.stringify({
 				rules: [{ name: "inner", tool: "bash", field: "command", pattern: "i", reason: "i" }],
 			}),
 		);
 		const configs = loadConfigs(inner);
-		// tmpRoot (HOME) has no steering.json → global baseline not added. Walk
+		// tmpRoot (HOME) has no .pi/steering.json → global baseline not added. Walk
 		// emits [tmpRoot, a, a/b] → reversed is still outermost-first at index 0.
 		assert.equal(configs.length, 2);
 		assert.equal(configs[0]?.rules?.[0]?.name, "outer");
 		assert.equal(configs[1]?.rules?.[0]?.name, "inner");
 	});
 
-	it("handles a malformed steering.json without throwing", () => {
+	it("handles a malformed .pi/steering.json without throwing", () => {
 		const dir = join(tmpRoot, "bad");
-		mkdirSync(dir, { recursive: true });
-		writeFileSync(join(dir, "steering.json"), "{ not valid json");
+		mkdirSync(join(dir, ".pi"), { recursive: true });
+		writeFileSync(join(dir, ".pi", "steering.json"), "{ not valid json");
 		const configs = loadConfigs(dir);
 		// Malformed file yields {} (not dropped), so the walk length matches.
 		assert.equal(configs.length, 1);
@@ -102,9 +103,10 @@ describe("loadConfigs", () => {
 	it("stops at $HOME and does not ascend into /", () => {
 		const cwd = join(tmpRoot, "x");
 		mkdirSync(cwd, { recursive: true });
-		// Place a steering.json at tmpRoot (HOME) itself — must be collected.
+		// Place a .pi/steering.json at tmpRoot (HOME) itself — must be collected.
+		mkdirSync(join(tmpRoot, ".pi"), { recursive: true });
 		writeFileSync(
-			join(tmpRoot, "steering.json"),
+			join(tmpRoot, ".pi", "steering.json"),
 			JSON.stringify({
 				rules: [{ name: "home", tool: "bash", field: "command", pattern: "h", reason: "h" }],
 			}),
@@ -112,6 +114,26 @@ describe("loadConfigs", () => {
 		const configs = loadConfigs(cwd);
 		assert.equal(configs.length, 1);
 		assert.equal(configs[0]?.rules?.[0]?.name, "home");
+	});
+
+	it("ignores a legacy <cwd>/steering.json at an ancestor (reads only .pi/steering.json)", () => {
+		// Pre-.pi-convention configs sat at the project root as a bare
+		// `steering.json`. The loader now reads only `<ancestor>/.pi/steering.json`,
+		// matching pi's project-local extension layout. A bare `steering.json`
+		// at an ancestor must be ignored so the migration path is unambiguous:
+		// users move the file to `.pi/steering.json` to keep it active.
+		const dir = join(tmpRoot, "legacy");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, "steering.json"),
+			JSON.stringify({
+				rules: [{ name: "legacy-rule", tool: "bash", field: "command", pattern: "l", reason: "l" }],
+			}),
+		);
+		const configs = loadConfigs(dir);
+		// Neither HOME nor any ancestor has a `.pi/steering.json`; the legacy
+		// file at `<dir>/steering.json` is silently ignored.
+		assert.deepEqual(configs, []);
 	});
 
 	it("walks up toward filesystem root when cwd is outside $HOME", () => {
@@ -123,9 +145,10 @@ describe("loadConfigs", () => {
 		);
 		const nested = join(outsideRoot, "project", "sub");
 		mkdirSync(nested, { recursive: true });
-		// steering.json sits at the outside-HOME tmpdir root.
+		// .pi/steering.json sits at the outside-HOME tmpdir root.
+		mkdirSync(join(outsideRoot, ".pi"), { recursive: true });
 		writeFileSync(
-			join(outsideRoot, "steering.json"),
+			join(outsideRoot, ".pi", "steering.json"),
 			JSON.stringify({
 				rules: [
 					{
@@ -154,7 +177,7 @@ describe("loadConfigs", () => {
 				.map((r) => r.name);
 			assert.ok(
 				names.includes("outside-home"),
-				`expected walk to reach outsideRoot\u2019s steering.json; got names=${names.join(",")}`,
+				`expected walk to reach outsideRoot\u2019s .pi/steering.json; got names=${names.join(",")}`,
 			);
 		} finally {
 			rmSync(outsideRoot, { recursive: true, force: true });

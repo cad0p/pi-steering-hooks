@@ -46,4 +46,4 @@ Merge this into your `steering.json`. The `disable` entry turns off the built-in
 }
 ```
 
-Drop the file at `~/.pi/agent/steering.json` for a global policy, or at the root of a project tree for repo-scoped enforcement (the loader walks up from the session cwd and merges every `steering.json` it finds).
+Drop the file at `~/.pi/agent/steering.json` for a global policy, or at `<project-root>/.pi/steering.json` for repo-scoped enforcement (the loader walks up from the session cwd and merges every `.pi/steering.json` it finds).
