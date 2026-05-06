@@ -15,6 +15,12 @@
  *     fully a cwd override. Agents overwhelmingly emit `-C` in practice.
  *   - `git --work-tree=/path` — same class.
  *   - `pushd`/`popd` directory stack — separate mechanic.
+ *   - Wrapper-expansion interaction: when a wrapper surfaces an inner ref
+ *     (e.g. `env -C /A cmd` → inner `cmd`), the override applies to the
+ *     outer `env` ref's recorded cwd but does NOT flow through to the
+ *     inner `cmd` ref. See the interaction note in `effective-cwd.ts`.
+ *     Fixing this requires wrapper expansion to consult this registry
+ *     when computing the inner ref's cwd — tracked as a separate issue.
  *
  * Design: each handler takes the command's suffix (argument words) and the
  * base cwd, and returns the cwd that applies to THIS command alone. The

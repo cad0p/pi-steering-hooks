@@ -66,6 +66,11 @@ export const WRAPPER_COMMANDS: Record<string, WrapperSpec> = {
 	env: {
 		type: "passthrough",
 		// -v is --debug (boolean); only flags that consume a value are listed.
+		// Note: `-C DIR` is also modelled by `CWD_OVERRIDE_FLAGS` (in
+		// cwd-override-flags.ts) so the outer `env` ref's recorded cwd
+		// reflects the -C target. Inner ref surfaced here still inherits
+		// sessionCwd today — see the wrapper-interaction note in
+		// effective-cwd.ts for the tracked follow-up.
 		flagArgs: ["-C", "-S", "-u"],
 		skipVarAssignments: true,
 	},

@@ -71,6 +71,17 @@ import type { CommandRef } from "./types.ts";
  * commands that appear in the AST walk. Whether to also attach cwds to
  * wrapper-expanded inner refs is a Phase 2 decision point.
  *
+ * Interaction with `CWD_OVERRIDE_FLAGS` (`git -C`, `make -C`, `env -C`):
+ * the override adjusts the outer command's own recorded cwd, but it does
+ * NOT flow into wrapper-expanded inner refs. Example: `env -C /A cmd` —
+ * the `env` ref is recorded at `/A`, but the `cmd` ref surfaced by
+ * `expandWrapperCommands` has no entry in the returned Map and consumers
+ * fall back to their own default (typically `sessionCwd`). Guardrails that
+ * want to match the inner command's effective cwd currently need to write
+ * the rule against the outer wrapper ref. Lifting this is tracked as a
+ * follow-up; fixing it in one place requires wrapper expansion to consult
+ * the cwd-override registry when computing an inner ref's cwd.
+ *
  * If you omit `refs`, iterate the map (`for (const [ref, cwd] of map)`) or
  * read `Array.from(map.keys())` to enumerate commands; do **not** try to
  * look up refs obtained from a *separate* extract call, since CommandRef
