@@ -59,12 +59,12 @@ Requires Node ≥ 20 and [pnpm](https://pnpm.io/) ≥ 10.
 
 ## Status
 
-**PoC, Phase 2 complete.** `unbash-walker` is ported and tested; the steering engine is wired up with default rules, config walk-up + merge, and inline override audit.
+**PoC, Phase 3 complete.** `unbash-walker` is ported and tested; the steering engine is wired up with default rules, config walk-up + merge, and inline override audit; four example rule packs ship with per-example READMEs and smoke tests.
 
 - [x] Phase 0 — Scaffold pnpm monorepo
 - [x] Phase 1 — Port `unbash-walker` from [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) + adversarial test matrix
 - [x] Phase 2 — Build the steering engine
-- [ ] Phase 3 — Port rule-pack examples
+- [x] Phase 3 — Port rule-pack examples
 - [ ] Phase 4 — READMEs, docs, publish-decision gate
 
 ## Related projects
