@@ -67,7 +67,12 @@ Static analysis; some bash constructs are deliberately under- or over-approximat
 - **`while` / `for` / `select`** — the body may iterate zero times; we never propagate body cwd forward. Commands inside the body are walked (and recorded) from the loop's starting cwd.
 - **Background `&`** — treated like `;` (cd effects propagate). In real bash, `cd /x &` runs in a backgrounded subshell and cmd would see the initial cwd. This is a deliberate over-match: a guardrail sees the more conservative cwd and fires `when.cwd` checks.
 - **`cd -`** — treated as a no-op (we don't track OLDPWD).
-- **Not modelled at all:** `pushd`/`popd`, `eval`, `source`/`.`, `env -C DIR cmd`, function bodies (walked only when defined, not when invoked).
+- **Not modelled at all:** function bodies (walked only when defined, not when invoked). The following out-of-scope constructs are pinned by tests so any future change is deliberate:
+  - **`pushd` / `popd`** — not treated as cd. `pushd /A && y` leaves `y` at the pre-pushd cwd. Guardrails that want to catch these should write explicit rules against the commands.
+  - **`env -C DIR cmd`** — `env` is expanded as a wrapper (so the inner `cmd` surfaces as its own ref), but the `-C DIR` flag is not interpreted. The expanded inner ref has no entry in the effectiveCwd Map; consumers fall back to the session cwd — conservative choice.
+  - **`eval "..."`** — the string argument is not re-parsed. Only `eval` itself is extracted; commands inside the string are invisible. Match the eval string directly (`^eval\b.*git\s+push`) or block eval outright.
+  - **`source script.sh` / `. script.sh`** — external files are never read. `source` is extracted as a normal command; any cd effects the sourced script would perform at runtime are opaque to the walker.
+  - **Heredoc bodies** — heredoc content is treated as data (redirect payload on the owning command), so `cd` written inside a heredoc body is never extracted or walked. This is correct behavior, not over-match: heredoc bodies in real bash are stdin, not commands.
 
 ## Acknowledgments
 

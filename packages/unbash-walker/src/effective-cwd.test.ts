@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { parse as parseBash } from "unbash";
 import { effectiveCwd } from "./effective-cwd.ts";
 import { extractAllCommandsFromAST } from "./extract.ts";
-import { getBasename } from "./resolve.ts";
+import { expandWrapperCommands } from "./wrappers.ts";
+import { getBasename, getCommandArgs } from "./resolve.ts";
 
 /** Map "name" → cwd for easier assertions; if the same name appears twice,
  *  returns the first occurrence. Use `cwdByOrder` for scripts with repeats. */
@@ -343,6 +344,121 @@ describe("effectiveCwd", () => {
 			// the 'Not modelled' list in effective-cwd.ts at the same time.
 			const cwds = cwdByName("cd /x & cmd", "/start");
 			assert.equal(cwds["cmd"], "/x");
+		});
+	});
+
+	// Pin the walker's behavior for bash constructs that are out-of-scope by
+	// design. Each of these is a "conservative over-match": the walker prefers
+	// reporting the pre-construct cwd (or surfacing the inner command under
+	// fallback-to-session-cwd at the consumer layer) over silently tracking a
+	// cwd change that might be wrong at runtime. A guardrail built on top
+	// fires `when.cwd` checks more aggressively rather than less.
+	describe("external / out-of-scope constructs (documented over-match)", () => {
+		it("subshell isolation (reconfirm): `(cd /A && x) && y` — x sees /A, y sees initial", () => {
+			// Already covered above; re-pinned here as part of the explicit
+			// edge-case coverage story we hand reviewers. Subshells are the
+			// one construct we DO model fully (via `Subshell` AST nodes),
+			// because unbash surfaces them as a dedicated node type. Other
+			// entries in this describe are the cases we deliberately don't
+			// model.
+			const ordered = cwdByOrder("(cd /A && x) && y", "/start");
+			const inner = ordered.find(([n]) => n === "x");
+			const outer = ordered.find(([n]) => n === "y");
+			assert.equal(inner?.[1], "/A");
+			assert.equal(outer?.[1], "/start");
+		});
+
+		it("heredoc body (reconfirm): `cat <<EOF ... EOF\\ny` — `cd` inside the heredoc is DATA, y sees initial", () => {
+			// unbash represents the heredoc body as a redirect payload attached
+			// to `cat`, not as executable commands. That means the `cd /A`
+			// inside the body never reaches extract/walker — y correctly sees
+			// the initial cwd. This is the correct behavior, not over-match:
+			// the heredoc body in real bash is stdin for `cat`, not commands
+			// to execute. Adversarial-matrix case 20 covers the extract side;
+			// this pins the effective-cwd side.
+			const cwds = cwdByName("cat <<EOF\ncd /A\nEOF\ny", "/start");
+			assert.equal(cwds["y"], "/start");
+			assert.equal(cwds["cd"], undefined, "cd inside heredoc body is not extracted at all");
+		});
+
+		it("pushd: `pushd /A && y` — we don't model the directory stack, y sees initial", () => {
+			// Real bash would push /A onto the stack and y would run under /A.
+			// We treat pushd as any other command — it's extracted with args
+			// [/A] but doesn't mutate the walker's cwd state. Guardrails that
+			// want to cover pushd/popd should add explicit rules against the
+			// commands themselves rather than relying on when.cwd.
+			const cwds = cwdByName("pushd /A && y", "/start");
+			assert.equal(cwds["y"], "/start", "y sees initial cwd; pushd is not modelled");
+			assert.equal(cwds["pushd"], "/start");
+		});
+
+		it("env -C: `env -C /A y` — inner y surfaces via wrapper expansion; walker falls back to session cwd", () => {
+			// env is a known wrapper, so expandWrapperCommands surfaces `y` as
+			// a separate CommandRef. But we don't interpret env's `-C DIR`
+			// flag — that target never reaches the walker, and the surfaced
+			// `y` ref doesn't exist in the original Script, so the
+			// effectiveCwd Map has no entry for it. The steering engine falls
+			// back to `sessionCwd` for refs without a Map entry (see
+			// index.ts's `cwdMap.get(ref) ?? sessionCwd`), which is the
+			// conservative choice: y is matched under the session's cwd, not
+			// the runtime `-C` target.
+			const src = "env -C /A y";
+			const script = parseBash(src);
+			const refs = extractAllCommandsFromAST(script, src);
+			const { commands } = expandWrapperCommands(refs);
+			const cwds = effectiveCwd(script, "/start", commands);
+
+			const env = commands.find((c) => getBasename(c) === "env");
+			const y = commands.find((c) => getBasename(c) === "y");
+			assert.ok(env, "env ref present");
+			assert.ok(y, "y ref surfaces via wrapper expansion");
+			assert.equal(cwds.get(env), "/start", "env sees pre-command cwd");
+			assert.equal(
+				cwds.get(y),
+				undefined,
+				"wrapper-expanded y has no Map entry → consumer falls back to sessionCwd",
+			);
+			assert.deepEqual(
+				getCommandArgs(env),
+				["-C", "/A", "y"],
+				"env's args are preserved so guardrails that want to catch `env -C` can write a pattern against the env ref",
+			);
+		});
+
+		it("eval: `eval \"cd /A && y\"` — the string arg is opaque, y is invisible to the walker", () => {
+			// eval's argument is a string literal; we don't recursively re-parse
+			// the string as bash. Only `eval` itself is extracted — y never
+			// surfaces as a CommandRef. Guardrails that want to catch what eval
+			// might run must either match the eval string pattern directly
+			// (e.g. `^eval\b.*git\s+push`) or block eval outright.
+			const src = `eval "cd /A && y"`;
+			const script = parseBash(src);
+			const refs = extractAllCommandsFromAST(script, src);
+			const { commands } = expandWrapperCommands(refs);
+			const cwds = effectiveCwd(script, "/start", commands);
+
+			const names = commands.map(getBasename);
+			assert.deepEqual(names, ["eval"], "only eval extracted; y is invisible");
+			assert.equal(cwds.get(commands[0]!), "/start");
+		});
+
+		it("source: `source script.sh` — the sourced file is opaque; source is extracted as a normal command", () => {
+			// We never read external files. `source foo.sh` is extracted as a
+			// command with basename `source` and args [foo.sh]; whatever foo.sh
+			// would do to cwd at runtime is invisible. Subsequent commands in
+			// the same script see the pre-source cwd. Guardrails treating
+			// `source`/`.` as equivalent to arbitrary command execution should
+			// block them outright at the command level.
+			const cwds = cwdByName("source script.sh && y", "/start");
+			assert.equal(cwds["source"], "/start");
+			assert.equal(cwds["y"], "/start", "y sees pre-source cwd; foo.sh's cd effect is opaque");
+		});
+
+		it("dot-source: `. script.sh` — same opacity as `source`", () => {
+			// POSIX spelling of `source`. Same story: the sourced file is data
+			// from our perspective.
+			const cwds = cwdByName(". script.sh && y", "/start");
+			assert.equal(cwds["y"], "/start");
 		});
 	});
 });
