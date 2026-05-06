@@ -4,14 +4,25 @@
 /**
  * Rule evaluation + inline override-comment detection.
  *
- * Two shapes are exposed because the bash path needs per-command-ref
+ * Three shapes are exposed because the bash path needs per-command-ref
  * evaluation (so each extracted command can be tested against its own
  * effective cwd), while write / edit evaluate once against the raw field.
  *
- *   - `evaluateRuleForCommand(rule, commandText, refCwd)` — for bash. The
- *     caller pre-parses the input with unbash-walker and invokes this per
- *     extracted CommandRef with that ref's stringified command and its
- *     effective cwd.
+ *   - `evaluateRuleForCommand(rule, commandText, refCwd)` — lowest-level
+ *     bash primitive. Caller has already parsed + extracted + expanded +
+ *     cwd-resolved; this just runs the rule's predicates against one
+ *     stringified ref and one effective cwd.
+ *   - `prepareBashContext(command, sessionCwd)` + `evaluateBashRuleWithContext(rule, ctx)`
+ *     — the hot-path pair. `prepareBashContext` runs the AST pipeline
+ *     (parse → extract → expand → effectiveCwd → stringify) once, returning
+ *     a reusable {@link BashContext}. `evaluateBashRuleWithContext` then
+ *     tests each rule against the prepared refs without re-parsing. Callers
+ *     evaluating many rules per tool call (e.g. the extension dispatcher)
+ *     should use this pair to amortize the parse cost across rules.
+ *   - `evaluateBashRule(rule, command, sessionCwd)` — one-shot convenience.
+ *     Composes the two above for callers that only evaluate a single rule
+ *     (tests, CLIs, ad-hoc checks). For hot loops with multiple rules per
+ *     command, prefer the prepare/evaluate split.
  *   - `evaluateRule(rule, input, ctx)` — for write / edit. Applies pattern
  *     directly to the chosen field value and `when.cwd` to ctx.cwd.
  *
@@ -22,6 +33,15 @@
  * `--`, `%%`, `;;`.
  */
 
+import {
+	effectiveCwd,
+	expandWrapperCommands,
+	extractAllCommandsFromAST,
+	getBasename,
+	getCommandArgs,
+	parse as parseBash,
+	type CommandRef,
+} from "unbash-walker";
 import type { Rule } from "./schema.ts";
 
 /**
@@ -82,7 +102,7 @@ export interface EvalContext {
  *      `expandWrapperCommands`,
  *   3. computing effective cwds with `effectiveCwd`, and
  *   4. passing each ref's `basename + " " + args.join(" ")` as
- *      `commandText` and the ref's effective cwd as `refCwd`.
+ *     `commandText` and the ref's effective cwd as `refCwd`.
  *
  * Returns true if the rule fires for this command ref.
  */
@@ -101,6 +121,108 @@ export function evaluateRuleForCommand(
 	if (cwdPattern && !new RegExp(cwdPattern).test(refCwd)) return false;
 
 	return true;
+}
+
+/**
+ * Pre-parsed view of one bash command — parse + extract + expand + cwd-resolve
+ * done once, ready to evaluate against many rules.
+ *
+ * The AST pipeline (parse → `extractAllCommandsFromAST` → `expandWrapperCommands`
+ * → `effectiveCwd`) is deterministic in `(command, sessionCwd)`. Previously the
+ * extension ran it per rule inside the `tool_call` loop — N+4 times for the 4
+ * default rules + N user rules — which scales linearly with rule count. With a
+ * pre-computed context the per-rule cost drops to one regex test per ref.
+ *
+ * Frozen so accidental mutation in a rule handler can't leak across iterations.
+ */
+export interface BashContext {
+	/** Original raw command string passed in. */
+	readonly rawCommand: string;
+	/** Session cwd threaded through effectiveCwd (fallback for refs without one). */
+	readonly sessionCwd: string;
+	/** All extracted command refs after wrapper expansion. */
+	readonly refs: readonly CommandRef[];
+	/** ref → effective cwd, as produced by `effectiveCwd`. */
+	readonly cwdMap: ReadonlyMap<CommandRef, string>;
+	/**
+	 * Pre-stringified `basename + " " + args.join(" ")` per ref, in the same
+	 * order as `refs`. Materialized once so the per-rule loop is pure regex
+	 * work — no repeated `getBasename`/`getCommandArgs` calls.
+	 */
+	readonly stringified: readonly {
+		readonly ref: CommandRef;
+		readonly text: string;
+		readonly cwd: string;
+	}[];
+}
+
+/**
+ * Run the AST pipeline for a bash command and return a reusable
+ * {@link BashContext}. Call this ONCE per tool call; pass the result to
+ * `evaluateBashRuleWithContext` for each rule.
+ *
+ * The extension dispatcher uses this to amortize parse cost across the
+ * rule list. External callers evaluating a single rule should prefer the
+ * one-shot {@link evaluateBashRule} for readability.
+ */
+export function prepareBashContext(
+	command: string,
+	sessionCwd: string,
+): BashContext {
+	const script = parseBash(command);
+	const extracted = extractAllCommandsFromAST(script, command);
+	const { commands: refs } = expandWrapperCommands(extracted);
+	const cwdMap = effectiveCwd(script, sessionCwd, refs);
+	const stringified = refs.map((ref) => {
+		const text = `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
+		const cwd = cwdMap.get(ref) ?? sessionCwd;
+		return { ref, text, cwd };
+	});
+	return {
+		rawCommand: command,
+		sessionCwd,
+		refs,
+		cwdMap,
+		stringified,
+	};
+}
+
+/**
+ * Evaluate one bash rule against a prepared {@link BashContext}. Returns
+ * true if the rule fires for any extracted command ref.
+ *
+ * This is the hot-loop entry point: no parsing, no extraction, no cwd walk.
+ * Given N rules and M refs, cost is N × M regex tests.
+ */
+export function evaluateBashRuleWithContext(
+	rule: Rule,
+	ctx: BashContext,
+): boolean {
+	if (rule.tool !== "bash") return false;
+	for (const { text, cwd } of ctx.stringified) {
+		if (evaluateRuleForCommand(rule, text, cwd)) return true;
+	}
+	return false;
+}
+
+/**
+ * One-shot bash rule evaluation. Parses, extracts, expands, cwd-resolves,
+ * and evaluates `rule` in a single call.
+ *
+ * Use this for ad-hoc checks, tests, or CLIs that run one rule at a time.
+ * For hot loops (multiple rules per command — e.g. the extension dispatcher),
+ * call {@link prepareBashContext} once and then {@link evaluateBashRuleWithContext}
+ * per rule so the parse cost is paid just once.
+ */
+export function evaluateBashRule(
+	rule: Rule,
+	command: string,
+	sessionCwd: string,
+): boolean {
+	return evaluateBashRuleWithContext(
+		rule,
+		prepareBashContext(command, sessionCwd),
+	);
 }
 
 /**

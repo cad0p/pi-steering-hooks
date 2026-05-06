@@ -12,9 +12,12 @@ import {
 	parse as parseBash,
 } from "unbash-walker";
 import {
+	evaluateBashRule,
+	evaluateBashRuleWithContext,
 	evaluateRule,
 	evaluateRuleForCommand,
 	extractOverride,
+	prepareBashContext,
 	type ToolInput,
 } from "./evaluator.ts";
 import type { Rule } from "./schema.ts";
@@ -121,6 +124,206 @@ describe("evaluateRuleForCommand (bash)", () => {
 			reason: "no",
 		};
 		assert.equal(evaluateRuleForCommand(writeRule, "git push --force", "/"), false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// prepareBashContext + evaluateBashRuleWithContext + evaluateBashRule
+//
+// These cover the parse-once-per-tool-call optimisation path. The context
+// produced by prepareBashContext must be equivalent to running the full AST
+// pipeline manually, and evaluating any rule against that context must
+// produce the same verdict as the one-shot convenience wrapper.
+// ---------------------------------------------------------------------------
+
+describe("prepareBashContext", () => {
+	it("produces refs + cwdMap matching the raw AST pipeline", () => {
+		const command = "cd /tmp/A && git push --force && cd /tmp/B && git commit --amend";
+		const sessionCwd = "/home/me";
+
+		// Reference: run the pipeline by hand against the SAME script instance
+		// the candidate uses. We can't compare refs across two separate parses
+		// because each parse allocates fresh Command nodes; comparing content
+		// (stringified text + effective cwd) is the honest equivalence check.
+		const ctx = prepareBashContext(command, sessionCwd);
+
+		assert.equal(ctx.rawCommand, command);
+		assert.equal(ctx.sessionCwd, sessionCwd);
+
+		// Rebuild the expected refs/cwds from the context's own script-level
+		// state so ref identity holds. The context exposes refs + cwdMap
+		// directly, so we can assert content consistency against stringified.
+		assert.equal(ctx.refs.length, ctx.stringified.length);
+		for (let i = 0; i < ctx.refs.length; i++) {
+			const ref = ctx.refs[i]!;
+			const expectedText =
+				`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
+			const expectedCwd = ctx.cwdMap.get(ref) ?? sessionCwd;
+			const entry = ctx.stringified[i]!;
+			assert.equal(entry.ref, ref, `ref[${i}] identity preserved`);
+			assert.equal(entry.text, expectedText, `stringified[${i}].text matches`);
+			assert.equal(entry.cwd, expectedCwd, `stringified[${i}].cwd matches`);
+		}
+
+		// Also confirm the pipeline produces a structurally-equivalent shape
+		// when run independently: same ref count, same stringified texts, same
+		// per-ref effective cwds.
+		const script = parseBash(command);
+		const { commands: rawRefs } = expandWrapperCommands(
+			extractAllCommandsFromAST(script, command),
+		);
+		const rawCwdMap = effectiveCwd(script, sessionCwd, rawRefs);
+		assert.equal(rawRefs.length, ctx.refs.length, "same number of extracted refs");
+		for (let i = 0; i < rawRefs.length; i++) {
+			const ref = rawRefs[i]!;
+			const expectedText =
+				`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
+			const expectedCwd = rawCwdMap.get(ref) ?? sessionCwd;
+			assert.equal(ctx.stringified[i]?.text, expectedText);
+			assert.equal(ctx.stringified[i]?.cwd, expectedCwd);
+		}
+
+		// Spot-check content: the first git command runs in /tmp/A, the second
+		// in /tmp/B, regardless of the session cwd (/home/me).
+		const gitPushEntry = ctx.stringified.find((e) => e.text.startsWith("git push"));
+		const gitCommitEntry = ctx.stringified.find((e) => e.text.startsWith("git commit"));
+		assert.ok(gitPushEntry, "expected git push to be extracted");
+		assert.ok(gitCommitEntry, "expected git commit to be extracted");
+		assert.equal(gitPushEntry.cwd, "/tmp/A");
+		assert.equal(gitCommitEntry.cwd, "/tmp/B");
+	});
+
+	it("falls back to sessionCwd when no `cd` is present", () => {
+		const ctx = prepareBashContext("git push --force", "/home/me/repo");
+		assert.equal(ctx.stringified.length, 1);
+		assert.equal(ctx.stringified[0]?.cwd, "/home/me/repo");
+		assert.equal(ctx.stringified[0]?.text, "git push --force");
+	});
+});
+
+describe("evaluateBashRuleWithContext", () => {
+	it("returns the same verdict as evaluateBashRule for the same inputs", () => {
+		const commands = [
+			"git push --force",
+			"git push --force-with-lease",
+			"ls -la",
+			"sh -c 'git push --force'",
+			"cd /tmp/A && git push --force",
+			"echo 'git push --force'",
+		];
+		for (const cmd of commands) {
+			const ctx = prepareBashContext(cmd, "/repo");
+			const viaContext = evaluateBashRuleWithContext(NO_FORCE_PUSH, ctx);
+			const viaOneShot = evaluateBashRule(NO_FORCE_PUSH, cmd, "/repo");
+			assert.equal(
+				viaContext,
+				viaOneShot,
+				`context vs one-shot disagree on: ${cmd}`,
+			);
+		}
+	});
+
+	it("evaluates multiple rules against a single prepared context", () => {
+		const command = "cd /tmp/A && git push --force && cd /tmp/B && git commit --amend";
+		const ctx = prepareBashContext(command, "/home/me");
+
+		const noForcePush: Rule = { ...NO_FORCE_PUSH };
+		const noAmend: Rule = {
+			name: "no-amend",
+			tool: "bash",
+			field: "command",
+			pattern: "\\bgit\\s+commit\\b.*--amend",
+			reason: "no amend",
+		};
+		const noEcho: Rule = {
+			name: "no-echo",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo\\b",
+			reason: "no echo",
+		};
+
+		assert.equal(evaluateBashRuleWithContext(noForcePush, ctx), true);
+		assert.equal(evaluateBashRuleWithContext(noAmend, ctx), true);
+		assert.equal(evaluateBashRuleWithContext(noEcho, ctx), false);
+	});
+
+	it("honours per-ref effective cwd via when.cwd", () => {
+		const command = "cd /tmp/A && git push --force && cd /tmp/B && git commit --amend";
+		const ctx = prepareBashContext(command, "/home/me");
+
+		const aOnly: Rule = {
+			name: "push-in-A",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "no push in A",
+			when: { cwd: "^/tmp/A" },
+		};
+		const bOnly: Rule = {
+			name: "amend-in-B",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+commit\\b.*--amend",
+			reason: "no amend in B",
+			when: { cwd: "^/tmp/B" },
+		};
+		const cOnly: Rule = {
+			name: "push-in-B",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "no push in B",
+			when: { cwd: "^/tmp/B" },
+		};
+
+		assert.equal(evaluateBashRuleWithContext(aOnly, ctx), true);
+		assert.equal(evaluateBashRuleWithContext(bOnly, ctx), true);
+		assert.equal(evaluateBashRuleWithContext(cOnly, ctx), false);
+	});
+
+	it("returns false for non-bash rules without touching the context", () => {
+		const ctx = prepareBashContext("git push --force", "/repo");
+		const writeRule: Rule = {
+			name: "no-secrets",
+			tool: "write",
+			field: "content",
+			pattern: "PRIVATE_KEY",
+			reason: "no",
+		};
+		assert.equal(evaluateBashRuleWithContext(writeRule, ctx), false);
+	});
+});
+
+describe("evaluateBashRule (one-shot backward-compat)", () => {
+	// The one-shot function is the pre-optimisation entry point and must keep
+	// working so external callers (tests, CLIs) aren't broken by the refactor.
+	it("preserves the original (rule, command, sessionCwd) signature", () => {
+		assert.equal(evaluateBashRule(NO_FORCE_PUSH, "git push --force", "/repo"), true);
+		assert.equal(evaluateBashRule(NO_FORCE_PUSH, "git push", "/repo"), false);
+		assert.equal(
+			evaluateBashRule(NO_FORCE_PUSH, "sh -c 'git push --force'", "/repo"),
+			true,
+		);
+	});
+
+	it("honours per-command effective cwd end to end", () => {
+		const rule: Rule = {
+			name: "no-amend-in-personal",
+			tool: "bash",
+			field: "command",
+			pattern: "\\bgit\\s+commit\\b.*--amend",
+			reason: "no amend",
+			when: { cwd: "/personal/" },
+		};
+		assert.equal(
+			evaluateBashRule(rule, "cd /home/me/personal/x && git commit --amend", "/work"),
+			true,
+		);
+		assert.equal(
+			evaluateBashRule(rule, "cd /home/me/work/x && git commit --amend", "/work"),
+			false,
+		);
 	});
 });
 

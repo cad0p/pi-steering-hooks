@@ -24,18 +24,24 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { DEFAULT_RULES as DEFAULTS_DIRECT } from "./defaults.ts";
 import {
+	evaluateBashRule as evaluateBashRuleDirect,
+	evaluateBashRuleWithContext as evaluateBashRuleWithContextDirect,
 	evaluateRule as evaluateRuleDirect,
 	evaluateRuleForCommand as evaluateRuleForCommandDirect,
 	extractOverride as extractOverrideDirect,
+	prepareBashContext as prepareBashContextDirect,
 } from "./evaluator.ts";
 import register, {
 	DEFAULT_RULES,
 	buildRules,
+	evaluateBashRule,
+	evaluateBashRuleWithContext,
 	evaluateRule,
 	evaluateRuleForCommand,
 	extractOverride,
 	loadConfigs,
 	parseConfig,
+	prepareBashContext,
 } from "./index.ts";
 import {
 	buildRules as buildRulesDirect,
@@ -744,6 +750,18 @@ describe("public re-exports", () => {
 
 	it("re-exports evaluateRuleForCommand (same identity)", () => {
 		assert.equal(evaluateRuleForCommand, evaluateRuleForCommandDirect);
+	});
+
+	it("re-exports prepareBashContext (same identity)", () => {
+		assert.equal(prepareBashContext, prepareBashContextDirect);
+	});
+
+	it("re-exports evaluateBashRuleWithContext (same identity)", () => {
+		assert.equal(evaluateBashRuleWithContext, evaluateBashRuleWithContextDirect);
+	});
+
+	it("re-exports evaluateBashRule (same identity)", () => {
+		assert.equal(evaluateBashRule, evaluateBashRuleDirect);
 	});
 
 	it("re-exports extractOverride (same identity)", () => {

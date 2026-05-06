@@ -12,19 +12,13 @@ import type {
 	WriteToolCallEvent,
 } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import {
-	effectiveCwd,
-	expandWrapperCommands,
-	extractAllCommandsFromAST,
-	getBasename,
-	getCommandArgs,
-	parse as parseBash,
-} from "unbash-walker";
 import { DEFAULT_RULES } from "./defaults.ts";
 import {
+	type BashContext,
+	evaluateBashRuleWithContext,
 	evaluateRule,
-	evaluateRuleForCommand,
 	extractOverride,
+	prepareBashContext,
 	type ToolInput,
 } from "./evaluator.ts";
 import { buildRules, loadConfigs } from "./loader.ts";
@@ -75,26 +69,15 @@ function formatBlockReason(
  * fires for any extracted command ref (including commands behind wrappers like
  * `sh -c`, `sudo`, `xargs`, etc.).
  *
- * Exported for the integration tests and for downstream consumers that want
- * to embed the evaluator without the pi extension shim.
+ * Convenience one-shot: re-parses the AST on every call. For the hot path
+ * (many rules per command) the extension dispatcher uses `prepareBashContext`
+ * + `evaluateBashRuleWithContext` to amortize parse cost.
+ *
+ * Re-exported from `./evaluator.ts`. Exported here for the integration tests
+ * and for downstream consumers that want to embed the evaluator without the
+ * pi extension shim.
  */
-export function evaluateBashRule(
-	rule: Rule,
-	command: string,
-	sessionCwd: string,
-): boolean {
-	const script = parseBash(command);
-	const extracted = extractAllCommandsFromAST(script, command);
-	const { commands: refs } = expandWrapperCommands(extracted);
-	const cwdMap = effectiveCwd(script, sessionCwd, refs);
-
-	for (const ref of refs) {
-		const refCwd = cwdMap.get(ref) ?? sessionCwd;
-		const commandText = `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
-		if (evaluateRuleForCommand(rule, commandText, refCwd)) return true;
-	}
-	return false;
-}
+export { evaluateBashRule } from "./evaluator.ts";
 
 /**
  * Pi extension factory. Wires the steering engine onto `session_start` +
@@ -115,10 +98,15 @@ export default function register(pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", (event, ctx): ToolCallEventResult | void => {
+		// Lazy-build the bash AST context on first need and reuse it across
+		// all bash rules for this tool call. Non-bash tool calls skip the
+		// pipeline entirely (ctx stays null).
+		let bashContext: BashContext | null = null;
 		for (const rule of rules) {
 			if (rule.tool === "bash" && isToolCallEventType("bash", event)) {
 				const cmd = event.input.command;
-				if (!evaluateBashRule(rule, cmd, ctx.cwd)) continue;
+				bashContext ??= prepareBashContext(cmd, ctx.cwd);
+				if (!evaluateBashRuleWithContext(rule, bashContext)) continue;
 
 				if (isOverridable(rule, defaultNoOverride)) {
 					const reason = extractOverride(cmd, rule.name);
@@ -240,11 +228,13 @@ function applyEdit(
 // ---------------------------------------------------------------------------
 
 export type { Rule, SteeringConfig } from "./schema.ts";
-export type { ToolInput, EvalContext } from "./evaluator.ts";
+export type { BashContext, ToolInput, EvalContext } from "./evaluator.ts";
 export { DEFAULT_RULES } from "./defaults.ts";
 export {
+	evaluateBashRuleWithContext,
 	evaluateRule,
 	evaluateRuleForCommand,
 	extractOverride,
+	prepareBashContext,
 } from "./evaluator.ts";
 export { parseConfig, loadConfigs, buildRules } from "./loader.ts";
