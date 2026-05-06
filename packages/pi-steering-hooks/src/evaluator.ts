@@ -134,6 +134,12 @@ export function evaluateRuleForCommand(
  * pre-computed context the per-rule cost drops to one regex test per ref.
  *
  * Frozen so accidental mutation in a rule handler can't leak across iterations.
+ *
+ * @experimental The shape of `refs` and `cwdMap` exposes `CommandRef` from
+ * `unbash-walker`, transitively coupling consumers to unbash's AST node types.
+ * This is acceptable for 0.x but will be revisited before v1.0 — see
+ * `PUBLISHING.md` (section: v1 API stability considerations) for the options
+ * on the table (keep as-is / opaque handle / flatten to plain data).
  */
 export interface BashContext {
 	/** Original raw command string passed in. */
