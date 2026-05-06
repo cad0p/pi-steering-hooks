@@ -22,7 +22,26 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import register from "./index.ts";
+import { DEFAULT_RULES as DEFAULTS_DIRECT } from "./defaults.ts";
+import {
+	evaluateRule as evaluateRuleDirect,
+	evaluateRuleForCommand as evaluateRuleForCommandDirect,
+	extractOverride as extractOverrideDirect,
+} from "./evaluator.ts";
+import register, {
+	DEFAULT_RULES,
+	buildRules,
+	evaluateRule,
+	evaluateRuleForCommand,
+	extractOverride,
+	loadConfigs,
+	parseConfig,
+} from "./index.ts";
+import {
+	buildRules as buildRulesDirect,
+	loadConfigs as loadConfigsDirect,
+	parseConfig as parseConfigDirect,
+} from "./loader.ts";
 
 /* -------------------------------------------------------------------------- */
 /* Mock ExtensionAPI                                                          */
@@ -418,5 +437,42 @@ describe("register(): unrelated tool calls pass through", () => {
 		};
 		const result = h?.(event, { cwd: tmpHome });
 		assert.equal(result, undefined);
+	});
+});
+
+/* -------------------------------------------------------------------------- */
+/* Public re-exports                                                          */
+/* -------------------------------------------------------------------------- */
+
+describe("public re-exports", () => {
+	// Consumers embedding the engine (building their own extensions, a CLI
+	// that lints commands, a test harness, …) import these from the package
+	// root. If one stops being re-exported, this test fails.
+	it("re-exports DEFAULT_RULES (same identity)", () => {
+		assert.equal(DEFAULT_RULES, DEFAULTS_DIRECT);
+	});
+
+	it("re-exports evaluateRule (same identity)", () => {
+		assert.equal(evaluateRule, evaluateRuleDirect);
+	});
+
+	it("re-exports evaluateRuleForCommand (same identity)", () => {
+		assert.equal(evaluateRuleForCommand, evaluateRuleForCommandDirect);
+	});
+
+	it("re-exports extractOverride (same identity)", () => {
+		assert.equal(extractOverride, extractOverrideDirect);
+	});
+
+	it("re-exports parseConfig (same identity)", () => {
+		assert.equal(parseConfig, parseConfigDirect);
+	});
+
+	it("re-exports loadConfigs (same identity)", () => {
+		assert.equal(loadConfigs, loadConfigsDirect);
+	});
+
+	it("re-exports buildRules (same identity)", () => {
+		assert.equal(buildRules, buildRulesDirect);
 	});
 });

@@ -191,3 +191,19 @@ function applyEdit(
 
 	return { block: true, reason: formatBlockReason(rule, "edit") };
 }
+
+// ---------------------------------------------------------------------------
+// Re-exports for consumers embedding the engine or writing their own
+// extensions (e.g. to compose with additional hooks, or to build a CLI that
+// evaluates rules outside the pi runtime).
+// ---------------------------------------------------------------------------
+
+export type { Rule, SteeringConfig } from "./schema.ts";
+export type { ToolInput, EvalContext } from "./evaluator.ts";
+export { DEFAULT_RULES } from "./defaults.ts";
+export {
+	evaluateRule,
+	evaluateRuleForCommand,
+	extractOverride,
+} from "./evaluator.ts";
+export { parseConfig, loadConfigs, buildRules } from "./loader.ts";
