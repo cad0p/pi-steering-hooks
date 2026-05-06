@@ -10,6 +10,7 @@
     "sourceMap": true
   },
   "include": ["src/**/*"],
+  "exclude": ["**/*.test.ts"],
   "references": [
     { "path": "../unbash-walker/tsconfig.build.json" }
   ]
