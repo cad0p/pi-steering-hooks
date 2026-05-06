@@ -109,13 +109,13 @@ export default function register(pi: ExtensionAPI): void {
 			if (rule.tool === "write" && isToolCallEventType("write", event)) {
 				const result = applyWrite(pi, rule, event, ctx.cwd);
 				if (result === "continue") continue;
-				if (result !== undefined) return result;
+				return result;
 			}
 
 			if (rule.tool === "edit" && isToolCallEventType("edit", event)) {
 				const result = applyEdit(pi, rule, event, ctx.cwd);
 				if (result === "continue") continue;
-				if (result !== undefined) return result;
+				return result;
 			}
 		}
 	});

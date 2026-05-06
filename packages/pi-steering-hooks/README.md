@@ -157,7 +157,7 @@ module.exports.fix = ...
 
 The comment still records intent and populates the audit log, which is the point. But it also means path-targeted rules have an implicit content-based escape hatch: anyone willing to add a comment to the file body can bypass the rule. If you want hard path-level protection (no escape hatch at all), set `noOverride: true` on the rule.
 
-## Relationship to [`@samfp/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)
+## Relationship to [`samfoy/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)
 
 - **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
 - **Changed**: the evaluator backend. samfoy runs regex on the raw command string; this package runs regex on AST-extracted command refs (post wrapper-expansion, with effective cwd per ref).
