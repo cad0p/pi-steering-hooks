@@ -134,14 +134,35 @@ function getTargetText(rule: Rule, input: ToolInput): string | null {
  * exactly what they typed in audit logs.
  */
 export function extractOverride(text: string, ruleName: string): string | null {
-	// Match the first override comment in the text. If it names a different
-	// rule, return null (the agent targeted a different override; this rule
-	// is still in effect).
+	// Scan every override comment in the text with a global-flag regex and
+	// return the first one that targets `ruleName`.
+	//
+	// Stacked overrides on one line, e.g.
+	//   `cmd # steering-override: rule-a — r1 # steering-override: rule-b — r2`
+	// are parsed without cross-contamination: after each match we cap the
+	// captured reason at the next override marker, and reset `lastIndex` to
+	// that marker's position so the subsequent iteration sees it.
 	const re =
-		/(?:#|\/\/|\/\*|<!--|--|%%|;;)\s*steering-override:\s*([A-Za-z0-9_-]+)\s*[—–-]\s*(.+?)(?:\*\/|-->|$)/m;
-	const m = re.exec(text);
-	if (!m) return null;
-	if (m[1] !== ruleName) return null;
-	const reason = (m[2] ?? "").trim();
-	return reason === "" ? null : reason;
+		/(?:#|\/\/|\/\*|<!--|--|%%|;;)\s*steering-override:\s*([A-Za-z0-9_-]+)\s*[—–-]\s*(.*?)(?:\*\/|-->|$)/gm;
+	const markerRe =
+		/(?:#|\/\/|\/\*|<!--|--|%%|;;)\s*steering-override:/;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(text)) !== null) {
+		let reason = m[2] ?? "";
+		// If the lazy capture swallowed a subsequent override marker (common
+		// when stacked on one line, because the greedy `$` terminator sits
+		// past the marker), cap the reason at that marker and rewind the
+		// scanner to the marker so the next iteration parses it cleanly.
+		const reasonStart = (m.index ?? 0) + m[0].length - reason.length;
+		const nextIdx = reason.search(markerRe);
+		if (nextIdx !== -1) {
+			reason = reason.slice(0, nextIdx);
+			re.lastIndex = reasonStart + nextIdx;
+		}
+		if (m[1] !== ruleName) continue;
+		reason = reason.trim();
+		if (reason === "") continue;
+		return reason;
+	}
+	return null;
 }

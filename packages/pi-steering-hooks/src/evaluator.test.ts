@@ -254,4 +254,30 @@ describe("extractOverride", () => {
 		const r = extractOverride("# steering-override: r \u2014   ", "r");
 		assert.equal(r, null);
 	});
+
+	it("stacked overrides: looking up first rule returns its reason only", () => {
+		const text =
+			"cmd # steering-override: rule-a \u2014 reason-a # steering-override: rule-b \u2014 reason-b";
+		assert.equal(extractOverride(text, "rule-a"), "reason-a");
+	});
+
+	it("stacked overrides: looking up second rule returns its reason only", () => {
+		const text =
+			"cmd # steering-override: rule-a \u2014 reason-a # steering-override: rule-b \u2014 reason-b";
+		assert.equal(extractOverride(text, "rule-b"), "reason-b");
+	});
+
+	it("stacked overrides: unrelated lookup returns null (no bleed from either)", () => {
+		const text =
+			"cmd # steering-override: rule-a \u2014 reason-a # steering-override: rule-b \u2014 reason-b";
+		assert.equal(extractOverride(text, "rule-c"), null);
+	});
+
+	it("stacked overrides: empty reason on first is skipped, scanner finds second match for same rule", () => {
+		// First `foo` override has no reason (whitespace only). The scanner
+		// must keep going and surface the second `foo` override's reason.
+		const text =
+			"# steering-override: foo \u2014   # steering-override: foo \u2014 actual reason";
+		assert.equal(extractOverride(text, "foo"), "actual reason");
+	});
 });
