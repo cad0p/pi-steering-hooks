@@ -87,6 +87,43 @@ describe("DEFAULT_RULES pattern spot-checks", () => {
 		assert.equal(pattern("no-force-push").test("git push origin main"), false);
 	});
 
+	it("no-force-push matches `git push origin main --force`", () => {
+		assert.equal(
+			pattern("no-force-push").test("git push origin main --force"),
+			true,
+		);
+	});
+
+	it("no-force-push matches `git -C /other push --force` (pre-subcommand flag)", () => {
+		assert.equal(
+			pattern("no-force-push").test("git -C /other push --force"),
+			true,
+		);
+	});
+
+	it("no-force-push matches `git -c rerere.enabled=false push --force` (key=val config)", () => {
+		assert.equal(
+			pattern("no-force-push").test(
+				"git -c rerere.enabled=false push --force",
+			),
+			true,
+		);
+	});
+
+	it("no-force-push matches `git --git-dir=/path push --force` (long-form pre-subcommand)", () => {
+		assert.equal(
+			pattern("no-force-push").test("git --git-dir=/path push --force"),
+			true,
+		);
+	});
+
+	it("no-force-push matches `git push --force-bar` (other --force-* suffix, accepted over-match)", () => {
+		assert.equal(
+			pattern("no-force-push").test("git push --force-bar"),
+			true,
+		);
+	});
+
 	it("no-hard-reset matches `git reset --hard HEAD`", () => {
 		assert.equal(pattern("no-hard-reset").test("git reset --hard HEAD"), true);
 	});

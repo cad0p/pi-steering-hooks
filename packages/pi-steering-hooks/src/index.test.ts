@@ -175,6 +175,22 @@ describe("register(): default rules wiring", () => {
 		assert.match(result?.reason ?? "", /no-force-push/);
 	});
 
+	it("blocks `git -C /other/dir push --force` (pre-subcommand flag bypass)", () => {
+		// Regression: previously the `^git\s+push` anchor let this slip through.
+		// The pattern now accepts short/long pre-subcommand flags before `push`.
+		const mock = makeMockPi();
+		register(mock.api as never);
+		fireSessionStart(mock, tmpHome);
+
+		const result = fireBashToolCall(
+			mock,
+			"git -C /other/dir push --force",
+			tmpHome,
+		);
+		assert.equal(result?.block, true);
+		assert.match(result?.reason ?? "", /no-force-push/);
+	});
+
 	it("does NOT block `echo 'git push --force'` (echo args are not AST-extracted)", () => {
 		// `echo` receives the string as an argument; it's not a nested command.
 		// Wrapper expansion only recurses into known command-running wrappers

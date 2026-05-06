@@ -29,8 +29,20 @@ export const DEFAULT_RULES: Rule[] = [
 		tool: "bash",
 		field: "command",
 		// Block `git push --force` / `-f`, allow `--force-with-lease`. Anchored
-		// so `echo 'git push --force'` (basename=echo) is NOT flagged.
-		pattern: "^git\\s+push\\b.*(?:--force(?!-with-lease)|\\s-f\\b)",
+		// so `echo 'git push --force'` (basename=echo) is NOT flagged. The
+		// pre-subcommand flag slot `(?:\s+-{1,2}[A-Za-z]\S*(?:\s+\S+)?)*`
+		// allows short and long git-flags before the subcommand:
+		//   - `git -C /path push --force`
+		//   - `git -c key=val push --force`
+		//   - `git --git-dir=/x push --force`
+		// All three are silent bypasses with a plain `^git\s+push` anchor.
+		//
+		// Known limit: this pattern over-matches on `git log --grep="push --force"`
+		// because `--grep=push` is a single token that still satisfies `\bpush\b`.
+		// Real agents don't emit that; if it becomes a problem we'll move to
+		// args-array matching.
+		pattern:
+			"^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+push\\b.*(?:--force(?!-with-lease)|\\s-f(?:\\s|$))",
 		reason:
 			"Force push rewrites remote history and can destroy teammates' work. Use `git push --force-with-lease` if you must, or create a new commit instead.",
 	},
