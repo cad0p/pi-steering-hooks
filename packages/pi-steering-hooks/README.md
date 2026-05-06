@@ -69,9 +69,11 @@ interface Rule {
 | `unless` | Optional. Exemption — if this matches, the rule does not fire. |
 | `when.cwd` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
 | `reason` | Human- and agent-readable message shown when blocked. Write it for the *agent*. |
-| `noOverride` | If `true`, no override escape hatch. Defaults to `false`. |
+| `noOverride` | If `true`, no override escape hatch. If `false`, override always allowed (explicit opt-in — beats `defaultNoOverride`). Omitted: falls back to the config-level `defaultNoOverride`, which itself defaults to `false`. See [Config-level override default](#config-level-override-default). |
 
 The `when` key is nested for forward extensibility: predicates like `branch`, `env`, or `time-of-day` can be added as peer keys under `when` without another schema migration. Unknown keys under `when` are reserved for future use — the current evaluator ignores them and emits a one-time `console.warn` per rule so authors notice typos.
+
+Note: `defaultNoOverride` is a [**`SteeringConfig`**](#config-level-override-default) field, not a `Rule` field — it lives at the top level of `steering.json`, alongside `disable` and `rules`. Easy to confuse with per-rule `noOverride`.
 
 ## Writing your own patterns
 
@@ -168,6 +170,35 @@ Syntax: `<leader> steering-override: <rule-name> <sep> <reason>`
 - Separators: `—` (em dash), `–` (en dash), `-` (hyphen)
 
 When accepted, the extension calls `pi.appendEntry("steering-override", { rule, reason, command|path, timestamp })` so overrides are auditable from the session transcript. `noOverride: true` rules skip this path entirely — the command stays blocked regardless of comments.
+
+### Config-level override default
+
+By default, rules without an explicit `noOverride` field allow inline override comments. To tighten this for a whole config layer, set `defaultNoOverride` in `steering.json`:
+
+```json
+{
+  "defaultNoOverride": true,
+  "rules": [
+    { "name": "strict-rule", "tool": "bash", "field": "command", "pattern": "^...", "reason": "..." },
+    { "name": "flexible-rule", "tool": "bash", "field": "command", "pattern": "^...", "reason": "...", "noOverride": false }
+  ]
+}
+```
+
+Effective `noOverride` for each rule:
+
+```
+effective-noOverride(rule) =
+  rule.noOverride ?? mergedConfig.defaultNoOverride ?? false
+```
+
+- Per-rule `noOverride` (either `true` or `false`) always wins. `noOverride: false` is a deliberate opt-in that keeps the rule overridable even when `defaultNoOverride: true` is set.
+- A rule that omits `noOverride` falls back to the config-level default.
+- If no layer sets `defaultNoOverride`, the effective default is `false` — preserving the prior behavior for configs that don't touch the field.
+
+**Walk-up merge.** `defaultNoOverride` merges with the same "inner layer wins" semantic as `disable`/`rules`: an inner layer's `defaultNoOverride` replaces the running value, and a layer that doesn't set the field leaves the running value unchanged. An explicit `defaultNoOverride: false` at an inner layer is a deliberate opt-out — distinct from omitting the field.
+
+Useful for "strict-by-default" trees where every rule should be a hard block unless specifically marked overridable.
 
 ### Override semantics for write/edit path rules
 

@@ -407,6 +407,146 @@ describe("register(): user-defined rules via steering.json", () => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* Config-level defaultNoOverride                                             */
+/* -------------------------------------------------------------------------- */
+
+// End-to-end for the `defaultNoOverride` config field: that per-rule
+// `noOverride` still wins, that an absent per-rule setting falls back to the
+// config default, and that the prior behavior is preserved when the field is
+// unset (backward compatibility).
+describe("register(): defaultNoOverride (config-level fallback)", () => {
+	useIsolatedHome();
+
+	it(
+		"`defaultNoOverride: true` + rule without `noOverride` → override ignored, command blocked",
+		() => {
+			mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+			writeFileSync(
+				join(tmpHome, ".pi", "agent", "steering.json"),
+				JSON.stringify({
+					defaultNoOverride: true,
+					rules: [
+						{
+							name: "no-echo-strict",
+							tool: "bash",
+							field: "command",
+							pattern: "^echo\\b",
+							reason: "echo blocked in strict-by-default tree",
+							// no explicit noOverride → inherits `defaultNoOverride: true`
+						},
+					],
+				}),
+			);
+
+			const mock = makeMockPi();
+			register(mock.api as never);
+			fireSessionStart(mock, tmpHome);
+
+			const result = fireBashToolCall(
+				mock,
+				"echo hi # steering-override: no-echo-strict \u2014 tried to escape",
+				tmpHome,
+			);
+			assert.equal(
+				result?.block,
+				true,
+				"defaultNoOverride: true promotes the rule to a hard block",
+			);
+			assert.match(result?.reason ?? "", /no-echo-strict/);
+			// No audit entry: override path is not entered for non-overridable rules.
+			assert.equal(mock.entries.length, 0);
+			// The block reason should NOT include the "To override" hint, because
+			// the rule effectively has no override path.
+			assert.doesNotMatch(result?.reason ?? "", /To override/);
+		},
+	);
+
+	it(
+		"`defaultNoOverride: true` + rule with explicit `noOverride: false` → override allowed (per-rule wins)",
+		() => {
+			mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+			writeFileSync(
+				join(tmpHome, ".pi", "agent", "steering.json"),
+				JSON.stringify({
+					defaultNoOverride: true,
+					rules: [
+						{
+							name: "no-echo-flexible",
+							tool: "bash",
+							field: "command",
+							pattern: "^echo\\b",
+							reason: "echo blocked but overridable",
+							noOverride: false, // explicit opt-in: override allowed despite config default
+						},
+					],
+				}),
+			);
+
+			const mock = makeMockPi();
+			register(mock.api as never);
+			fireSessionStart(mock, tmpHome);
+
+			const result = fireBashToolCall(
+				mock,
+				"echo hi # steering-override: no-echo-flexible \u2014 explicit opt-in",
+				tmpHome,
+			);
+			assert.equal(
+				result,
+				undefined,
+				"per-rule `noOverride: false` beats `defaultNoOverride: true`",
+			);
+			assert.equal(mock.entries.length, 1);
+			assert.equal(mock.entries[0]?.kind, "steering-override");
+			assert.equal(
+				(mock.entries[0]?.data as { rule: string }).rule,
+				"no-echo-flexible",
+			);
+		},
+	);
+
+	it(
+		"no `defaultNoOverride` anywhere + rule without `noOverride` → override allowed (backward-compat)",
+		() => {
+			// Lock in the prior behavior: existing configs that don't touch
+			// `defaultNoOverride` continue to allow overrides on plain rules.
+			mkdirSync(join(tmpHome, ".pi", "agent"), { recursive: true });
+			writeFileSync(
+				join(tmpHome, ".pi", "agent", "steering.json"),
+				JSON.stringify({
+					rules: [
+						{
+							name: "no-echo-loose",
+							tool: "bash",
+							field: "command",
+							pattern: "^echo\\b",
+							reason: "echo blocked",
+							// no noOverride, no defaultNoOverride at any layer
+						},
+					],
+				}),
+			);
+
+			const mock = makeMockPi();
+			register(mock.api as never);
+			fireSessionStart(mock, tmpHome);
+
+			const result = fireBashToolCall(
+				mock,
+				"echo hi # steering-override: no-echo-loose \u2014 prior behavior",
+				tmpHome,
+			);
+			assert.equal(result, undefined, "override still works");
+			assert.equal(mock.entries.length, 1);
+			assert.equal(
+				(mock.entries[0]?.data as { rule: string }).rule,
+				"no-echo-loose",
+			);
+		},
+	);
+});
+
+/* -------------------------------------------------------------------------- */
 /* Non-targeted tool calls pass through                                       */
 /* -------------------------------------------------------------------------- */
 

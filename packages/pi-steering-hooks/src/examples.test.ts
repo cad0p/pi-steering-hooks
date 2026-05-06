@@ -40,7 +40,10 @@ function loadExample(name: string, file = "steering.json"): SteeringConfig {
  */
 function rulesFor(example: string, file = "steering.json") {
 	const cfg = loadExample(example, file);
-	return buildRules([cfg], DEFAULT_RULES);
+	// Drop the `defaultNoOverride` field — these tests only care about the
+	// rule list. The examples ship `noOverride` per-rule where they need a
+	// hard block, so the config-level default is untested here.
+	return buildRules([cfg], DEFAULT_RULES).rules;
 }
 
 function getRule(name: string, rules: ReturnType<typeof rulesFor>) {

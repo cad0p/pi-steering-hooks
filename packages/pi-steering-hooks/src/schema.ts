@@ -74,4 +74,30 @@ export interface SteeringConfig {
 	disable?: string[];
 	/** Additional custom rules. Later layers override earlier ones by `name`. */
 	rules?: Rule[];
+	/**
+	 * Config-level fallback for {@link Rule.noOverride} when a rule does not
+	 * specify the field itself. Lets a whole config layer opt into a
+	 * "strict-by-default" posture without repeating `noOverride: true` on
+	 * every rule.
+	 *
+	 * Semantics (see README → "Config-level override default" for the full
+	 * treatment):
+	 *
+	 *   effective-noOverride(rule) =
+	 *     rule.noOverride ?? mergedConfig.defaultNoOverride ?? false
+	 *
+	 * - A rule with its own `noOverride` (true OR false) is unaffected — per-rule
+	 *   settings always win. `noOverride: false` is a meaningful explicit
+	 *   opt-in that forces overrides to be allowed regardless of the
+	 *   config-level default.
+	 * - A rule that omits `noOverride` falls back to this config-level default
+	 *   when it's set, or `false` otherwise (preserving backward compatibility
+	 *   for configs that never set the field).
+	 *
+	 * Merge (walk-up, outermost → innermost): inner layer's
+	 * `defaultNoOverride` replaces the running value; a layer that doesn't set
+	 * the field leaves the running value alone. The implicit default when no
+	 * layer sets it is `false`.
+	 */
+	defaultNoOverride?: boolean;
 }

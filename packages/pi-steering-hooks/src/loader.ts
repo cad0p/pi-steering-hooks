@@ -34,6 +34,9 @@ export function parseConfig(path: string): SteeringConfig {
 		const out: SteeringConfig = {};
 		if (Array.isArray(parsed.disable)) out.disable = parsed.disable;
 		if (Array.isArray(parsed.rules)) out.rules = parsed.rules;
+		if (typeof parsed.defaultNoOverride === "boolean") {
+			out.defaultNoOverride = parsed.defaultNoOverride;
+		}
 		return out;
 	} catch {
 		return {};
@@ -90,24 +93,36 @@ export function loadConfigs(cwd: string): SteeringConfig[] {
  *   defaults ← overridden by configs[0] ← ... ← configs[n-1]
  *
  * Rules whose name appears in the accumulated `disable` set are filtered out.
+ *
+ * Returns the merged rule list alongside the effective `defaultNoOverride`
+ * value — the fallback used by the evaluator when a rule doesn't specify its
+ * own `noOverride`. Walk-up merge: an inner layer's `defaultNoOverride`
+ * replaces the running value; a layer that doesn't set the field leaves the
+ * running value unchanged. Implicit default is `false`, preserving the prior
+ * behavior for configs that never set the field.
  */
 export function buildRules(
 	configs: readonly SteeringConfig[],
 	defaults: readonly Rule[],
-): Rule[] {
+): { rules: Rule[]; defaultNoOverride: boolean } {
 	const byName = new Map<string, Rule>();
 	for (const r of defaults) byName.set(r.name, r);
 
 	const disabled = new Set<string>();
+	let defaultNoOverride = false; // implicit default when no layer sets it
+
 	for (const cfg of configs) {
 		if (cfg.disable) for (const name of cfg.disable) disabled.add(name);
 		if (cfg.rules) for (const r of cfg.rules) byName.set(r.name, r);
+		if (typeof cfg.defaultNoOverride === "boolean") {
+			defaultNoOverride = cfg.defaultNoOverride;
+		}
 	}
 
-	const out: Rule[] = [];
+	const rules: Rule[] = [];
 	for (const rule of byName.values()) {
 		if (disabled.has(rule.name)) continue;
-		out.push(rule);
+		rules.push(rule);
 	}
-	return out;
+	return { rules, defaultNoOverride };
 }

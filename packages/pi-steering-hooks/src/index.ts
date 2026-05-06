@@ -31,19 +31,43 @@ import { buildRules, loadConfigs } from "./loader.ts";
 import type { Rule } from "./schema.ts";
 
 /**
+ * Is this rule overridable given the rule's own `noOverride` and the
+ * currently-merged `defaultNoOverride` fallback?
+ *
+ * Single source of truth so `overrideHint`, the bash branch, and the
+ * write/edit helpers can't disagree on whether an override comment is
+ * even worth looking for.
+ *
+ * Semantics:
+ *   effective-noOverride = rule.noOverride ?? defaultNoOverride ?? false
+ *   overridable          = !effective-noOverride
+ */
+function isOverridable(rule: Rule, defaultNoOverride: boolean): boolean {
+	return !(rule.noOverride ?? defaultNoOverride);
+}
+
+/**
  * Build the "to override, add comment ..." hint appended to the block reason.
  * Kept as a single source of truth so the message stays consistent across
  * tool types and tests can assert exact phrasing.
  */
-function overrideHint(rule: Rule, tool: "bash" | "write" | "edit"): string {
-	if (rule.noOverride) return "";
+function overrideHint(
+	rule: Rule,
+	tool: "bash" | "write" | "edit",
+	defaultNoOverride: boolean,
+): string {
+	if (!isOverridable(rule, defaultNoOverride)) return "";
 	const leader = tool === "bash" ? "#" : "//";
 	return ` To override, include a comment: \`${leader} steering-override: ${rule.name} — <reason>\`.`;
 }
 
 /** Format the block reason shown to the agent when a rule fires. */
-function formatBlockReason(rule: Rule, tool: "bash" | "write" | "edit"): string {
-	return `[steering:${rule.name}] ${rule.reason}${overrideHint(rule, tool)}`;
+function formatBlockReason(
+	rule: Rule,
+	tool: "bash" | "write" | "edit",
+	defaultNoOverride: boolean,
+): string {
+	return `[steering:${rule.name}] ${rule.reason}${overrideHint(rule, tool, defaultNoOverride)}`;
 }
 
 /**
@@ -78,10 +102,16 @@ export function evaluateBashRule(
  */
 export default function register(pi: ExtensionAPI): void {
 	let rules: Rule[] = [];
+	// Fallback for `Rule.noOverride` when a rule doesn't specify it. Set from
+	// the merged config layers on `session_start` alongside `rules`. Per-rule
+	// `noOverride` still wins — see `isOverridable`.
+	let defaultNoOverride = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		const configs = loadConfigs(ctx.cwd);
-		rules = buildRules(configs, DEFAULT_RULES);
+		const built = buildRules(configs, DEFAULT_RULES);
+		rules = built.rules;
+		defaultNoOverride = built.defaultNoOverride;
 	});
 
 	pi.on("tool_call", (event, ctx): ToolCallEventResult | void => {
@@ -90,7 +120,7 @@ export default function register(pi: ExtensionAPI): void {
 				const cmd = event.input.command;
 				if (!evaluateBashRule(rule, cmd, ctx.cwd)) continue;
 
-				if (!rule.noOverride) {
+				if (isOverridable(rule, defaultNoOverride)) {
 					const reason = extractOverride(cmd, rule.name);
 					if (reason !== null) {
 						pi.appendEntry("steering-override", {
@@ -103,17 +133,20 @@ export default function register(pi: ExtensionAPI): void {
 					}
 				}
 
-				return { block: true, reason: formatBlockReason(rule, "bash") };
+				return {
+					block: true,
+					reason: formatBlockReason(rule, "bash", defaultNoOverride),
+				};
 			}
 
 			if (rule.tool === "write" && isToolCallEventType("write", event)) {
-				const result = applyWrite(pi, rule, event, ctx.cwd);
+				const result = applyWrite(pi, rule, event, ctx.cwd, defaultNoOverride);
 				if (result === "continue") continue;
 				return result;
 			}
 
 			if (rule.tool === "edit" && isToolCallEventType("edit", event)) {
-				const result = applyEdit(pi, rule, event, ctx.cwd);
+				const result = applyEdit(pi, rule, event, ctx.cwd, defaultNoOverride);
 				if (result === "continue") continue;
 				return result;
 			}
@@ -134,6 +167,7 @@ function applyWrite(
 	rule: Rule,
 	event: WriteToolCallEvent,
 	cwd: string,
+	defaultNoOverride: boolean,
 ): "continue" | ToolCallEventResult {
 	const input: ToolInput = {
 		tool: "write",
@@ -142,7 +176,7 @@ function applyWrite(
 	};
 	if (!evaluateRule(rule, input, { cwd })) return "continue";
 
-	if (!rule.noOverride) {
+	if (isOverridable(rule, defaultNoOverride)) {
 		const reason = extractOverride(event.input.content, rule.name);
 		if (reason !== null) {
 			pi.appendEntry("steering-override", {
@@ -155,7 +189,10 @@ function applyWrite(
 		}
 	}
 
-	return { block: true, reason: formatBlockReason(rule, "write") };
+	return {
+		block: true,
+		reason: formatBlockReason(rule, "write", defaultNoOverride),
+	};
 }
 
 /**
@@ -167,6 +204,7 @@ function applyEdit(
 	rule: Rule,
 	event: EditToolCallEvent,
 	cwd: string,
+	defaultNoOverride: boolean,
 ): "continue" | ToolCallEventResult {
 	const input: ToolInput = {
 		tool: "edit",
@@ -175,7 +213,7 @@ function applyEdit(
 	};
 	if (!evaluateRule(rule, input, { cwd })) return "continue";
 
-	if (!rule.noOverride) {
+	if (isOverridable(rule, defaultNoOverride)) {
 		const allNewText = event.input.edits.map((e) => e.newText).join("\n");
 		const reason = extractOverride(allNewText, rule.name);
 		if (reason !== null) {
@@ -189,7 +227,10 @@ function applyEdit(
 		}
 	}
 
-	return { block: true, reason: formatBlockReason(rule, "edit") };
+	return {
+		block: true,
+		reason: formatBlockReason(rule, "edit", defaultNoOverride),
+	};
 }
 
 // ---------------------------------------------------------------------------

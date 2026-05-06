@@ -170,7 +170,12 @@ describe("loadConfigs", () => {
 describe("buildRules", () => {
 	it("returns defaults unchanged when configs is empty", () => {
 		const out = buildRules([], [DEMO_DEFAULT]);
-		assert.deepEqual(out, [DEMO_DEFAULT]);
+		assert.deepEqual(out.rules, [DEMO_DEFAULT]);
+		assert.equal(
+			out.defaultNoOverride,
+			false,
+			"no layer set defaultNoOverride \u2192 implicit false (backward-compat)",
+		);
 	});
 
 	it("inner layer overrides a rule by name", () => {
@@ -181,21 +186,21 @@ describe("buildRules", () => {
 			rules: [makeRule({ name: "shared", reason: "inner" })],
 		};
 		const out = buildRules([outer, inner], []);
-		assert.equal(out.length, 1);
-		assert.equal(out[0]?.reason, "inner");
+		assert.equal(out.rules.length, 1);
+		assert.equal(out.rules[0]?.reason, "inner");
 	});
 
 	it("inner layer can disable a default rule", () => {
 		const inner: SteeringConfig = { disable: ["default-rule"] };
 		const out = buildRules([inner], [DEMO_DEFAULT]);
-		assert.deepEqual(out, []);
+		assert.deepEqual(out.rules, []);
 	});
 
 	it("disable is additive \u2014 once disabled, later layer cannot re-enable by omission", () => {
 		const outer: SteeringConfig = { disable: ["default-rule"] };
 		const inner: SteeringConfig = {}; // no disable list
 		const out = buildRules([outer, inner], [DEMO_DEFAULT]);
-		assert.deepEqual(out, []);
+		assert.deepEqual(out.rules, []);
 	});
 
 	it("adds net-new rules from configs on top of defaults", () => {
@@ -203,7 +208,7 @@ describe("buildRules", () => {
 			rules: [makeRule({ name: "custom", reason: "c" })],
 		};
 		const out = buildRules([cfg], [DEMO_DEFAULT]);
-		const names = out.map((r) => r.name).sort();
+		const names = out.rules.map((r) => r.name).sort();
 		assert.deepEqual(names, ["custom", "default-rule"]);
 	});
 
@@ -218,7 +223,44 @@ describe("buildRules", () => {
 			rules: [makeRule({ name: "r", reason: "inner" })],
 		};
 		const out = buildRules([global, outer, inner], []);
-		assert.equal(out.length, 1);
-		assert.equal(out[0]?.reason, "inner");
+		assert.equal(out.rules.length, 1);
+		assert.equal(out.rules[0]?.reason, "inner");
+	});
+});
+
+// defaultNoOverride merge semantics (walk-up): inner layer wins, unset
+// doesn't override the running value, implicit default is false. Per-rule
+// `noOverride` always wins \u2014 covered in index.test.ts (integration) because
+// it's an evaluator concern.
+describe("buildRules: defaultNoOverride merge semantics", () => {
+	it("config with `defaultNoOverride: true` surfaces in the result", () => {
+		const cfg: SteeringConfig = { defaultNoOverride: true };
+		const out = buildRules([cfg], []);
+		assert.equal(out.defaultNoOverride, true);
+	});
+
+	it("inner layer's `defaultNoOverride: true` overrides outer's `false`", () => {
+		const outer: SteeringConfig = { defaultNoOverride: false };
+		const inner: SteeringConfig = { defaultNoOverride: true };
+		const out = buildRules([outer, inner], []);
+		assert.equal(out.defaultNoOverride, true);
+	});
+
+	it("inner layer with `defaultNoOverride` unset leaves outer's value in place", () => {
+		// Walk-up semantic: undefined from a layer does NOT override the running
+		// value. This matches how `disable`/`rules` treat absent fields.
+		const outer: SteeringConfig = { defaultNoOverride: true };
+		const inner: SteeringConfig = {}; // no defaultNoOverride key at all
+		const out = buildRules([outer, inner], []);
+		assert.equal(out.defaultNoOverride, true);
+	});
+
+	it("inner layer's explicit `defaultNoOverride: false` overrides outer's `true`", () => {
+		// Explicit `false` at an inner layer is a deliberate opt-out and should
+		// win \u2014 distinguishing it from the \"unset\" case above.
+		const outer: SteeringConfig = { defaultNoOverride: true };
+		const inner: SteeringConfig = { defaultNoOverride: false };
+		const out = buildRules([outer, inner], []);
+		assert.equal(out.defaultNoOverride, false);
 	});
 });
