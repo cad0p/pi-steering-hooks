@@ -4,11 +4,61 @@ AST-backed steering hooks for [pi](https://github.com/mariozechner/pi-coding-age
 
 Inspired by [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks) (schema + override-comment + defaults); the evaluator backend is swapped out for an AST pipeline (via [`unbash-walker`](../unbash-walker/)) so rules survive quoting tricks, wrapper commands, and `cd`-prefixed chains.
 
-## Why AST over regex-on-raw
+## What this gets you
 
-samfoy's evaluator runs regex directly against the raw command string. That works well for the common case, but has four known silent-bypass classes once the agent starts chaining or wrapping commands (pinned by [`unbash-walker`'s adversarial matrix](../unbash-walker/src/adversarial-matrix.test.ts)) — e.g. `sh -c 'git push --force'`, `echo something | sudo xargs git push --force`, or `cd ~/personal && git commit --amend` (where samfoy's `cwd` check sees the *session* cwd, not the cwd that `git commit` actually runs under).
+Three capabilities you don't get from a regex-on-raw steering engine:
 
-This package parses the command with [`unbash`](https://github.com/webpro-nl/unbash), extracts every command ref, recursively expands known wrappers (`sh -c`, `bash -c`, `sudo`, `xargs`, `env`, …), and runs each rule against each ref with that ref's *effective* cwd. The rule still pays a small runtime cost, but the semantics are deterministic.
+### 1. AST-aware bash matching — not regex on raw strings
+
+The evaluator parses every bash command with [`unbash`](https://github.com/webpro-nl/unbash), extracts each command ref, recursively expands known wrappers (`sh -c`, `bash -c`, `sudo`, `xargs`, `env`, …), and runs each rule against each ref individually. A pattern like `^git\s+push.*--force` therefore has a stable meaning: it matches when `git` is the command being invoked, not when `git push --force` happens to appear somewhere in the raw text.
+
+Concrete cases where AST matching gives the right answer and regex-on-raw doesn't:
+
+| Command | AST backend | Regex on raw |
+|---------|-------------|--------------|
+| `echo 'git push --force'` | allow (echo of a quoted string) | **false positive — blocks** |
+| `sh -c 'git push --force'` | **block** (wrapper unwrapped) | silent bypass — allows |
+| `sudo git push --force` | **block** (sudo wrapper unwrapped) | ok |
+| `git push "--force"` | **block** (AST treats `--force` as a single arg regardless of quoting) | bypass if pattern requires `\s` before `--force` |
+
+The first two rows are the interesting ones: a regex engine sees text, so it can't tell a command argument apart from a string being printed. See [`unbash-walker`'s 24-case adversarial matrix](../unbash-walker/src/adversarial-matrix.test.ts) for the full set — quoting tricks, wrapper bypasses, and word-splitting edge cases all pinned as tests.
+
+### 2. Per-command effective cwd
+
+`when.cwd` is tested against the **effective cwd of each extracted command**, not the session cwd. Chained commands with intermediate `cd`s get evaluated at the directory each command actually runs under.
+
+Given this command:
+
+```bash
+cd /tmp/A && git push --force && cd /tmp/B && git commit --amend
+```
+
+And these two cwd-scoped rules:
+
+```json
+[
+  {
+    "name": "no-force-push-in-A",
+    "tool": "bash", "field": "command",
+    "pattern": "^git\\s+push.*--force",
+    "when": { "cwd": "^/tmp/A" },
+    "reason": "Tree A is shared; no force pushes."
+  },
+  {
+    "name": "no-amend-in-B",
+    "tool": "bash", "field": "command",
+    "pattern": "^git\\s+commit.*--amend",
+    "when": { "cwd": "^/tmp/B" },
+    "reason": "Tree B uses review-by-SHA; don't amend."
+  }
+]
+```
+
+`no-force-push-in-A` fires on the `git push --force` with its effective cwd `/tmp/A`, **not** on the session cwd and **not** on the final cwd `/tmp/B`. If that rule is overridden inline, evaluation advances and `no-amend-in-B` fires on the `git commit --amend` at `/tmp/B`. A regex-on-raw engine checking `cwd` against the session directory catches neither reliably.
+
+### 3. One steering at a time, with progressive override
+
+When a single tool call could violate multiple rules, the first matching rule blocks and evaluation stops. Overriding it advances evaluation to the next violation — so the agent addresses one concern at a time, and the block reason always names exactly the rule to satisfy next. See [Rule precedence and multi-rule events](#rule-precedence-and-multi-rule-events) for a worked example.
 
 ## Install
 
