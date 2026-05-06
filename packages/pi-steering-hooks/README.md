@@ -76,7 +76,39 @@ Performance is not the differentiator though. The reason to choose the AST path 
 > pi install @cad0p/pi-steering-hooks
 > ```
 
-For local development inside this repo, it's picked up automatically as a workspace package.
+### Local install during the PoC
+
+To try the PoC against a real pi session in another workspace (or against your existing extensions, to see how it interacts):
+
+```bash
+# 1. Build the monorepo first so dist/ exists
+cd /path/to/pi-steering-hooks   # this repo
+pnpm install && pnpm -r build
+
+# 2. Install the package into a target project as a local pi extension
+cd /path/to/your-project
+pi install /path/to/pi-steering-hooks/packages/pi-steering-hooks -l
+
+# 3. Verify
+pi list   # should include @cad0p/pi-steering-hooks
+```
+
+The `-l` flag registers the extension in the project-local `./.pi/settings.json` (rather than the global `~/.pi/agent/settings.json`), so the install is scoped to this one project. Use `pi remove /path/... -l` to undo.
+
+**For isolated testing** (skip all other extensions including anything auto-discovered):
+
+```bash
+pi --no-extensions --extension /path/to/pi-steering-hooks/packages/pi-steering-hooks/dist/index.js
+```
+
+This loads only our extension, bypassing any existing steering hooks you have installed globally or per-project. Useful for A/B comparison against an existing setup.
+
+**Rules file location.** After installing, place your `steering.json` at:
+- `~/.pi/agent/steering.json` for a global baseline that applies everywhere.
+- `<project-root>/.pi/steering.json` for project-specific rules. This is the convention used across the pi ecosystem (`.pi/extensions/`, `.pi/skills/`, etc.).
+- Anywhere between the session cwd and `$HOME`: each ancestor's `.pi/steering.json` is collected and merged. Inner layers override outer ones by rule name; `disable[]` unions across layers.
+
+For developers of this monorepo: the package is auto-picked-up as a pnpm workspace — no manual install needed for repo-local testing.
 
 ## Quick start
 

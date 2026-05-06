@@ -48,6 +48,8 @@ Once the PoC ships and the extraction path is clear, `unbash-walker` moves out.
 
 ## Getting started
 
+> **To try the PoC against a real pi session in another workspace** (e.g. replacing existing steering hooks) — see [`packages/pi-steering-hooks/README.md`](packages/pi-steering-hooks/README.md#local-install-during-the-poc). That's the consumer-facing path. The section below is for developers of this monorepo.
+
 ```bash
 pnpm install
 pnpm -r typecheck
