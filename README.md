@@ -53,6 +53,11 @@ pnpm install
 pnpm -r typecheck
 pnpm -r build
 pnpm -r test
+
+# Isolated end-to-end smoke test: drives the built extension with
+# synthetic tool_call events and asserts block/allow + audit behavior.
+# Runs without an LLM, so it's deterministic and CI-safe.
+node scripts/smoke.mjs
 ```
 
 Requires Node ≥ 20 and [pnpm](https://pnpm.io/) ≥ 10.
