@@ -206,4 +206,70 @@ describe("DEFAULT_RULES pattern spot-checks", () => {
 	it("no-long-running-commands does NOT match `npm run build`", () => {
 		assert.equal(pattern("no-long-running-commands").test("npm run build"), false);
 	});
+
+	it("no-long-running-commands matches `pnpm dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("pnpm dev"), true);
+	});
+
+	it("no-long-running-commands matches `pnpm run dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("pnpm run dev"), true);
+	});
+
+	it("no-long-running-commands does NOT match `pnpm build`", () => {
+		assert.equal(pattern("no-long-running-commands").test("pnpm build"), false);
+	});
+
+	it("no-long-running-commands matches `vite` (bare = dev server)", () => {
+		assert.equal(pattern("no-long-running-commands").test("vite"), true);
+	});
+
+	it("no-long-running-commands matches `vite dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("vite dev"), true);
+	});
+
+	it("no-long-running-commands does NOT match `vite build`", () => {
+		assert.equal(pattern("no-long-running-commands").test("vite build"), false);
+	});
+
+	it("no-long-running-commands matches `astro dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("astro dev"), true);
+	});
+
+	it("no-long-running-commands does NOT match `astro build`", () => {
+		assert.equal(pattern("no-long-running-commands").test("astro build"), false);
+	});
+
+	it("no-long-running-commands matches `next dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("next dev"), true);
+	});
+
+	it("no-long-running-commands does NOT match `next build`", () => {
+		assert.equal(pattern("no-long-running-commands").test("next build"), false);
+	});
+
+	it("no-long-running-commands matches `deno task dev`", () => {
+		assert.equal(
+			pattern("no-long-running-commands").test("deno task dev"),
+			true,
+		);
+	});
+
+	it("no-long-running-commands does NOT match `deno task build`", () => {
+		assert.equal(
+			pattern("no-long-running-commands").test("deno task build"),
+			false,
+		);
+	});
+
+	it("no-long-running-commands matches `bun dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("bun dev"), true);
+	});
+
+	it("no-long-running-commands matches `bun run dev`", () => {
+		assert.equal(pattern("no-long-running-commands").test("bun run dev"), true);
+	});
+
+	it("no-long-running-commands does NOT match `bun install`", () => {
+		assert.equal(pattern("no-long-running-commands").test("bun install"), false);
+	});
 });

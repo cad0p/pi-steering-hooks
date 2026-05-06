@@ -77,9 +77,14 @@ export const DEFAULT_RULES: Rule[] = [
 		name: "no-long-running-commands",
 		tool: "bash",
 		field: "command",
+		// Covers npm / yarn / pnpm dev + start, npx --watch, webpack dev modes,
+		// jest / tsc --watch, nodemon, and the modern bundler/runtime ecosystem
+		// (vite, astro, next dev, deno task dev/start/serve, bun dev).
+		// Representative, not exhaustive — consumers with other watchers should
+		// add them via `steering.json`.
 		pattern:
-			"^(npm\\s+run\\s+dev|npm\\s+start|yarn\\s+start|yarn\\s+dev|npx\\s+.*--watch|webpack\\s+(--watch|serve)|jest\\s+--watch|nodemon|tsc\\s+--watch)\\b",
+			"^(?:npm\\s+(?:run\\s+dev|start)|yarn\\s+(?:dev|start)|pnpm\\s+(?:run\\s+)?(?:dev|start)|npx\\s+.*--watch|webpack\\s+(?:--watch|serve)|jest\\s+--watch|nodemon\\b|tsc\\s+--watch|vite(?:\\s+(?:dev|serve|preview))?(?!\\s+[A-Za-z])|astro\\s+(?:dev|preview)|next\\s+dev|deno\\s+task\\s+(?:dev|start|serve)|bun\\s+(?:dev|run\\s+dev))\\b",
 		reason:
-			"Long-running dev servers and watchers block the agent loop. Ask the user to run it manually in another terminal, or use a background-process skill (e.g. tmux-runner) if one is available.",
+			"Long-running dev servers and watchers block the agent loop. Ask the user to run it manually in another terminal, or use a background-process tool. Representative — add your own via `steering.json` if a framework isn't listed here.",
 	},
 ];
