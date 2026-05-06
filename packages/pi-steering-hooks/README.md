@@ -64,12 +64,32 @@ interface Rule {
 | `name` | Unique id. Appears in block reason, override comments, and audit entries. |
 | `tool` | Which pi tool to intercept — `bash`, `write`, or `edit`. |
 | `field` | For `bash`: always `command`. For `write`/`edit`: `path` or `content`. |
-| `pattern` | Regex string. For `bash`: applied to the AST-extracted command text (`basename + " " + args.join(" ")`), per extracted ref. Anchor with `^` to match the basename. For `write`/`edit`: applied to the raw field value. |
+| `pattern` | Regex matched against the AST-extracted command string (`basename + " " + args.join(" ")`). **Anchor with `^` to match the basename; unanchored patterns match inside joined args.** For `write`/`edit`, applied to the raw field value. |
 | `requires` | Optional. Must ALSO match. |
 | `unless` | Optional. Exemption — if this matches, the rule does not fire. |
 | `cwdPattern` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
 | `reason` | Human- and agent-readable message shown when blocked. Write it for the *agent*. |
 | `noOverride` | If `true`, no override escape hatch. Defaults to `false`. |
+
+## Writing your own patterns
+
+When authoring a `bash` rule, anchor the pattern with `^` so it tests against the extracted command string (`basename + " " + args.join(" ")`), not against a substring floating inside joined args.
+
+Why it matters: the AST extractor identifies the actual command — not text that *looks* like a command inside a quoted argument. Example:
+
+```bash
+echo 'git push --force'
+```
+
+This runs `echo`, not `git`. The extractor gives us `basename = echo`, `args = ["git push --force"]`, so the stringified form becomes `echo git push --force`. A pattern anchored with `^git\s+push` correctly sees `echo` at the start and does not fire. The same pattern without the anchor — `\bgit\s+push` — would match the quoted text inside the `echo` argument and produce a false positive.
+
+Guidelines for bash rules:
+
+- **Anchor with `^`** for the common case: "block this command". `^git\s+push.*--force` blocks `git push --force` and wrapped variants, not echoed strings that happen to contain the text.
+- **Use `\b` only when matching sub-arguments** (flags, targets) after the basename has already been anchored. `^git\s+push\b.*\b--force\b` is fine; `\bgit\s+push\b.*\b--force\b` is not.
+- **Pre-subcommand flag slots** (`git -C /path push --force`): the built-in defaults use `^git\b(?:\s+-{1,2}[A-Za-z]\S*(?:\s+\S+)?)*\s+push\b...` to accept `-C /path`, `-c key=val`, `--git-dir=/x` and similar. Copy that shape for your own `git`-subcommand rules.
+
+For `write` and `edit` rules, anchoring is not needed — `pattern` runs on the raw field value (`path` or `content`), not a joined command string.
 
 ## Default rules
 
