@@ -159,9 +159,16 @@ The comment still records intent and populates the audit log, which is the point
 
 ## Relationship to [`samfoy/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)
 
+This package originated as a fork of samfoy's and shares its schema DNA. The two have since diverged enough that we treat them as sibling approaches rather than a fork-and-PR-back. Discussion of the split lives on [samfoy#2](https://github.com/samfoy/pi-steering-hooks/issues/2) — cwd-aware rules as a motivating example.
+
 - **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
 - **Changed**: the evaluator backend. samfoy runs regex on the raw command string; this package runs regex on AST-extracted command refs (post wrapper-expansion, with effective cwd per ref).
 - **Added**: `cwdPattern` field. Per-command effective cwd via [`unbash-walker`](../unbash-walker/). `write` and `edit` tool support.
+
+Two-track approach:
+
+- **Track S** (samfoy upstream) — contribute the smaller, schema-level improvements (walk-up + merge + `session_start`, session-level `when: { cwd }`) that fit samfoy's regex-on-raw model. These PRs land in his repo.
+- **Track P** (this package) — the AST-backed sibling. Keeps its own release cadence and exposes the `cwdPattern` / per-command effective-cwd features that only make sense with the AST pipeline.
 
 Both approaches are legitimate. samfoy's is simpler, faster, and covers the 80% case. This package trades some runtime cost for closing the documented silent-bypass classes.
 
@@ -169,7 +176,7 @@ Both approaches are legitimate. samfoy's is simpler, faster, and covers the 80% 
 
 `pi-guard` is a *permission* system (prompt-before-run, allowlists/denylists). This package is a *steering* system (block-with-reason, inline overrides, audit log). They operate at different points of the lifecycle and compose: pi-guard decides whether the agent is *allowed* to run a command; pi-steering-hooks decides whether the agent *should* run it given project context.
 
-They share AST infrastructure through [`unbash-walker`](../unbash-walker/), which was ported from pi-guard's `src/ast/` module.
+We share AST infrastructure via [`unbash-walker`](../unbash-walker/) — ported from pi-guard's [`src/ast/`](https://github.com/jdiamond/pi-guard/tree/main/src/ast) module. During the PoC phase, `unbash-walker` is vendored in this monorepo (same `workspace:*` build); once the extraction proposal on pi-guard is resolved, it moves to its own package that both projects depend on. See [the repo README](../../README.md) for the roadmap and [`PUBLISHING.md`](./PUBLISHING.md) for the gate criteria.
 
 ## Status
 
