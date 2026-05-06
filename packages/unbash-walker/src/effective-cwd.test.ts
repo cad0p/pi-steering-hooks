@@ -392,16 +392,16 @@ describe("effectiveCwd", () => {
 			assert.equal(cwds["pushd"], "/start");
 		});
 
-		it("env -C: `env -C /A y` — inner y surfaces via wrapper expansion; walker falls back to session cwd", () => {
-			// env is a known wrapper, so expandWrapperCommands surfaces `y` as
-			// a separate CommandRef. But we don't interpret env's `-C DIR`
-			// flag — that target never reaches the walker, and the surfaced
-			// `y` ref doesn't exist in the original Script, so the
-			// effectiveCwd Map has no entry for it. The steering engine falls
-			// back to `sessionCwd` for refs without a Map entry (see
-			// index.ts's `cwdMap.get(ref) ?? sessionCwd`), which is the
-			// conservative choice: y is matched under the session's cwd, not
-			// the runtime `-C` target.
+		it("env -C: `env -C /A y` — env records at /A; wrapper-expanded y still falls back", () => {
+			// With cwd-override-flags.ts modelling `env -C DIR`, the env ref's
+			// recorded cwd is /A (env internally chdirs before execing the
+			// inner command, and we treat that as env's effective cwd).
+			//
+			// Wrapper-expanded inner refs (the surfaced `y`) still have no Map
+			// entry — wrapper expansion and cwd-override interaction is tracked
+			// as a separate follow-up. Consumers that read `cwdMap.get(ref)`
+			// still fall back to sessionCwd for the expanded `y`, which is the
+			// conservative choice.
 			const src = "env -C /A y";
 			const script = parseBash(src);
 			const refs = extractAllCommandsFromAST(script, src);
@@ -412,16 +412,16 @@ describe("effectiveCwd", () => {
 			const y = commands.find((c) => getBasename(c) === "y");
 			assert.ok(env, "env ref present");
 			assert.ok(y, "y ref surfaces via wrapper expansion");
-			assert.equal(cwds.get(env), "/start", "env sees pre-command cwd");
+			assert.equal(cwds.get(env), "/A", "env records at /A via -C override");
 			assert.equal(
 				cwds.get(y),
 				undefined,
-				"wrapper-expanded y has no Map entry → consumer falls back to sessionCwd",
+				"wrapper-expanded y has no Map entry → consumer falls back to sessionCwd (follow-up)",
 			);
 			assert.deepEqual(
 				getCommandArgs(env),
 				["-C", "/A", "y"],
-				"env's args are preserved so guardrails that want to catch `env -C` can write a pattern against the env ref",
+				"env's args are preserved so guardrails can also write a raw-pattern rule if they want",
 			);
 		});
 
@@ -459,6 +459,75 @@ describe("effectiveCwd", () => {
 			// from our perspective.
 			const cwds = cwdByName(". script.sh && y", "/start");
 			assert.equal(cwds["y"], "/start");
+		});
+	});
+
+	describe("per-command cwd overrides (`git -C`, `make -C`, `env -C`)", () => {
+		it("git -C: `git -C /x push` records push's cwd as /x; no propagation", () => {
+			const ordered = cwdByOrder("git -C /x push && ls", "/start");
+			// order: git, ls
+			assert.equal(ordered[0]?.[0], "git");
+			assert.equal(ordered[0]?.[1], "/x", "git records at /x");
+			assert.equal(ordered[1]?.[0], "ls");
+			assert.equal(ordered[1]?.[1], "/start", "ls after git -C: cwd did NOT propagate");
+		});
+
+		it("git -C relative path joins onto shell cwd", () => {
+			const cwds = cwdByName("git -C sub push", "/start");
+			assert.equal(cwds["git"], "/start/sub");
+		});
+
+		it("git -C composition: `git -C /a -C b push` records at /a/b", () => {
+			const cwds = cwdByName("git -C /a -C b push", "/start");
+			assert.equal(cwds["git"], "/a/b");
+		});
+
+		it("cd then git -C: override wins over shell cd for that command", () => {
+			// Shell cd moves us to /Y. `git -C /x push` runs git at /x regardless.
+			// A subsequent `ls` runs at /Y (git's -C didn't change shell state).
+			const ordered = cwdByOrder("cd /Y && git -C /x push && ls", "/start");
+			const git = ordered.find(([n]) => n === "git");
+			const ls = ordered.find(([n]) => n === "ls");
+			assert.equal(git?.[1], "/x", "git's -C overrides the shell cwd from cd");
+			assert.equal(ls?.[1], "/Y", "ls sees the cd target; git's -C didn't propagate");
+		});
+
+		it("git -C with non-static target: stops propagating, records at shell cwd", () => {
+			const cwds = cwdByName("cd /Y && git -C $VAR push", "/start");
+			assert.equal(cwds["git"], "/Y", "conservative fallback to the shell cwd when -C is dynamic");
+		});
+
+		it("subshell isolation + git -C: `(cd /A && git -C /x push)` records at /x", () => {
+			const cwds = cwdByName("(cd /A && git -C /x push) && ls", "/start");
+			assert.equal(cwds["git"], "/x", "git's -C wins inside the subshell");
+			assert.equal(cwds["ls"], "/start", "subshell isolation means ls sees the outer cwd");
+		});
+
+		it("git push -C /x: -C after subcommand is NOT a global flag, no override", () => {
+			const cwds = cwdByName("git push -C /x", "/start");
+			assert.equal(cwds["git"], "/start", "-C after subcommand is not the global git flag");
+		});
+
+		it("make -C: `make -C /x all` records at /x", () => {
+			const cwds = cwdByName("make -C /x all", "/start");
+			assert.equal(cwds["make"], "/x");
+		});
+
+		it("make -C: order-agnostic, `make all -C /x` still records at /x", () => {
+			const cwds = cwdByName("make all -C /x", "/start");
+			assert.equal(cwds["make"], "/x");
+		});
+
+		it("env -C: `env -C /A cmd` records env's cwd at /A", () => {
+			const cwds = cwdByName("env -C /A cmd", "/start");
+			assert.equal(cwds["env"], "/A");
+		});
+
+		it("absolute path via full command path: `/usr/bin/git -C /x push` still recognized", () => {
+			// Registry is keyed by basename; path-prefixed invocations resolve
+			// via path.basename(name).
+			const cwds = cwdByName("/usr/bin/git -C /x push", "/start");
+			assert.equal(cwds["git"], "/x");
 		});
 	});
 });

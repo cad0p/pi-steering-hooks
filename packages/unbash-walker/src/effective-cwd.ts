@@ -15,6 +15,7 @@ import type {
 	Word,
 	WordPart,
 } from "unbash";
+import { CWD_OVERRIDE_FLAGS } from "./cwd-override-flags.ts";
 import { extractAllCommandsFromAST } from "./extract.ts";
 import type { CommandRef } from "./types.ts";
 
@@ -40,6 +41,9 @@ import type { CommandRef } from "./types.ts";
  *     escapes out or across peers
  *   - `(A; B)` — subshell; cd effects are isolated to the subshell body
  *   - `{ A; B; }` — group; cd effects DO propagate to surrounding scope
+ *   - per-command cwd overrides: `git -C DIR`, `make -C DIR`, `env -C DIR`.
+ *     The override applies to THAT command's recorded cwd only — it does NOT
+ *     propagate forward (the shell's cwd is unchanged). See `cwd-override-flags.ts`.
  *   - control flow (if / while / for / select / case) — conservative
  *     branch-merge: walk every branch/body so inner commands are recorded,
  *     but only propagate cd effects out of the construct when all branches
@@ -50,7 +54,8 @@ import type { CommandRef } from "./types.ts";
  * Not modelled (out of scope — documented for future work):
  *   - `pushd`/`popd` directory stack
  *   - `eval` / `source` / `.` string execution
- *   - `env -C DIR cmd` (env's per-command cwd override)
+ *   - `git --git-dir=/p` / `git --work-tree=/p` (narrower cases; `-C` covers
+ *     the common agent pattern)
  *   - background `&` separator (treated like `;`)
  *
  * The returned map is keyed by CommandRef. By default those refs are freshly
@@ -207,15 +212,27 @@ function walkSequence(
 }
 
 /** Record the command's effective cwd (cwd-as-it-starts) and, if it's a
- *  `cd`, compute the resulting cwd for subsequent commands. */
+ *  `cd`, compute the resulting cwd for subsequent commands.
+ *
+ *  Per-command cwd overrides (`git -C`, `make -C`, `env -C`) adjust the
+ *  recorded cwd for the command itself but do NOT change the cwd threaded
+ *  to subsequent commands. That's the whole point — `git -C /x push; ls`
+ *  should record `push` at `/x` and `ls` at the pre-git cwd.
+ */
 function handleCommand(
 	node: Command,
 	cwd: string,
 	byNode: Map<Command, string>,
 ): string {
-	byNode.set(node, cwd);
-
 	const name = node.name?.value ?? node.name?.text;
+
+	// Per-command cwd override (git -C, make -C, env -C). Adjusts THIS
+	// command's recorded cwd; does not alter the cwd we thread forward.
+	const basename = name ? path.basename(name) : "";
+	const override = CWD_OVERRIDE_FLAGS[basename];
+	const recordedCwd = override ? override(node.suffix, cwd) : cwd;
+	byNode.set(node, recordedCwd);
+
 	if (name !== "cd") return cwd;
 
 	const targetWord = node.suffix[0];
