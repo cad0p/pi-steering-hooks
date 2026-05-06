@@ -138,6 +138,25 @@ Syntax: `<leader> steering-override: <rule-name> <sep> <reason>`
 
 When accepted, the extension calls `pi.appendEntry("steering-override", { rule, reason, command|path, timestamp })` so overrides are auditable from the session transcript. `noOverride: true` rules skip this path entirely — the command stays blocked regardless of comments.
 
+### Override semantics for write/edit path rules
+
+For `write` and `edit` rules, the override comment is looked for in the **file body** (the `content` for `write`, or the joined `newText` across edits) — regardless of which field the rule matches.
+
+This is intentional: path strings have no comment syntax, so a rule like
+
+```json
+{ "tool": "write", "field": "path", "pattern": "/node_modules/" }
+```
+
+would otherwise have no escape hatch at all. Instead, a write into `node_modules/foo.js` can still be overridden by including an inline comment in the file body:
+
+```js
+// steering-override: no-node-modules-writes — patching upstream bug, tracking in #1234
+module.exports.fix = ...
+```
+
+The comment still records intent and populates the audit log, which is the point. But it also means path-targeted rules have an implicit content-based escape hatch: anyone willing to add a comment to the file body can bypass the rule. If you want hard path-level protection (no escape hatch at all), set `noOverride: true` on the rule.
+
 ## Relationship to [`@samfp/pi-steering-hooks`](https://github.com/samfoy/pi-steering-hooks)
 
 - **Borrowed**: rule shape (`pattern` / `requires` / `unless` / `reason` / `noOverride`), override-comment syntax, most of the default-rule list.
