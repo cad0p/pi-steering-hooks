@@ -113,6 +113,58 @@ describe("loadConfigs", () => {
 		assert.equal(configs.length, 1);
 		assert.equal(configs[0]?.rules?.[0]?.name, "home");
 	});
+
+	it("walks up toward filesystem root when cwd is outside $HOME", () => {
+		// When the session cwd lives outside $HOME (e.g. /var/project/sub on a
+		// shared server), the walker keeps going past $HOME up to `/`. Lock
+		// that behavior in so a future change can't silently truncate it.
+		const outsideRoot = mkdtempSync(
+			join(tmpdir(), "pi-steering-walkup-outside-"),
+		);
+		const nested = join(outsideRoot, "project", "sub");
+		mkdirSync(nested, { recursive: true });
+		// steering.json sits at the outside-HOME tmpdir root.
+		writeFileSync(
+			join(outsideRoot, "steering.json"),
+			JSON.stringify({
+				rules: [
+					{
+						name: "outside-home",
+						tool: "bash",
+						field: "command",
+						pattern: "o",
+						reason: "o",
+					},
+				],
+			}),
+		);
+
+		// Point HOME at an unrelated tmp dir so the walk can't short-circuit on
+		// it. The `beforeEach` already reset HOME to `tmpRoot`; we swap to a
+		// sibling here so neither ancestor nor descendant of `nested`.
+		const unrelatedHome = mkdtempSync(
+			join(tmpdir(), "pi-steering-walkup-home-"),
+		);
+		process.env.HOME = unrelatedHome;
+
+		try {
+			const configs = loadConfigs(nested);
+			const names = configs
+				.flatMap((c) => c.rules ?? [])
+				.map((r) => r.name);
+			assert.ok(
+				names.includes("outside-home"),
+				`expected walk to reach outsideRoot\u2019s steering.json; got names=${names.join(",")}`,
+			);
+		} finally {
+			rmSync(outsideRoot, { recursive: true, force: true });
+			rmSync(unrelatedHome, { recursive: true, force: true });
+			// `afterEach` will restore HOME to its original value. We explicitly
+			// reset to `tmpRoot` here so the assertion above doesn\u2019t leak an
+			// unrelated HOME into any subsequent teardown logging.
+			process.env.HOME = tmpRoot;
+		}
+	});
 });
 
 describe("buildRules", () => {
