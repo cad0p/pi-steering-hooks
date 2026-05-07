@@ -524,6 +524,12 @@ export interface Plugin {
 	 * triggers on (e.g. `git` — to register a `--git-dir=...` parser on
 	 * top of the built-in cwd tracker).
 	 *
+	 * The inner value accepts either a single {@link Modifier} or a
+	 * readonly array of them, mirroring {@link Tracker.modifiers} on the
+	 * walker side. Plugins can register multiple modifiers under one
+	 * `(tracker, basename)` pair — e.g. distinct parsers for different
+	 * subcommands of the same CLI that all share a basename.
+	 *
 	 * Collisions on a `(tracker, basename)` pair log a WARN and keep
 	 * the first-registered entry.
 	 *
@@ -533,7 +539,11 @@ export interface Plugin {
 	 */
 	trackerExtensions?: Record<
 		string,
-		Record<string, import("unbash-walker").Modifier<unknown>>
+		Record<
+			string,
+			| import("unbash-walker").Modifier<unknown>
+			| readonly import("unbash-walker").Modifier<unknown>[]
+		>
 	>;
 }
 
