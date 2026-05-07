@@ -132,8 +132,14 @@ async function dispatchEvent(
 	// on every tool_call, dispatcher rebuilds on every tool_result).
 	const findEntries = createFindEntries(ctx);
 
+	// Hoist the per-event projections out of the loop so N observers
+	// each get the identical event shape + exit code without paying N
+	// copies of the same work.
+	const exitCode = extractExitCode(event);
+	const schemaEvent = toSchemaEvent(event, exitCode);
+
 	for (const observer of observers) {
-		if (!matchesWatch(observer, event)) continue;
+		if (!matchesWatch(observer, event, exitCode)) continue;
 
 		// Each observer gets its own ctx so appendEntry writes attribute
 		// cleanly. Exec is passed through unmemoized — per the ADR.
@@ -145,11 +151,6 @@ async function dispatchEvent(
 		};
 
 		try {
-			// Bridge pi's real ToolResultEvent onto the schema's minimal shape.
-			// Schema's `output`/`exitCode` are derived: bash event carries
-			// details.exitCode; other tools carry only content. We surface the
-			// best-effort projection so observer handlers get consistent fields.
-			const schemaEvent = toSchemaEvent(event);
 			const result = observer.onResult(schemaEvent, observerCtx);
 			if (result instanceof Promise) {
 				await result;
@@ -187,6 +188,7 @@ async function dispatchEvent(
 function matchesWatch(
 	observer: Observer,
 	event: PiToolResultEvent,
+	exitCode: number | undefined,
 ): boolean {
 	const watch = observer.watch;
 	if (!watch) return true;
@@ -208,8 +210,7 @@ function matchesWatch(
 	}
 
 	if (watch.exitCode !== undefined && watch.exitCode !== "any") {
-		const code = extractExitCode(event);
-		if (!matchesExitCode(code, watch.exitCode)) return false;
+		if (!matchesExitCode(exitCode, watch.exitCode)) return false;
 	}
 	return true;
 }
@@ -255,17 +256,21 @@ function matchesExitCode(
  *   - `output`               — pi's `content` (TextContent/ImageContent
  *                               array) passed through unchanged. Observer
  *                               handlers cast to the shape they expect.
- *   - `exitCode`             — bash events only; others leave it
- *                               `undefined`.
+ *   - `exitCode`             — passed in precomputed by the caller
+ *                               (so the extraction runs once per event,
+ *                               not once per matching observer); bash
+ *                               events only, others leave it `undefined`.
  */
-function toSchemaEvent(event: PiToolResultEvent): SchemaToolResultEvent {
+function toSchemaEvent(
+	event: PiToolResultEvent,
+	exitCode: number | undefined,
+): SchemaToolResultEvent {
 	const out: SchemaToolResultEvent = {
 		toolName: event.toolName,
 		input: event.input,
 		output: event.content,
 	};
-	const code = extractExitCode(event);
-	if (code !== undefined) out.exitCode = code;
+	if (exitCode !== undefined) out.exitCode = exitCode;
 	return out;
 }
 

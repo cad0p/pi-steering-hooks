@@ -416,6 +416,13 @@ async function evaluateEvent(
 	let bashState: BashRefState[] | null = null;
 	const bashEvent = isToolCallEventType("bash", event) ? event : null;
 
+	// Edit events share `allNewText` across every field="content" rule.
+	// Computed lazily on the first edit rule so a config with only bash /
+	// write rules doesn't pay the join cost. `null` sentinel is safe
+	// because `edits` is always a non-null array on edit events.
+	const editEvent = isToolCallEventType("edit", event) ? event : null;
+	let editAllNewText: string | null = null;
+
 	for (const rule of rules) {
 		if (rule.tool !== event.toolName) continue;
 
@@ -439,6 +446,9 @@ async function evaluateEvent(
 		}
 
 		if (rule.tool === "write" && isToolCallEventType("write", event)) {
+			const target = rule.field === "path"
+				? event.input.path
+				: event.input.content;
 			const result = await evaluateWriteEditRule(
 				rule,
 				{
@@ -446,6 +456,7 @@ async function evaluateEvent(
 					path: event.input.path,
 					content: event.input.content,
 				},
+				target,
 				// override-comment scanned against content (the natural
 				// carrier for write override comments — v1 parity).
 				event.input.content,
@@ -457,17 +468,27 @@ async function evaluateEvent(
 			continue;
 		}
 
-		if (rule.tool === "edit" && isToolCallEventType("edit", event)) {
-			const allNewText = event.input.edits.map((e) => e.newText).join("\n");
+		if (rule.tool === "edit" && editEvent) {
+			// Joined newText is needed as override carrier for EVERY edit
+			// rule plus as `target` for field="content" rules. Compute once
+			// per tool_call on the first edit rule, reuse for the rest.
+			if (editAllNewText === null) {
+				editAllNewText = editEvent.input.edits
+					.map((e) => e.newText)
+					.join("\n");
+			}
+			const target =
+				rule.field === "path" ? editEvent.input.path : editAllNewText;
 			const result = await evaluateWriteEditRule(
 				rule,
 				{
 					tool: "edit",
-					path: event.input.path,
-					edits: event.input.edits,
+					path: editEvent.input.path,
+					edits: editEvent.input.edits,
 				},
-				allNewText,
-				event.input.path,
+				target,
+				editAllNewText,
+				editEvent.input.path,
 				ctx.cwd,
 				shared,
 			);
@@ -513,21 +534,24 @@ async function evaluateBashRule(
 
 /**
  * Per-rule write / edit evaluation. Produces a single {@link Candidate}
- * and defers to {@link evaluateCandidate}. `overrideCarrier` is the
- * text scanned for override comments — per v1 parity that's the
- * content (write) / joined newText (edit).
+ * and defers to {@link evaluateCandidate}.
+ *
+ * `target` is the pre-resolved string the rule's pattern tests against
+ * — the caller computes it once per rule (reading `path` or the joined
+ * `newText`), which lets edit tool_calls share the join across every
+ * field="content" rule. `overrideCarrier` is the text scanned for
+ * override comments (per v1 parity, content / joined newText even for
+ * field="path" rules).
  */
 async function evaluateWriteEditRule(
 	rule: Rule,
 	input: PredicateToolInput,
+	target: string,
 	overrideCarrier: string,
 	path: string,
 	sessionCwd: string,
 	shared: SharedEvalContext,
 ): Promise<ToolCallEventResult | void> {
-	const target = getTargetText(rule, input);
-	if (target === null) return undefined;
-
 	const cand: Candidate = {
 		target,
 		cwd: sessionCwd,
@@ -539,25 +563,6 @@ async function evaluateWriteEditRule(
 	const r = await evaluateCandidate(rule, cand, shared);
 	if (r === "no-fire" || r === "overridden") return undefined;
 	return r;
-}
-
-/**
- * Resolve the target string a rule's `pattern` should test against for
- * write / edit tools. Returns `null` only in the defensive (unreachable)
- * case where `rule.tool` is "bash" — callers filter by tool before
- * dispatching here.
- */
-function getTargetText(rule: Rule, input: PredicateToolInput): string | null {
-	if (rule.tool === "write") {
-		if (rule.field === "path") return input.path ?? "";
-		return input.content ?? "";
-	}
-	if (rule.tool === "edit") {
-		if (rule.field === "path") return input.path ?? "";
-		if (input.edits) return input.edits.map((e) => e.newText).join("\n");
-		return "";
-	}
-	return null;
 }
 
 // Re-export supporting types for consumers embedding the evaluator.

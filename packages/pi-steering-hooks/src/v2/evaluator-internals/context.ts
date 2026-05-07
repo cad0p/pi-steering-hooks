@@ -110,15 +110,37 @@ export function createExecCache(
  *     checks want for chronological comparisons without having to
  *     re-parse.
  *
+ * Results are memoized PER invocation of `createFindEntries` by
+ * customType. The evaluator rebuilds the closure on every tool_call;
+ * the observer dispatcher rebuilds on every tool_result. So each phase
+ * sees a consistent snapshot, but subsequent calls to the SAME closure
+ * with the same customType return the previously-materialized array.
+ *
+ * Staleness caveat: appending an entry via `ctx.appendEntry` during the
+ * same phase does NOT invalidate the cache for this closure. Within one
+ * `evaluate()` call the evaluator never writes entries while predicates
+ * read them (override-audit writes happen AFTER the when-chain resolves
+ * — see `evaluateCandidate`), so this is sound. Observer handlers that
+ * both read and write in the same phase should read first or call
+ * `findEntries` before their own `appendEntry`.
+ *
  * The `ctx` argument is the pi `ExtensionContext` — we re-read
- * `getEntries()` on every call so predicates see the freshest state
- * (observers may have appended entries earlier in the same tool_call
- * via an earlier tool_result handler).
+ * `getEntries()` only on the first miss per customType. Cache keys are
+ * per-closure so cross-tool_call or cross-tool_result reads always see
+ * the freshest state (a new closure = a new cache).
  */
 export function createFindEntries(
 	ctx: ExtensionContext,
 ): PredicateContext["findEntries"] {
+	const cache = new Map<
+		string,
+		Array<{ data: unknown; timestamp: number }>
+	>();
 	return <T>(customType: string) => {
+		const hit = cache.get(customType);
+		if (hit !== undefined) {
+			return hit as Array<{ data: T; timestamp: number }>;
+		}
 		const out: Array<{ data: T; timestamp: number }> = [];
 		for (const entry of ctx.sessionManager.getEntries()) {
 			if (entry.type !== "custom") continue;
@@ -129,6 +151,10 @@ export function createFindEntries(
 				timestamp: Number.isNaN(ts) ? 0 : ts,
 			});
 		}
+		cache.set(
+			customType,
+			out as Array<{ data: unknown; timestamp: number }>,
+		);
 		return out;
 	};
 }
