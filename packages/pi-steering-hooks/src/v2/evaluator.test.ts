@@ -781,6 +781,53 @@ describe("buildEvaluator: override comments", () => {
 				"include a comment: `# steering-override: no-force-push \u2014 <reason>`.",
 		);
 	});
+
+	it("override for rule-A does NOT apply to rule-B (name-specific lookup)", async () => {
+		// Two rules, both firing on the same bash command. The override
+		// comment targets only rule-a by name. The evaluator's
+		// first-match-wins loop surfaces rule-a first → the override is
+		// consumed → rule-a logs + yields. The loop then moves to
+		// rule-b, whose name is not mentioned in the override text, so
+		// rule-b should still block.
+		const host = makeHost();
+		const ruleA: Rule = {
+			name: "rule-a",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "a",
+		};
+		const ruleB: Rule = {
+			name: "rule-b",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "b",
+		};
+		const evaluator = buildEvaluator(
+			{ defaultNoOverride: false, rules: [ruleA, ruleB] },
+			resolve(),
+			host,
+		);
+		const res = await evaluator.evaluate(
+			bashEvent(
+				"git push # steering-override: rule-a \u2014 docs say so",
+			),
+			makeCtx("/r"),
+			0,
+		);
+		// rule-b still blocks.
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /\[steering:rule-b\]/);
+		// rule-a's override was recorded as consumed; rule-b was NOT
+		// overridden (exactly one audit entry, keyed to rule-a).
+		assert.equal(host.appended.length, 1);
+		assert.equal(host.appended[0]!.type, "steering-override");
+		assert.equal(
+			(host.appended[0]!.data as { rule: string }).rule,
+			"rule-a",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -846,6 +893,33 @@ describe("buildEvaluator: write / edit", () => {
 		const res = await evaluator.evaluate(
 			editEvent("/r/a.ts", [
 				{ oldText: "const x = 1;", newText: "const x = 1;\nconsole.log(x);" },
+			]),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+	});
+
+	it("edit field:path scans path instead of joined newText", async () => {
+		// Mirrors the write+path test above for the edit tool. Proves
+		// the field="path" dispatch in evaluateWriteEditRule picks
+		// `event.input.path` as the pattern target — independent of the
+		// edits array's joined newText, which could have been the
+		// naive default carried over from the edit-content branch.
+		const rule: Rule = {
+			name: "no-node-modules-edit",
+			tool: "edit",
+			field: "path",
+			pattern: "/node_modules/",
+			reason: "no node_modules edits",
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			editEvent("/r/node_modules/foo.js", [
+				// newText has NO `/node_modules/` token — proving the rule
+				// would miss if field:path were silently ignored and the
+				// evaluator fell back to the joined-newText default.
+				{ oldText: "a", newText: "b" },
 			]),
 			makeCtx("/r"),
 			0,
@@ -1189,6 +1263,55 @@ describe("buildEvaluator: findEntries", () => {
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
 		const res = await evaluator.evaluate(bashEvent("git push"), ctx, 0);
 		assert.ok(res);
+	});
+
+	it("memoizes findEntries by customType within one tool_call (stable reference)", async () => {
+		// createFindEntries caches per-customType, per-closure. Within a
+		// single tool_call two reads of the SAME customType must return
+		// the exact same array reference — otherwise predicate chains
+		// that dedupe or diff entry lists would get a fresh array every
+		// call and wrongly believe state changed.
+		let observed: {
+			first: ReadonlyArray<unknown>;
+			second: ReadonlyArray<unknown>;
+		} | null = null;
+		const rule: Rule = {
+			name: "memo-ref",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "memo-ref",
+			when: {
+				condition: (ctx) => {
+					const a = ctx.findEntries<{ note: string }>("marker");
+					const b = ctx.findEntries<{ note: string }>("marker");
+					observed = { first: a, second: b };
+					return true;
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			{
+				type: "custom",
+				customType: "marker",
+				data: { note: "hi" },
+				timestamp: "2026-01-01T00:00:00.000Z",
+				id: "e1",
+				parentId: null,
+			},
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(bashEvent("git push"), ctx, 0);
+		assert.ok(observed, "condition should have run");
+		const obs = observed as unknown as {
+			first: ReadonlyArray<unknown>;
+			second: ReadonlyArray<unknown>;
+		};
+		assert.strictEqual(
+			obs.first,
+			obs.second,
+			"findEntries must return the same array reference on repeat calls",
+		);
 	});
 });
 
