@@ -39,11 +39,11 @@ import {
 	createFindEntries,
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
+import { matchesPattern } from "./evaluator-internals/predicates.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
 	Observer,
 	ObserverContext,
-	Pattern,
 	ToolResultEvent as SchemaToolResultEvent,
 } from "./schema.ts";
 
@@ -200,7 +200,10 @@ function matchesWatch(
 		for (const [key, pat] of Object.entries(watch.inputMatches)) {
 			const value = input[key];
 			if (typeof value !== "string") return false;
-			if (!testPattern(pat, value)) return false;
+			// Share the evaluator's regex cache (module-scoped in
+			// predicates.ts) so observer inputMatches reuse the same
+			// compiled RegExp as equivalent rule patterns.
+			if (!matchesPattern(pat, value)) return false;
 		}
 	}
 
@@ -236,11 +239,6 @@ function matchesExitCode(
 	if (filter === "success") return code === 0;
 	if (filter === "failure") return code !== undefined && code !== 0;
 	return true;
-}
-
-function testPattern(pattern: Pattern, value: string): boolean {
-	if (pattern instanceof RegExp) return pattern.test(value);
-	return new RegExp(pattern).test(value);
 }
 
 // ---------------------------------------------------------------------------

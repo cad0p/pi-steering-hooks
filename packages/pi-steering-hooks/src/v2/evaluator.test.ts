@@ -27,11 +27,13 @@ import { describe, it } from "node:test";
 import type {
 	BashToolCallEvent,
 	EditToolCallEvent,
-	ExtensionContext,
 	ToolCallEvent,
 	WriteToolCallEvent,
 } from "@mariozechner/pi-coding-agent";
-import type { ExecResult as PiExecResult } from "@mariozechner/pi-coding-agent";
+import {
+	makeCtx,
+	makeTrackedHost as makeHost,
+} from "./__test-helpers__.ts";
 import { buildEvaluator, type EvaluatorHost } from "./evaluator.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import { resolvePlugins } from "./plugin-merger.ts";
@@ -44,99 +46,12 @@ import type {
 } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
-// Test doubles
+// Event builders
 // ---------------------------------------------------------------------------
-
-/**
- * Minimal stub for pi's `ExtensionContext`. Only the fields the
- * evaluator reads are populated; everything else throws if touched so
- * accidental reliance on unsupported surface breaks loudly.
- *
- * The `entries` array mimics `sessionManager.getEntries()` output —
- * `appendEntry` pushes into it so tests can assert persistence between
- * observer runs and later findEntries reads.
- */
-function makeCtx(
-	cwd: string,
-	entries: Array<{
-		type: "custom";
-		customType: string;
-		data: unknown;
-		timestamp: string;
-		id: string;
-		parentId: string | null;
-	}> = [],
-): ExtensionContext {
-	return {
-		cwd,
-		sessionManager: {
-			getEntries: () => entries,
-			// Unused by the evaluator in these tests — stubbed to throw so
-			// any accidental dependency on other SessionManager methods
-			// surfaces immediately.
-		} as unknown as ExtensionContext["sessionManager"],
-	} as ExtensionContext;
-}
-
-/**
- * Tracked {@link EvaluatorHost} recording every exec / appendEntry
- * call so tests can assert memoization + audit logging.
- */
-interface TrackedHost extends EvaluatorHost {
-	readonly execCalls: Array<{ cmd: string; args: string[]; cwd: string }>;
-	readonly appended: Array<{ type: string; data: unknown }>;
-	readonly entries: Array<{
-		type: "custom";
-		customType: string;
-		data: unknown;
-		timestamp: string;
-		id: string;
-		parentId: string | null;
-	}>;
-}
-
-function makeHost(options?: {
-	exec?: (
-		cmd: string,
-		args: string[],
-		cwd: string,
-	) => Promise<PiExecResult>;
-}): TrackedHost {
-	const execCalls: Array<{ cmd: string; args: string[]; cwd: string }> = [];
-	const appended: Array<{ type: string; data: unknown }> = [];
-	// Shared entries array — the same list the makeCtx() stub wraps when
-	// tests want the evaluator's appendEntry calls to show up in
-	// findEntries later. Each test wires this by passing
-	// `host.entries` into makeCtx.
-	const entries: TrackedHost["entries"] = [];
-	let idCounter = 0;
-	return {
-		execCalls,
-		appended,
-		entries,
-		exec: async (cmd, args, opts) => {
-			const cwd = opts?.cwd ?? "/";
-			execCalls.push({ cmd, args: [...args], cwd });
-			if (options?.exec) {
-				return options.exec(cmd, args, cwd);
-			}
-			return { stdout: "", stderr: "", code: 0, killed: false };
-		},
-		appendEntry: (type, data) => {
-			appended.push({ type, data });
-			entries.push({
-				type: "custom",
-				customType: type,
-				data,
-				// Monotonic timestamps so ordering asserts stay stable even
-				// inside the same millisecond.
-				timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, idCounter++)).toISOString(),
-				id: `entry-${idCounter}`,
-				parentId: null,
-			});
-		},
-	};
-}
+//
+// Event shape helpers stay local to this file — the tool_call and
+// tool_result builders in observer-dispatcher.test.ts are genuinely
+// different events and don't share a helper surface.
 
 /** Short-hand: build a bash tool_call event with the given command. */
 function bashEvent(command: string): BashToolCallEvent {

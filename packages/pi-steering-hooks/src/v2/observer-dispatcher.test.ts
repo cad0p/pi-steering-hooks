@@ -20,86 +20,24 @@
 
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
-import type {
-	ExtensionContext,
-	ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+import type { ToolResultEvent } from "@mariozechner/pi-coding-agent";
+import {
+	makeCtx,
+	makeTrackedHost as makeHost,
+} from "./__test-helpers__.ts";
 import {
 	buildObserverDispatcher,
-	type EvaluatorHost,
 } from "./observer-dispatcher.ts";
 import { resolvePlugins } from "./plugin-merger.ts";
 import type { Observer, Plugin } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
-// Test doubles
+// Event builders
 // ---------------------------------------------------------------------------
-
-/**
- * Minimal `ExtensionContext` stub. The dispatcher reads `cwd` and
- * `sessionManager.getEntries()` only; everything else is stubbed to
- * throw so accidental dependencies surface loudly.
- */
-function makeCtx(
-	cwd: string,
-	entries: ReadonlyArray<{
-		type: "custom";
-		customType: string;
-		data: unknown;
-		timestamp: string;
-		id: string;
-		parentId: string | null;
-	}> = [],
-): ExtensionContext {
-	return {
-		cwd,
-		sessionManager: {
-			getEntries: () => entries,
-		} as unknown as ExtensionContext["sessionManager"],
-	} as ExtensionContext;
-}
-
-/**
- * Tracked host: observers' appendEntry calls are visible on
- * `host.appended` for assertions, and `host.entries` mirrors what a
- * subsequent `findEntries` read would see (wire into makeCtx when
- * asserting cross-observer visibility).
- */
-interface TrackedHost extends EvaluatorHost {
-	readonly appended: Array<{ type: string; data: unknown }>;
-	readonly entries: Array<{
-		type: "custom";
-		customType: string;
-		data: unknown;
-		timestamp: string;
-		id: string;
-		parentId: string | null;
-	}>;
-}
-
-function makeHost(): TrackedHost {
-	const appended: Array<{ type: string; data: unknown }> = [];
-	const entries: TrackedHost["entries"] = [];
-	let idCounter = 0;
-	return {
-		appended,
-		entries,
-		exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
-		appendEntry: (type, data) => {
-			appended.push({ type, data });
-			entries.push({
-				type: "custom",
-				customType: type,
-				data,
-				timestamp: new Date(
-					Date.UTC(2026, 0, 1, 0, 0, idCounter++),
-				).toISOString(),
-				id: `e-${idCounter}`,
-				parentId: null,
-			});
-		},
-	};
-}
+//
+// Tool-result event shape helpers stay local to this file — they're
+// genuinely different from the tool_call event builders in
+// evaluator.test.ts and don't share a helper surface.
 
 function bashResult(
 	command: string,
