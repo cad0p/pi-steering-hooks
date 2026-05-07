@@ -10,8 +10,10 @@
  *   2. Wrapper expansion — recursively peel wrapper commands (sh -c, sudo,
  *      env, xargs, find -exec, ...) so rule authors can see the underlying
  *      command they guard against.
- *   3. Effective-cwd resolution — for any `Script` + starting directory,
- *      compute the cwd in which each extracted command would execute.
+ *   3. Walker state tracking — an extensible tracker registry (`walk`) that
+ *      threads arbitrary per-command state (cwd, branch, …) through the
+ *      AST. Built-in `cwdTracker` covers `cd`, `git -C`, `make -C`,
+ *      `env -C`. Plugins extend the registry with new dimensions.
  *
  * Consumers still import `parse` from the `unbash` package itself;
  * we re-export the most useful types for convenience.
@@ -31,7 +33,16 @@ export {
 	type WrapperSpec,
 } from "./wrappers.ts";
 
-export { effectiveCwd } from "./effective-cwd.ts";
+export {
+	isStaticallyResolvable,
+	walk,
+	type Modifier,
+	type SubshellSemantics,
+	type Tracker,
+	type WalkResult,
+} from "./tracker.ts";
+
+export { cwdTracker } from "./trackers/cwd.ts";
 
 export {
 	getBasename,

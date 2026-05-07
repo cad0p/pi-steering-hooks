@@ -1,35 +1,54 @@
 // SPDX-License-Identifier: MIT
-// Effective-cwd walker tests. Part of unbash-walker.
+// Tests for the built-in `cwd` tracker. Part of unbash-walker.
+//
+// These tests exercise `cwdTracker` through the generalized `walk` API
+// and cover every scenario previously pinned by `effective-cwd.test.ts`
+// and `cwd-override-flags.test.ts`. The public surface changed (the
+// walker is now generic); the observable behavior is preserved.
 
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { parse as parseBash } from "unbash";
-import { effectiveCwd } from "./effective-cwd.ts";
-import { extractAllCommandsFromAST } from "./extract.ts";
-import { expandWrapperCommands } from "./wrappers.ts";
-import { getBasename, getCommandArgs } from "./resolve.ts";
+import { extractAllCommandsFromAST } from "../extract.ts";
+import { getBasename, getCommandArgs } from "../resolve.ts";
+import { walk } from "../tracker.ts";
+import { expandWrapperCommands } from "../wrappers.ts";
+import { cwdTracker } from "./cwd.ts";
 
-/** Map "name" → cwd for easier assertions; if the same name appears twice,
- *  returns the first occurrence. Use `cwdByOrder` for scripts with repeats. */
-function cwdByName(raw: string, initial: string): Record<string, string> {
+// --------------------------------------------------------------------------
+// Helpers that wrap `walk` so each test reads like the original
+// effectiveCwd-based tests — the only difference is we reach into the
+// returned WalkResult to pluck the `.cwd` field.
+// --------------------------------------------------------------------------
+
+/** Walk `raw` with the built-in cwd tracker seeded at `initial`. */
+function walkCwd(raw: string, initial: string) {
 	const ast = parseBash(raw);
-	const map = effectiveCwd(ast, initial);
+	return walk(ast, { cwd: initial }, { cwd: cwdTracker });
+}
+
+/** Map "name" → cwd for easier assertions; first occurrence wins on dupes. */
+function cwdByName(raw: string, initial: string): Record<string, string> {
+	const map = walkCwd(raw, initial);
 	const out: Record<string, string> = {};
-	for (const [ref, cwd] of map) {
+	for (const [ref, snap] of map) {
 		const name = getBasename(ref);
-		if (!(name in out)) out[name] = cwd;
+		if (!(name in out)) out[name] = snap.cwd;
 	}
 	return out;
 }
 
 /** Return an ordered list of [name, cwd] tuples — preserves duplicates. */
 function cwdByOrder(raw: string, initial: string): Array<[string, string]> {
-	const ast = parseBash(raw);
-	const map = effectiveCwd(ast, initial);
-	return Array.from(map, ([ref, cwd]) => [getBasename(ref), cwd]);
+	const map = walkCwd(raw, initial);
+	return Array.from(map, ([ref, snap]) => [getBasename(ref), snap.cwd]);
 }
 
-describe("effectiveCwd", () => {
+// --------------------------------------------------------------------------
+// Tests ported from effective-cwd.test.ts — behavior must be preserved.
+// --------------------------------------------------------------------------
+
+describe("cwdTracker via walk", () => {
 	const ORIG_HOME = process.env["HOME"];
 	beforeEach(() => {
 		process.env["HOME"] = "/home/me";
@@ -61,7 +80,6 @@ describe("effectiveCwd", () => {
 			"cd /x && cmd1 && cd /y && cmd2",
 			"/start",
 		);
-		// Order: cd, cmd1, cd, cmd2
 		assert.equal(ordered[0]?.[0], "cd");
 		assert.equal(ordered[0]?.[1], "/start");
 		assert.equal(ordered[1]?.[0], "cmd1");
@@ -156,12 +174,11 @@ describe("effectiveCwd", () => {
 	it("returned map exposes a CommandRef-keyed view of every extracted command", () => {
 		const raw = "a && b | c";
 		const ast = parseBash(raw);
-		const map = effectiveCwd(ast, "/start");
-		// Every key is a CommandRef (has .node, .source, .group).
-		for (const [ref, cwd] of map) {
+		const map = walk(ast, { cwd: "/start" }, { cwd: cwdTracker });
+		for (const [ref, snap] of map) {
 			assert.ok(ref.node, "CommandRef must carry its AST node");
 			assert.equal(typeof ref.group, "number");
-			assert.equal(typeof cwd, "string");
+			assert.equal(typeof snap.cwd, "string");
 		}
 		const names = Array.from(map.keys()).map((r) => getBasename(r));
 		assert.deepEqual(names, ["a", "b", "c"]);
@@ -172,13 +189,18 @@ describe("effectiveCwd", () => {
 			const raw = "cd /x && cmd1 && cd /y && cmd2";
 			const ast = parseBash(raw);
 			const externalRefs = extractAllCommandsFromAST(ast, raw);
-			const map = effectiveCwd(ast, "/start", externalRefs);
+			const map = walk(
+				ast,
+				{ cwd: "/start" },
+				{ cwd: cwdTracker },
+				externalRefs,
+			);
 
 			const mapKeys = Array.from(map.keys());
 			assert.equal(
 				mapKeys.length,
 				externalRefs.length,
-				"every external ref should appear in the cwd map",
+				"every external ref should appear in the result map",
 			);
 			for (const ref of externalRefs) {
 				assert.ok(
@@ -192,13 +214,18 @@ describe("effectiveCwd", () => {
 			const raw = "cd /x && cmd1 && cd /y && cmd2";
 			const ast = parseBash(raw);
 			const externalRefs = extractAllCommandsFromAST(ast, raw);
-			const map = effectiveCwd(ast, "/start", externalRefs);
+			const map = walk(
+				ast,
+				{ cwd: "/start" },
+				{ cwd: cwdTracker },
+				externalRefs,
+			);
 
 			const byName = new Map<string, string>();
 			for (const ref of externalRefs) {
-				const cwd = map.get(ref);
-				assert.ok(cwd !== undefined, `${getBasename(ref)} should have a cwd`);
-				byName.set(getBasename(ref), cwd);
+				const snap = map.get(ref);
+				assert.ok(snap !== undefined, `${getBasename(ref)} should have a snapshot`);
+				byName.set(getBasename(ref), snap.cwd);
 			}
 			assert.equal(byName.get("cmd1"), "/x");
 			assert.equal(byName.get("cmd2"), "/y");
@@ -208,9 +235,9 @@ describe("effectiveCwd", () => {
 			const raw = "cd /x && cmd";
 			const ast = parseBash(raw);
 			const externalRefs = extractAllCommandsFromAST(ast, raw);
-			const map = effectiveCwd(ast, "/start");
+			const map = walk(ast, { cwd: "/start" }, { cwd: cwdTracker });
 
-			// Map keys are NOT the external refs (different extraction), but they
+			// Keys are NOT the external refs (different extraction), but they
 			// share the underlying Command nodes.
 			const mapKeys = Array.from(map.keys());
 			for (const ref of externalRefs) {
@@ -275,8 +302,6 @@ describe("effectiveCwd", () => {
 		});
 
 		it("`if ...; then cd /a; fi; cmd` (no else) — branches disagree → cmd sees initial cwd", () => {
-			// Implicit else is "no-op" = post-clause cwd. Then-branch cwd = /a;
-			// they disagree; cmd must see the initial cwd.
 			const cwds = cwdByName(
 				"if test -f x; then cd /a; fi; cmd",
 				"/start",
@@ -332,35 +357,16 @@ describe("effectiveCwd", () => {
 
 	describe("background & (documented over-match)", () => {
 		it("`cd /x & cmd` — cmd sees /x (we treat & like ;)", () => {
-			// In real bash, `cd /x &` runs cd in a backgrounded subshell; cmd
-			// sees the initial cwd. Our walker does NOT isolate backgrounded
-			// commands — it threads cd effects through & the same way it does
-			// through `;`. This is a documented over-match (safer failure mode
-			// for a guardrail: report /x for cmd even though cmd won't actually
-			// run there, triggering a more conservative when.cwd check).
-			//
-			// This test pins the current behavior. If semantics ever change to
-			// model background as subshell-like isolation, update this test and
-			// the 'Not modelled' list in effective-cwd.ts at the same time.
+			// In real bash, `cd /x &` runs cd in a backgrounded subshell. The
+			// walker does NOT isolate backgrounded commands — documented
+			// over-match, safer for guardrails.
 			const cwds = cwdByName("cd /x & cmd", "/start");
 			assert.equal(cwds["cmd"], "/x");
 		});
 	});
 
-	// Pin the walker's behavior for bash constructs that are out-of-scope by
-	// design. Each of these is a "conservative over-match": the walker prefers
-	// reporting the pre-construct cwd (or surfacing the inner command under
-	// fallback-to-session-cwd at the consumer layer) over silently tracking a
-	// cwd change that might be wrong at runtime. A guardrail built on top
-	// fires `when.cwd` checks more aggressively rather than less.
 	describe("external / out-of-scope constructs (documented over-match)", () => {
 		it("subshell isolation (reconfirm): `(cd /A && x) && y` — x sees /A, y sees initial", () => {
-			// Already covered above; re-pinned here as part of the explicit
-			// edge-case coverage story we hand reviewers. Subshells are the
-			// one construct we DO model fully (via `Subshell` AST nodes),
-			// because unbash surfaces them as a dedicated node type. Other
-			// entries in this describe are the cases we deliberately don't
-			// model.
 			const ordered = cwdByOrder("(cd /A && x) && y", "/start");
 			const inner = ordered.find(([n]) => n === "x");
 			const outer = ordered.find(([n]) => n === "y");
@@ -369,52 +375,34 @@ describe("effectiveCwd", () => {
 		});
 
 		it("heredoc body (reconfirm): `cat <<EOF ... EOF\\ny` — `cd` inside the heredoc is DATA, y sees initial", () => {
-			// unbash represents the heredoc body as a redirect payload attached
-			// to `cat`, not as executable commands. That means the `cd /A`
-			// inside the body never reaches extract/walker — y correctly sees
-			// the initial cwd. This is the correct behavior, not over-match:
-			// the heredoc body in real bash is stdin for `cat`, not commands
-			// to execute. Adversarial-matrix case 20 covers the extract side;
-			// this pins the effective-cwd side.
 			const cwds = cwdByName("cat <<EOF\ncd /A\nEOF\ny", "/start");
 			assert.equal(cwds["y"], "/start");
 			assert.equal(cwds["cd"], undefined, "cd inside heredoc body is not extracted at all");
 		});
 
 		it("pushd: `pushd /A && y` — we don't model the directory stack, y sees initial", () => {
-			// Real bash would push /A onto the stack and y would run under /A.
-			// We treat pushd as any other command — it's extracted with args
-			// [/A] but doesn't mutate the walker's cwd state. Guardrails that
-			// want to cover pushd/popd should add explicit rules against the
-			// commands themselves rather than relying on when.cwd.
 			const cwds = cwdByName("pushd /A && y", "/start");
 			assert.equal(cwds["y"], "/start", "y sees initial cwd; pushd is not modelled");
 			assert.equal(cwds["pushd"], "/start");
 		});
 
 		it("env -C: `env -C /A y` — env records at /A; wrapper-expanded y still falls back", () => {
-			// With cwd-override-flags.ts modelling `env -C DIR`, the env ref's
-			// recorded cwd is /A (env internally chdirs before execing the
-			// inner command, and we treat that as env's effective cwd).
-			//
-			// Wrapper-expanded inner refs (the surfaced `y`) still have no Map
-			// entry — wrapper expansion and cwd-override interaction is tracked
-			// as a separate follow-up. Consumers that read `cwdMap.get(ref)`
-			// still fall back to sessionCwd for the expanded `y`, which is the
-			// conservative choice.
+			// The env ref's recorded cwd is /A (per-command override). Wrapper-
+			// expanded inner refs (the surfaced `y`) still have no Map entry —
+			// wrapper expansion + cwd-override interaction remains a follow-up.
 			const src = "env -C /A y";
 			const script = parseBash(src);
 			const refs = extractAllCommandsFromAST(script, src);
 			const { commands } = expandWrapperCommands(refs);
-			const cwds = effectiveCwd(script, "/start", commands);
+			const map = walk(script, { cwd: "/start" }, { cwd: cwdTracker }, commands);
 
 			const env = commands.find((c) => getBasename(c) === "env");
 			const y = commands.find((c) => getBasename(c) === "y");
 			assert.ok(env, "env ref present");
 			assert.ok(y, "y ref surfaces via wrapper expansion");
-			assert.equal(cwds.get(env), "/A", "env records at /A via -C override");
+			assert.equal(map.get(env)?.cwd, "/A", "env records at /A via -C override");
 			assert.equal(
-				cwds.get(y),
+				map.get(y),
 				undefined,
 				"wrapper-expanded y has no Map entry → consumer falls back to sessionCwd (follow-up)",
 			);
@@ -426,37 +414,24 @@ describe("effectiveCwd", () => {
 		});
 
 		it("eval: `eval \"cd /A && y\"` — the string arg is opaque, y is invisible to the walker", () => {
-			// eval's argument is a string literal; we don't recursively re-parse
-			// the string as bash. Only `eval` itself is extracted — y never
-			// surfaces as a CommandRef. Guardrails that want to catch what eval
-			// might run must either match the eval string pattern directly
-			// (e.g. `^eval\b.*git\s+push`) or block eval outright.
 			const src = `eval "cd /A && y"`;
 			const script = parseBash(src);
 			const refs = extractAllCommandsFromAST(script, src);
 			const { commands } = expandWrapperCommands(refs);
-			const cwds = effectiveCwd(script, "/start", commands);
+			const map = walk(script, { cwd: "/start" }, { cwd: cwdTracker }, commands);
 
 			const names = commands.map(getBasename);
 			assert.deepEqual(names, ["eval"], "only eval extracted; y is invisible");
-			assert.equal(cwds.get(commands[0]!), "/start");
+			assert.equal(map.get(commands[0]!)?.cwd, "/start");
 		});
 
 		it("source: `source script.sh` — the sourced file is opaque; source is extracted as a normal command", () => {
-			// We never read external files. `source foo.sh` is extracted as a
-			// command with basename `source` and args [foo.sh]; whatever foo.sh
-			// would do to cwd at runtime is invisible. Subsequent commands in
-			// the same script see the pre-source cwd. Guardrails treating
-			// `source`/`.` as equivalent to arbitrary command execution should
-			// block them outright at the command level.
 			const cwds = cwdByName("source script.sh && y", "/start");
 			assert.equal(cwds["source"], "/start");
 			assert.equal(cwds["y"], "/start", "y sees pre-source cwd; foo.sh's cd effect is opaque");
 		});
 
 		it("dot-source: `. script.sh` — same opacity as `source`", () => {
-			// POSIX spelling of `source`. Same story: the sourced file is data
-			// from our perspective.
 			const cwds = cwdByName(". script.sh && y", "/start");
 			assert.equal(cwds["y"], "/start");
 		});
@@ -465,7 +440,6 @@ describe("effectiveCwd", () => {
 	describe("per-command cwd overrides (`git -C`, `make -C`, `env -C`)", () => {
 		it("git -C: `git -C /x push` records push's cwd as /x; no propagation", () => {
 			const ordered = cwdByOrder("git -C /x push && ls", "/start");
-			// order: git, ls
 			assert.equal(ordered[0]?.[0], "git");
 			assert.equal(ordered[0]?.[1], "/x", "git records at /x");
 			assert.equal(ordered[1]?.[0], "ls");
@@ -483,8 +457,6 @@ describe("effectiveCwd", () => {
 		});
 
 		it("cd then git -C: override wins over shell cd for that command", () => {
-			// Shell cd moves us to /Y. `git -C /x push` runs git at /x regardless.
-			// A subsequent `ls` runs at /Y (git's -C didn't change shell state).
 			const ordered = cwdByOrder("cd /Y && git -C /x push && ls", "/start");
 			const git = ordered.find(([n]) => n === "git");
 			const ls = ordered.find(([n]) => n === "ls");
@@ -524,10 +496,144 @@ describe("effectiveCwd", () => {
 		});
 
 		it("absolute path via full command path: `/usr/bin/git -C /x push` still recognized", () => {
-			// Registry is keyed by basename; path-prefixed invocations resolve
-			// via path.basename(name).
 			const cwds = cwdByName("/usr/bin/git -C /x push", "/start");
 			assert.equal(cwds["git"], "/x");
+		});
+	});
+});
+
+// --------------------------------------------------------------------------
+// Tests ported from cwd-override-flags.test.ts — unit-level coverage of the
+// git/make/env per-command resolvers. We now exercise them through `walk`
+// so the tests pin the SAME behavior via the public API.
+// --------------------------------------------------------------------------
+
+/** Exercise a single one-command script through `walk` and return the
+ *  recorded cwd for that command. */
+function singleCmdCwd(cmd: string, initial: string): string {
+	const ast = parseBash(cmd);
+	const map = walk(ast, { cwd: initial }, { cwd: cwdTracker });
+	const first = Array.from(map.values())[0];
+	if (!first) throw new Error(`no command extracted from: ${cmd}`);
+	return first.cwd;
+}
+
+describe("cwdTracker per-command modifiers (via walk)", () => {
+	const ORIG_HOME = process.env["HOME"];
+	beforeEach(() => {
+		process.env["HOME"] = "/home/me";
+	});
+	afterEach(() => {
+		if (ORIG_HOME === undefined) delete process.env["HOME"];
+		else process.env["HOME"] = ORIG_HOME;
+	});
+
+	describe("git", () => {
+		it("no -C: returns baseCwd unchanged", () => {
+			assert.equal(singleCmdCwd("git push origin main", "/start"), "/start");
+		});
+
+		it("-C with absolute path: replaces baseCwd", () => {
+			assert.equal(singleCmdCwd("git -C /x push", "/start"), "/x");
+		});
+
+		it("-C with relative path: joins onto baseCwd", () => {
+			assert.equal(singleCmdCwd("git -C sub push", "/start"), "/start/sub");
+		});
+
+		it("multiple -C compose left-to-right: -C /a -C b → /a/b", () => {
+			assert.equal(singleCmdCwd("git -C /a -C b push", "/start"), "/a/b");
+		});
+
+		it("multiple -C all relative: base/a/b", () => {
+			assert.equal(singleCmdCwd("git -C a -C b push", "/start"), "/start/a/b");
+		});
+
+		it("-C after subcommand: ignored (not a git flag there)", () => {
+			assert.equal(singleCmdCwd("git push -C /x", "/start"), "/start");
+		});
+
+		it("-C before other pre-subcommand flag, then subcommand", () => {
+			assert.equal(
+				singleCmdCwd("git -C /x --no-pager push", "/start"),
+				"/x",
+			);
+		});
+
+		it("-c key=val skipped; -C still recognized", () => {
+			assert.equal(
+				singleCmdCwd("git -c color.ui=never -C /x push", "/start"),
+				"/x",
+			);
+		});
+
+		it("-C with non-static target: stops propagating, returns best prefix", () => {
+			assert.equal(singleCmdCwd("git -C $HOME push", "/start"), "/start");
+		});
+
+		it("-C with non-static AFTER a static -C: keeps static prefix", () => {
+			assert.equal(
+				singleCmdCwd("git -C /a -C $VAR push", "/start"),
+				"/a",
+			);
+		});
+
+		it("trailing -C with no argument: malformed, returns baseCwd", () => {
+			assert.equal(singleCmdCwd("git -C", "/start"), "/start");
+		});
+
+		it("subcommand with no pre-flags: returns baseCwd", () => {
+			assert.equal(singleCmdCwd("git status", "/start"), "/start");
+		});
+	});
+
+	describe("make", () => {
+		it("no -C: returns baseCwd", () => {
+			assert.equal(singleCmdCwd("make all", "/start"), "/start");
+		});
+
+		it("-C DIR: replaces baseCwd", () => {
+			assert.equal(singleCmdCwd("make -C /x all", "/start"), "/x");
+		});
+
+		it("-C and target order-agnostic: `make all -C /x` still resolves", () => {
+			assert.equal(singleCmdCwd("make all -C /x", "/start"), "/x");
+		});
+
+		it("repeatable -C: composes left-to-right", () => {
+			assert.equal(singleCmdCwd("make -C /a -C b all", "/start"), "/a/b");
+		});
+
+		it("-f FILE skipped; does not confuse -C scan", () => {
+			assert.equal(
+				singleCmdCwd("make -f Makefile.dev -C /x all", "/start"),
+				"/x",
+			);
+		});
+	});
+
+	describe("env", () => {
+		it("no -C: returns baseCwd", () => {
+			assert.equal(singleCmdCwd("env cmd", "/start"), "/start");
+		});
+
+		it("-C DIR cmd: replaces baseCwd", () => {
+			assert.equal(singleCmdCwd("env -C /x cmd", "/start"), "/x");
+		});
+
+		it("stops at first assignment: `env -C /x VAR=val cmd`", () => {
+			assert.equal(singleCmdCwd("env -C /x VAR=val cmd", "/start"), "/x");
+		});
+
+		it("stops at cmd name (non-flag): `env -u X -C /y cmd -C /z`", () => {
+			assert.equal(
+				singleCmdCwd("env -u X -C /y cmd -C /z", "/start"),
+				"/y",
+			);
+		});
+
+		it("-- terminates options", () => {
+			assert.equal(singleCmdCwd("env -- cmd -C /z", "/start"), "/start");
 		});
 	});
 });
