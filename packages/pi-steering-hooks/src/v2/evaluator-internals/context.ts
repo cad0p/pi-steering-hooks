@@ -4,23 +4,23 @@
 /**
  * Predicate context construction for the v2 evaluator.
  *
- * Three concerns live here because they collaborate tightly:
+ * Two concerns live here because they collaborate tightly:
  *
  *   1. `createExecCache` — memoizes `exec(cmd, args, opts)` by
  *      `(cmd, args, cwd)` so every rule evaluated for ONE tool_call
  *      sees the same result for the same query, without re-running the
  *      underlying child process. A fresh cache is created per
  *      tool_call; cross-call results are never shared.
- *   2. `findEntriesAdapter` — wraps pi's `sessionManager.getEntries()`
+ *   2. `createFindEntries` — wraps pi's `sessionManager.getEntries()`
  *      into the {@link PredicateContext.findEntries} shape, filtering
  *      to `type: "custom"` entries by `customType` and flattening to
  *      `{ data, timestamp }` (timestamps normalized from ISO strings to
  *      epoch ms, matching what observers producing entries can rely on).
- *   3. `buildPredicateContext` — ties the pieces together: given
- *      per-ref walker state plus the shared exec / findEntries /
- *      appendEntry closures, returns a fully-populated
- *      {@link PredicateContext} suitable for a single predicate
- *      invocation.
+ *
+ * The evaluator itself assembles the final {@link PredicateContext}
+ * from these closures plus per-candidate fields (cwd / tool / input /
+ * turnIndex) as an object literal — no helper needed once the shape
+ * is shared across bash and write/edit code paths.
  *
  * Kept internal (under `evaluator-internals/`) so consumers can swap
  * the evaluator without inheriting its helper surface. The only
@@ -130,34 +130,6 @@ export function createFindEntries(
 			});
 		}
 		return out;
-	};
-}
-
-/**
- * Assemble a {@link PredicateContext} for one predicate invocation.
- *
- * `input` is tool-specific (command / path / content / edits) — the
- * evaluator populates whichever fields apply to the rule being checked.
- * `cwd` is the *per-command* effective cwd for bash rules (from the
- * walker's `cwdTracker`), or the session cwd for write / edit rules.
- */
-export function buildPredicateContext(params: {
-	readonly cwd: string;
-	readonly tool: "bash" | "write" | "edit";
-	readonly input: PredicateContext["input"];
-	readonly turnIndex: number;
-	readonly exec: PredicateContext["exec"];
-	readonly appendEntry: PredicateContext["appendEntry"];
-	readonly findEntries: PredicateContext["findEntries"];
-}): PredicateContext {
-	return {
-		cwd: params.cwd,
-		tool: params.tool,
-		input: params.input,
-		turnIndex: params.turnIndex,
-		exec: params.exec,
-		appendEntry: params.appendEntry,
-		findEntries: params.findEntries,
 	};
 }
 

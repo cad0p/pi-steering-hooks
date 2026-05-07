@@ -34,6 +34,13 @@
  *                              disabled-filtered by the plugin merger).
  *
  * First rule that fires AND isn't overridden wins and returns a block.
+ *
+ * Internal shape: each applicable rule is fed to {@link
+ * evaluateCandidate}, the single predicate-chain used for every tool.
+ * Bash rules loop over extracted command refs (one candidate per ref);
+ * write / edit produce exactly one candidate. The per-tool axes of
+ * variation live in the {@link Candidate} input — the body of
+ * `evaluateCandidate` stays tool-agnostic.
  */
 
 import {
@@ -54,7 +61,6 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import {
-	buildPredicateContext,
 	createExecCache,
 	createFindEntries,
 	type EvaluatorHost,
@@ -229,6 +235,155 @@ function formatReason(
 	return `[steering:${rule.name}] ${rule.reason}${hint}`;
 }
 
+// ---------------------------------------------------------------------------
+// Unified per-candidate evaluation
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-tool_call state shared across every candidate and rule. One
+ * struct in place of the 6-argument bundle the prior shape threaded
+ * through both bash and write/edit call-sites.
+ *
+ * `exec` / `appendEntry` / `findEntries` are the closures the evaluator
+ * builds once per tool_call (see `./evaluator-internals/context.ts`).
+ * `host` is kept separate because the override-log path calls
+ * `host.appendEntry` with extra fields (e.g. `command`, `path`) that
+ * don't fit the `PredicateContext.appendEntry` signature.
+ */
+interface SharedEvalContext {
+	readonly turnIndex: number;
+	readonly predicates: ResolvedPluginState["predicates"];
+	readonly exec: PredicateContext["exec"];
+	readonly appendEntry: PredicateContext["appendEntry"];
+	readonly findEntries: PredicateContext["findEntries"];
+	readonly host: EvaluatorHost;
+	readonly defaultNoOverride: boolean;
+}
+
+/**
+ * Single-candidate input for {@link evaluateCandidate}. The fields here
+ * are the sole per-tool axes of variation — the body of
+ * `evaluateCandidate` stays tool-agnostic.
+ *
+ *   - `target`        — string the rule's `pattern` / `requires` /
+ *                        `unless` test against (bash: basename + args
+ *                        for the current ref; write: content or path;
+ *                        edit: joined newText or path).
+ *   - `cwd`           — effective cwd seen by predicates via
+ *                        `ctx.cwd`. Per-ref for bash (walker-resolved);
+ *                        session cwd for write / edit.
+ *   - `input`         — the `PredicateToolInput` predicates see via
+ *                        `ctx.input`.
+ *   - `overrideCarrier` — text scanned for `# steering-override: …`
+ *                          comments. Bash: the raw tool_call command;
+ *                          write: content; edit: joined newText.
+ *   - `tool`          — plain-string tool, drives the override-comment
+ *                        leader (`#` vs `//`) and the block reason.
+ *   - `overrideEntryExtras` — extra fields merged into the
+ *                              `steering-override` audit entry
+ *                              (`command` for bash, `path` for
+ *                              write / edit).
+ */
+interface Candidate {
+	readonly target: string;
+	readonly cwd: string;
+	readonly input: PredicateToolInput;
+	readonly overrideCarrier: string;
+	readonly tool: "bash" | "write" | "edit";
+	readonly overrideEntryExtras: Record<string, string>;
+}
+
+/**
+ * Outcome of `evaluateCandidate`:
+ *   - {@link ToolCallEventResult}  — rule fired + was NOT overridden.
+ *                                     Caller returns this to stop
+ *                                     evaluation for the whole event.
+ *   - `"no-fire"`                   — rule didn't match this candidate.
+ *                                     Caller continues to the next
+ *                                     candidate (bash) or next rule
+ *                                     (write / edit).
+ *   - `"overridden"`                — rule fired but an override comment
+ *                                     was accepted + audit-logged.
+ *                                     Caller moves to the next rule;
+ *                                     for bash that also means stopping
+ *                                     the ref loop (override covers the
+ *                                     whole tool_call per v1 semantics).
+ */
+type CandidateOutcome = ToolCallEventResult | "no-fire" | "overridden";
+
+/**
+ * Evaluate one candidate against one rule. This is the single pipeline
+ * every tool funnels through — differences between bash, write, and
+ * edit live entirely in the {@link Candidate} input.
+ *
+ * Evaluation order (short-circuits on first failure):
+ *
+ *   1. `pattern`   — required; if no match we exit before allocating
+ *                     the predicate context.
+ *   2. `requires`  — optional AND.
+ *   3. `unless`    — optional exemption.
+ *   4. `when`      — clause tree (`cwd`, `not`, `condition`, plugin
+ *                     predicates).
+ *
+ * On rule fire, check for an override comment addressing the rule by
+ * name (unless the rule opts out of overrides). An accepted override
+ * logs a `steering-override` audit entry and returns `"overridden"`.
+ */
+async function evaluateCandidate(
+	rule: Rule,
+	cand: Candidate,
+	shared: SharedEvalContext,
+): Promise<CandidateOutcome> {
+	// Pattern-miss is the common case; exit before allocating ctx.
+	if (!matchesPattern(rule.pattern, cand.target)) return "no-fire";
+
+	const ctx: PredicateContext = {
+		cwd: cand.cwd,
+		tool: cand.tool,
+		input: cand.input,
+		turnIndex: shared.turnIndex,
+		exec: shared.exec,
+		appendEntry: shared.appendEntry,
+		findEntries: shared.findEntries,
+	};
+
+	if (rule.requires !== undefined) {
+		const ok = await matchesPatternOrFn(rule.requires, cand.target, ctx);
+		if (!ok) return "no-fire";
+	}
+	if (rule.unless !== undefined) {
+		const ok = await matchesPatternOrFn(rule.unless, cand.target, ctx);
+		if (ok) return "no-fire";
+	}
+	const whenOk = await evaluateWhen(
+		rule.when,
+		{ cwd: cand.cwd },
+		ctx,
+		shared.predicates,
+	);
+	if (!whenOk) return "no-fire";
+
+	// Rule fires. Check for override (if allowed) before committing to
+	// blocking.
+	const noOverride = effectiveNoOverride(rule, shared.defaultNoOverride);
+	if (!noOverride) {
+		const reason = extractOverride(cand.overrideCarrier, rule.name);
+		if (reason !== null) {
+			shared.host.appendEntry("steering-override", {
+				rule: rule.name,
+				reason,
+				...cand.overrideEntryExtras,
+				timestamp: new Date().toISOString(),
+			});
+			return "overridden";
+		}
+	}
+	return {
+		block: true,
+		reason: formatReason(rule, cand.tool, noOverride),
+	};
+}
+
 async function evaluateEvent(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
@@ -246,6 +401,16 @@ async function evaluateEvent(
 	const findEntries = createFindEntries(ctx);
 	const appendEntry: PredicateContext["appendEntry"] = (type, data) =>
 		host.appendEntry(type, data);
+
+	const shared: SharedEvalContext = {
+		turnIndex,
+		predicates,
+		exec,
+		appendEntry,
+		findEntries,
+		host,
+		defaultNoOverride,
+	};
 
 	// Bash state is lazy: non-bash rules don't pay for parse / walk.
 	let bashState: BashRefState[] | null = null;
@@ -267,11 +432,7 @@ async function evaluateEvent(
 				rule,
 				bashEvent.input.command,
 				bashState,
-				turnIndex,
-				predicates,
-				{ exec, appendEntry, findEntries },
-				defaultNoOverride,
-				host,
+				shared,
 			);
 			if (result !== undefined) return result;
 			continue;
@@ -290,11 +451,7 @@ async function evaluateEvent(
 				event.input.content,
 				event.input.path,
 				ctx.cwd,
-				turnIndex,
-				predicates,
-				{ exec, appendEntry, findEntries },
-				defaultNoOverride,
-				host,
+				shared,
 			);
 			if (result !== undefined) return result;
 			continue;
@@ -312,11 +469,7 @@ async function evaluateEvent(
 				allNewText,
 				event.input.path,
 				ctx.cwd,
-				turnIndex,
-				predicates,
-				{ exec, appendEntry, findEntries },
-				defaultNoOverride,
-				host,
+				shared,
 			);
 			if (result !== undefined) return result;
 			continue;
@@ -326,161 +479,73 @@ async function evaluateEvent(
 }
 
 /**
- * Per-rule bash evaluation. Iterates every extracted command ref; the
- * first ref that triggers the rule (pattern + requires + unless + when)
- * decides whether the rule fires. An override comment addressing this
- * rule converts "fired" into "allowed + logged".
+ * Per-rule bash evaluation. Iterates every extracted command ref as
+ * a {@link Candidate}. The first ref that fires the rule (pattern +
+ * requires + unless + when) decides the verdict. Per v1 semantics, an
+ * accepted override covers the whole tool_call — we stop scanning
+ * further refs and hand control back to the caller.
  */
 async function evaluateBashRule(
 	rule: Rule,
 	rawCommand: string,
 	state: BashRefState[],
-	turnIndex: number,
-	predicates: ResolvedPluginState["predicates"],
-	shared: {
-		exec: PredicateContext["exec"];
-		appendEntry: PredicateContext["appendEntry"];
-		findEntries: PredicateContext["findEntries"];
-	},
-	defaultNoOverride: boolean,
-	host: EvaluatorHost,
+	shared: SharedEvalContext,
 ): Promise<ToolCallEventResult | void> {
 	for (const refState of state) {
-		const ctx = buildPredicateContext({
+		const cand: Candidate = {
+			target: refState.text,
 			cwd:
 				typeof refState.walkerState["cwd"] === "string"
 					? (refState.walkerState["cwd"] as string)
 					: "unknown",
-			tool: "bash",
 			input: { tool: "bash", command: refState.text },
-			turnIndex,
-			exec: shared.exec,
-			appendEntry: shared.appendEntry,
-			findEntries: shared.findEntries,
-		});
-
-		// pattern is required; `requires` / `unless` optional; `when`
-		// evaluated last (cheapest to reject on pattern miss first).
-		if (!matchesPattern(rule.pattern, refState.text)) continue;
-		if (rule.requires !== undefined) {
-			const ok = await matchesPatternOrFn(rule.requires, refState.text, ctx);
-			if (!ok) continue;
-		}
-		if (rule.unless !== undefined) {
-			const ok = await matchesPatternOrFn(rule.unless, refState.text, ctx);
-			if (ok) continue;
-		}
-		const cwdState =
-			typeof refState.walkerState["cwd"] === "string"
-				? (refState.walkerState["cwd"] as string)
-				: "unknown";
-		const whenOk = await evaluateWhen(
-			rule.when,
-			{ cwd: cwdState },
-			ctx,
-			predicates,
-		);
-		if (!whenOk) continue;
-
-		// Rule fires on this ref. Look for an override comment addressing
-		// this rule by name — unless the rule opts out of overrides.
-		const noOverride = effectiveNoOverride(rule, defaultNoOverride);
-		if (!noOverride) {
-			const reason = extractOverride(rawCommand, rule.name);
-			if (reason !== null) {
-				host.appendEntry("steering-override", {
-					rule: rule.name,
-					reason,
-					command: rawCommand,
-					timestamp: new Date().toISOString(),
-				});
-				// Stop scanning further refs: override covers the whole
-				// tool_call (v1 semantics).
-				return undefined;
-			}
-		}
-		return {
-			block: true,
-			reason: formatReason(rule, "bash", noOverride),
+			overrideCarrier: rawCommand,
+			tool: "bash",
+			overrideEntryExtras: { command: rawCommand },
 		};
+		const r = await evaluateCandidate(rule, cand, shared);
+		if (r === "no-fire") continue;
+		if (r === "overridden") return undefined; // v1: override covers whole tool_call
+		return r;
 	}
 	return undefined;
 }
 
 /**
- * Per-rule write / edit evaluation. Target text is selected from the
- * rule's `field`:
- *   - `path`    → event.input.path
- *   - `content` → event.input.content (write) or joined newText (edit)
- *
- * `overrideCarrier` is the text scanned for override comments — per
- * v1 parity that's the content for both tools.
+ * Per-rule write / edit evaluation. Produces a single {@link Candidate}
+ * and defers to {@link evaluateCandidate}. `overrideCarrier` is the
+ * text scanned for override comments — per v1 parity that's the
+ * content (write) / joined newText (edit).
  */
 async function evaluateWriteEditRule(
 	rule: Rule,
 	input: PredicateToolInput,
 	overrideCarrier: string,
 	path: string,
-	cwd: string,
-	turnIndex: number,
-	predicates: ResolvedPluginState["predicates"],
-	shared: {
-		exec: PredicateContext["exec"];
-		appendEntry: PredicateContext["appendEntry"];
-		findEntries: PredicateContext["findEntries"];
-	},
-	defaultNoOverride: boolean,
-	host: EvaluatorHost,
+	sessionCwd: string,
+	shared: SharedEvalContext,
 ): Promise<ToolCallEventResult | void> {
 	const target = getTargetText(rule, input);
 	if (target === null) return undefined;
 
-	const ctx = buildPredicateContext({
-		cwd,
-		tool: rule.tool as "write" | "edit",
+	const cand: Candidate = {
+		target,
+		cwd: sessionCwd,
 		input,
-		turnIndex,
-		exec: shared.exec,
-		appendEntry: shared.appendEntry,
-		findEntries: shared.findEntries,
-	});
-
-	if (!matchesPattern(rule.pattern, target)) return undefined;
-	if (rule.requires !== undefined) {
-		const ok = await matchesPatternOrFn(rule.requires, target, ctx);
-		if (!ok) return undefined;
-	}
-	if (rule.unless !== undefined) {
-		const ok = await matchesPatternOrFn(rule.unless, target, ctx);
-		if (ok) return undefined;
-	}
-	const whenOk = await evaluateWhen(rule.when, { cwd }, ctx, predicates);
-	if (!whenOk) return undefined;
-
-	const noOverride = effectiveNoOverride(rule, defaultNoOverride);
-	if (!noOverride) {
-		const reason = extractOverride(overrideCarrier, rule.name);
-		if (reason !== null) {
-			host.appendEntry("steering-override", {
-				rule: rule.name,
-				reason,
-				path,
-				timestamp: new Date().toISOString(),
-			});
-			return undefined;
-		}
-	}
-	return {
-		block: true,
-		reason: formatReason(rule, rule.tool as "write" | "edit", noOverride),
+		overrideCarrier,
+		tool: rule.tool as "write" | "edit",
+		overrideEntryExtras: { path },
 	};
+	const r = await evaluateCandidate(rule, cand, shared);
+	if (r === "no-fire" || r === "overridden") return undefined;
+	return r;
 }
 
 /**
  * Resolve the target string a rule's `pattern` should test against for
- * write / edit tools. Bash callers handle their own per-ref stringified
- * text upstream — this function returns `null` for bash (shouldn't be
- * reached; defensive).
+ * write / edit tools. Returns `null` only in the defensive (unreachable)
+ * case where `rule.tool` is "bash" — callers filter by tool before
+ * dispatching here.
  */
 function getTargetText(rule: Rule, input: PredicateToolInput): string | null {
 	if (rule.tool === "write") {
