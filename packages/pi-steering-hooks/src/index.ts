@@ -153,6 +153,11 @@ export async function buildSessionRuntime(
 	const resolved = resolvePlugins(
 		filteredConfig.plugins ?? [],
 		filteredConfig,
+		// `cwd` is injected by the evaluator (the built-in `cwdTracker`);
+		// extensions targeting it are valid and must not be treated as
+		// orphans. Any other built-in tracker the evaluator introduces
+		// later should be added here.
+		["cwd"],
 	);
 	const evaluator = buildEvaluator(filteredConfig, resolved, host);
 	const dispatcher = buildObserverDispatcher(

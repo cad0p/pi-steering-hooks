@@ -175,10 +175,19 @@ function composeTracker(
  *   - tracker name collision — THROWS.
  *   - trackerExtension targeting an unregistered tracker — WARN,
  *     extension ignored.
+ *
+ * `knownBuiltinTrackers` lists tracker names the caller guarantees are
+ * injected at a later wiring stage (e.g. the evaluator's built-in
+ * `cwd` tracker). Extensions targeting these names are KEPT in
+ * `trackerModifiers` (so the caller can compose them onto the built-in
+ * tracker) without emitting an orphan warning. Omitted / empty list
+ * means "no built-ins" — every extension must target a
+ * plugin-registered tracker.
  */
 export function resolvePlugins(
 	plugins: readonly Plugin[],
 	config: SteeringConfig,
+	knownBuiltinTrackers: readonly string[] = [],
 ): ResolvedPluginState {
 	const warnings: PluginResolveWarning[] = [];
 	const disabledPlugins = new Set(config.disablePlugins ?? []);
@@ -231,12 +240,13 @@ export function resolvePlugins(
 		string,
 		Record<string, Modifier<unknown>[]>
 	> = {};
+	const builtins = new Set(knownBuiltinTrackers);
 	for (const plugin of activePlugins) {
 		if (!plugin.trackerExtensions) continue;
 		for (const [trackerName, basenameMap] of Object.entries(
 			plugin.trackerExtensions,
 		)) {
-			if (!(trackerName in trackers)) {
+			if (!(trackerName in trackers) && !builtins.has(trackerName)) {
 				warnings.push({
 					kind: "extension-orphan",
 					message:

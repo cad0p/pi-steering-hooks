@@ -20,6 +20,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./plugins/git": {
+      "types": "./dist/plugins/git/index.d.ts",
+      "import": "./dist/plugins/git/index.js"
     }
   },
   "files": [

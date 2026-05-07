@@ -52,6 +52,7 @@ import {
 	parse as parseBash,
 	walk,
 	type CommandRef,
+	type Modifier,
 	type Tracker,
 } from "unbash-walker";
 import type {
@@ -138,11 +139,23 @@ export function buildEvaluator(
 	// are honored via `resolved.composedTrackers.cwd` (the plugin
 	// merger already layered extensions on top of the plugin-declared
 	// cwd tracker, if any).
+	//
+	// When no plugin registers a `cwd` tracker, we fall back to the
+	// built-in `cwdTracker` AND layer any `trackerModifiers.cwd`
+	// extensions onto it (the plugin merger preserves extensions
+	// targeting `"cwd"` on the caller's behalf via the
+	// `knownBuiltinTrackers` hint passed to `resolvePlugins`). This is
+	// how the git plugin's `--git-dir=` / `--work-tree=` modifiers
+	// reach the cwd tracker despite the plugin not owning the tracker
+	// itself.
 	const trackers: Record<string, Tracker<unknown>> = {
 		...resolved.composedTrackers,
 	};
 	if (!("cwd" in trackers)) {
-		trackers["cwd"] = cwdTracker as Tracker<unknown>;
+		const extraCwdModifiers = resolved.trackerModifiers["cwd"];
+		trackers["cwd"] = composeBuiltinCwd(
+			extraCwdModifiers,
+		) as Tracker<unknown>;
 	}
 
 	return {
@@ -163,6 +176,45 @@ export function buildEvaluator(
 // ---------------------------------------------------------------------------
 // Per-event evaluation
 // ---------------------------------------------------------------------------
+
+/**
+ * Layer a bucket of plugin-provided `{ basename -> Modifier[] }`
+ * extensions on top of the built-in {@link cwdTracker}, returning a
+ * fresh tracker so the built-in's `modifiers` map is never mutated.
+ *
+ * Used when no plugin registers a `cwd` tracker but plugins still
+ * want to add basename modifiers to the built-in one (e.g. the git
+ * plugin's `--git-dir=` handler). Mirrors the plugin-merger's
+ * `composeTracker` shape — kept local here because the merger's
+ * helper is private to that module and exposing it would force the
+ * merger to know about the built-in cwd tracker. Keeping the merger
+ * built-in-agnostic is worth the small duplication.
+ */
+function composeBuiltinCwd(
+	extras: Record<string, Modifier<unknown>[]> | undefined,
+): Tracker<string> {
+	if (!extras || Object.keys(extras).length === 0) return cwdTracker;
+	const merged: Record<string, Modifier<string> | Modifier<string>[]> = {};
+	for (const [basename, mod] of Object.entries(cwdTracker.modifiers)) {
+		merged[basename] = Array.isArray(mod)
+			? [...(mod as Modifier<string>[])]
+			: mod;
+	}
+	for (const [basename, mods] of Object.entries(extras)) {
+		const existing = merged[basename];
+		const extrasTyped = mods as unknown as Modifier<string>[];
+		if (existing === undefined) {
+			merged[basename] =
+				extrasTyped.length === 1 ? extrasTyped[0]! : [...extrasTyped];
+			continue;
+		}
+		const existingList = Array.isArray(existing)
+			? (existing as Modifier<string>[])
+			: [existing as Modifier<string>];
+		merged[basename] = [...existingList, ...extrasTyped];
+	}
+	return { ...cwdTracker, modifiers: merged };
+}
 
 /**
  * Walker-state snapshot per extracted bash command ref plus the
@@ -291,6 +343,12 @@ interface Candidate {
 	readonly overrideCarrier: string;
 	readonly tool: "bash" | "write" | "edit";
 	readonly overrideEntryExtras: Record<string, string>;
+	/**
+	 * Walker state snapshot for this candidate. Bash candidates carry
+	 * the per-ref walk result; write / edit candidates leave it
+	 * undefined (no walker ran).
+	 */
+	readonly walkerState?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -345,6 +403,9 @@ async function evaluateCandidate(
 		exec: shared.exec,
 		appendEntry: shared.appendEntry,
 		findEntries: shared.findEntries,
+		...(cand.walkerState !== undefined
+			? { walkerState: cand.walkerState }
+			: {}),
 	};
 
 	if (rule.requires !== undefined) {
@@ -523,6 +584,7 @@ async function evaluateBashRule(
 			overrideCarrier: rawCommand,
 			tool: "bash",
 			overrideEntryExtras: { command: rawCommand },
+			walkerState: refState.walkerState,
 		};
 		const r = await evaluateCandidate(rule, cand, shared);
 		if (r === "no-fire") continue;

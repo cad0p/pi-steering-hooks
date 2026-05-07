@@ -205,6 +205,33 @@ describe("resolvePlugins: tracker extensions", () => {
 		assert.deepEqual(state.composedTrackers, {});
 	});
 
+	it("keeps extensions targeting knownBuiltinTrackers (no warning, modifiers preserved)", () => {
+		// The caller declares `"cwd"` as a built-in tracker name. The
+		// merger still doesn't OWN the tracker (cwd isn't in any
+		// plugin's `trackers` map, so `composedTrackers.cwd` stays
+		// undefined), but the extension modifiers are preserved in
+		// `trackerModifiers.cwd` for the caller to layer onto its own
+		// built-in tracker. The evaluator uses this path for the
+		// walker's built-in `cwdTracker`.
+		const extender: Plugin = {
+			name: "extender",
+			trackerExtensions: {
+				cwd: { git: mkModifier("x") as Modifier<unknown> },
+			},
+		};
+		const state = resolvePlugins([extender], {}, ["cwd"]);
+		assert.equal(
+			state.warnings.filter((w) => w.kind === "extension-orphan").length,
+			0,
+			"no orphan warning when the tracker name is declared built-in",
+		);
+		assert.ok("cwd" in state.trackerModifiers);
+		assert.ok(state.trackerModifiers["cwd"]?.["git"] !== undefined);
+		// Still NOT composed - the caller is responsible for composing
+		// these modifiers onto its own built-in tracker.
+		assert.ok(!("cwd" in state.composedTrackers));
+	});
+
 	it("accepts the array form on trackerExtensions values", () => {
 		const tracker: Tracker<unknown> = {
 			initial: "x",

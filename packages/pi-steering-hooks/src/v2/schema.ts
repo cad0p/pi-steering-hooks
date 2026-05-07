@@ -473,6 +473,26 @@ export interface PredicateContext {
 	findEntries: <T>(
 		customType: string,
 	) => Array<{ data: T; timestamp: number }>;
+
+	/**
+	 * Walker state snapshot for the command being evaluated. Populated
+	 * only for bash rules — the walker runs once per tool_call over the
+	 * full command and produces a per-ref snapshot of every registered
+	 * tracker (`cwd`, plugin-registered dimensions like `branch`, …).
+	 * For `write` / `edit` rules there is no walker, so this is
+	 * `undefined`.
+	 *
+	 * Plugin predicates consult `walkerState[<tracker-name>]` to read
+	 * statically-resolved values (branch after `git checkout X`, cwd
+	 * after `cd /path`, …) without re-running the tracker's work. When
+	 * the tracker can't resolve statically the value is the tracker's
+	 * `unknown` sentinel — handlers apply their `onUnknown` policy.
+	 *
+	 * Shape is open-ended (`Record<string, unknown>`): the schema does
+	 * not commit to which trackers exist — that's a plugin registration
+	 * concern.
+	 */
+	walkerState?: Readonly<Record<string, unknown>>;
 }
 
 // ---------------------------------------------------------------------------
