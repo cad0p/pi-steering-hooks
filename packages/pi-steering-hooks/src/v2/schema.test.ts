@@ -2,12 +2,18 @@
 // Part of @cad0p/pi-steering-hooks.
 
 /**
- * Type-level smoke tests for the v2 schema.
+ * Runtime shape smoke tests for the v2 schema types.
  *
- * These tests act as compile-time regression fences: if the schema's
- * shape drifts incompatibly, these fail to TYPECHECK (not just to run).
- * Runtime assertions are trivial — they exist so `node --test` has
- * something to report green.
+ * These tests construct object literals and assert their runtime shape —
+ * they do NOT currently exercise compile-time type enforcement via
+ * `@ts-expect-error` directives. Real type-level regression tests for
+ * `defineConfig` inference live in `define-config.test.ts`.
+ *
+ * The value here is: if the schema types drift incompatibly with their
+ * runtime contract (e.g., a field is renamed but the Rule interface
+ * isn't updated), these tests fail to compile even without explicit
+ * negative assertions. For richer type enforcement, extend with
+ * `@ts-expect-error` cases or move to `define-config.test.ts`.
  */
 
 import assert from "node:assert/strict";
@@ -96,7 +102,6 @@ describe("v2/schema: shape smoke tests", () => {
 		// Shape a plugin predicate registers. Consumers widen the
 		// index signature to carry arbitrary shapes.
 		const w: WhenClause = {
-			// @ts-expect-no-error: plugin key with structured arg
 			commitsAhead: { wrt: "origin/main", eq: 1 },
 		};
 		assert.ok("commitsAhead" in w);
