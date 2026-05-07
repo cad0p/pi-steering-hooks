@@ -15,9 +15,9 @@
  *                                    predicates.
  *   - {@link UnknownPredicateError} — thrown when a WhenClause names a
  *                                    predicate nobody registered. Kept as
- *                                    a named error so the evaluator can
- *                                    annotate the rule and rethrow with
- *                                    context.
+ *                                    a named error so callers can catch
+ *                                    it by type; the message includes the
+ *                                    offending key.
  *
  * The walker's `cwdTracker.unknown` sentinel is `"unknown"`. That's the
  * string we compare against for `onUnknown` policy application on the
@@ -90,16 +90,16 @@ export async function matchesPatternOrFn(
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown by {@link evaluateWhen} when a {@link WhenClause} references a
- * predicate key that neither the built-ins (`cwd`, `not`, `condition`)
- * nor any plugin registered. The evaluator catches this to annotate with
- * rule name + command, then rethrows.
+ * Thrown when a {@link WhenClause} references a predicate name that no
+ * plugin has registered. The error message includes the offending key
+ * so the source of the typo / missing plugin is clear at the site of
+ * the rule.
  *
- * Schema-level typo detection doesn't cover this because the `WhenClause`
- * index signature is deliberately loose (`unknown`) — per the ADR, plugin
- * predicates can accept arbitrary arg shapes. The trade-off is that we
- * surface the error at evaluation time instead of load time. Clear error
- * message + rule-name context makes that tolerable.
+ * Schema-level typo detection doesn't cover this because the
+ * `WhenClause` index signature is deliberately loose (`unknown`) — per
+ * the ADR, plugin predicates can accept arbitrary arg shapes. The
+ * trade-off is that we surface the error at evaluation time instead of
+ * load time; the key-scoped message keeps that tolerable.
  */
 export class UnknownPredicateError extends Error {
 	readonly key: string;

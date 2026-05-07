@@ -22,10 +22,11 @@
  *      NOT prevent the rest from running.
  *
  * Observer context (`ObserverContext`) is built fresh per event, using
- * the same `appendEntry` / `findEntries` adapters the evaluator uses
- * (see `./evaluator-internals/context.ts`). `exec` is NOT memoized for
- * observers — a result handler that wants to shell out pays the full
- * cost. Observers that run frequent exec calls should cache themselves.
+ * `appendEntry` and `findEntries` closures shared with the evaluator.
+ * `exec` is deliberately NOT exposed — observers are expected to be
+ * lightweight state-recording hooks. Complex tool_result analysis that
+ * needs to shell out belongs in a separate pi extension hook or in a
+ * rule's `when.condition` pre-execution, not in an observer.
  *
  * Wiring (Phase 3c): the extension runtime subscribes to `tool_result`
  * and forwards the event + current `turnIndex` into `dispatch`.
@@ -142,7 +143,8 @@ async function dispatchEvent(
 		if (!matchesWatch(observer, event, exitCode)) continue;
 
 		// Each observer gets its own ctx so appendEntry writes attribute
-		// cleanly. Exec is passed through unmemoized — per the ADR.
+		// cleanly. `exec` is intentionally absent — observers are recording
+		// hooks, not shell-out points.
 		const observerCtx: ObserverContext = {
 			cwd: ctx.cwd,
 			turnIndex,
