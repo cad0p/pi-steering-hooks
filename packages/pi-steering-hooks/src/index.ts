@@ -203,4 +203,29 @@ export type {
 // Walker types re-exported for plugin authors. Forward-compatible with
 // future unbash-walker extraction — imports from this package won't
 // break.
-export type { Tracker, Modifier } from "unbash-walker";
+export type {
+	CommandRef,
+	Command,
+	Modifier,
+	Node,
+	Script,
+	SubshellSemantics,
+	Tracker,
+	WalkResult,
+} from "unbash-walker";
+
+// Walker functions re-exported for plugin authors writing custom
+// predicates and trackers. Forward-compatible with future
+// unbash-walker extraction.
+export {
+	cwdTracker,
+	expandWrapperCommands,
+	extractAllCommandsFromAST,
+	formatCommand,
+	getBasename,
+	getCommandArgs,
+	getCommandName,
+	isStaticallyResolvable,
+	parse,
+	walk,
+} from "unbash-walker";
