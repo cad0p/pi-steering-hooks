@@ -234,3 +234,23 @@ export {
 	parse,
 	walk,
 } from "unbash-walker";
+
+// Testing primitives — re-exported at the root for discoverability.
+// The canonical import path is `@cad0p/pi-steering-hooks/testing`;
+// this root re-export means a test file that already imports
+// `defineConfig` from the root doesn't need a second import line for
+// `loadHarness`. See `./testing/index.ts` for the API docs.
+export {
+	getAppendedEntries,
+	loadHarness,
+	mockContext,
+	mockObserverContext,
+} from "./testing/index.ts";
+
+export type {
+	Harness,
+	LoadHarnessOptions,
+	MockContextOptions,
+	MockObserverContextOptions,
+	MockEntry,
+} from "./testing/index.ts";

@@ -24,6 +24,10 @@
     "./plugins/git": {
       "types": "./dist/plugins/git/index.d.ts",
       "import": "./dist/plugins/git/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     }
   },
   "files": [
