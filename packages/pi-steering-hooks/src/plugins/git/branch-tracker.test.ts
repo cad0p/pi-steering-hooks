@@ -245,6 +245,36 @@ describe("branchTracker: pre-subcommand flags", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pathological cases (documented corners)
+// ---------------------------------------------------------------------------
+
+describe("branchTracker: pathological cases (documented corners)", () => {
+	it("`git checkout --help` leaves branch unchanged", () => {
+		const walked = walkBranches(
+			"git checkout --help && git status",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git status"), "main");
+	});
+
+	it("`git checkout .` sets branch to `.` (documented false-positive - path reset)", () => {
+		// Real git interprets `.` as "reset path", not a branch. Our tracker
+		// treats the first static arg after checkout as the branch name,
+		// which is wrong in this corner. Documented accepted false-positive.
+		const walked = walkBranches("git checkout . && git status", "main");
+		assert.equal(branchOf(walked, "git status"), ".");
+	});
+
+	it("`git checkout -- file.txt` sets branch to `--` (documented false-positive)", () => {
+		const walked = walkBranches(
+			"git checkout -- file.txt && git status",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git status"), "--");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Motivating case: `git checkout A && git commit`
 // ---------------------------------------------------------------------------
 

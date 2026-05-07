@@ -252,6 +252,13 @@ describe("predicate: upstream", () => {
 			false,
 		);
 	});
+
+	it("pattern doesn't match stdout -> false (rule skips)", async () => {
+		const { ctx } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execOk("origin/feature\n") },
+		]);
+		assert.equal(await upstream(/^origin\/main$/, ctx), false);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -368,6 +375,17 @@ describe("predicate: commitsAhead", () => {
 			),
 			false,
 		);
+	});
+
+	it("lt standalone - strict less-than boundary", async () => {
+		const { ctx: ctxAtLimit } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execOk("5\n") },
+		]);
+		assert.equal(await commitsAhead({ lt: 5 }, ctxAtLimit), false);
+		const { ctx: ctxBelow } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execOk("4\n") },
+		]);
+		assert.equal(await commitsAhead({ lt: 5 }, ctxBelow), true);
 	});
 });
 
@@ -519,6 +537,63 @@ describe("predicate: remote", () => {
 		assert.equal(
 			await remote({ pattern: /./, onUnknown: "allow" }, ctx),
 			false,
+		);
+	});
+
+	it("pattern doesn't match stdout -> false", async () => {
+		const { ctx } = makeCtx([
+			{
+				match: (cmd) => cmd === "git",
+				result: execOk("git@github.com:other-org/repo.git\n"),
+			},
+		]);
+		assert.equal(await remote(/my-org\//, ctx), false);
+	});
+
+	it("matches https:// origin URL", async () => {
+		const { ctx } = makeCtx([
+			{
+				match: (cmd) => cmd === "git",
+				result: execOk("https://github.com/org/repo.git\n"),
+			},
+		]);
+		assert.equal(await remote(/github\.com\/org\//, ctx), true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Explicit `onUnknown: "block"` form (pins the default behavior is
+// identical to the explicit form)
+// ---------------------------------------------------------------------------
+
+describe("predicates: explicit onUnknown:block form", () => {
+	it("branch { pattern, onUnknown: \"block\" } behaves like default", async () => {
+		const { ctx } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execFail(128) },
+		]);
+		assert.equal(
+			await branch({ pattern: /^main$/, onUnknown: "block" }, ctx),
+			true,
+		);
+	});
+
+	it("upstream { pattern, onUnknown: \"block\" } behaves like default", async () => {
+		const { ctx } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execFail(128) },
+		]);
+		assert.equal(
+			await upstream({ pattern: /^origin\/main$/, onUnknown: "block" }, ctx),
+			true,
+		);
+	});
+
+	it("remote { pattern, onUnknown: \"block\" } behaves like default", async () => {
+		const { ctx } = makeCtx([
+			{ match: (cmd) => cmd === "git", result: execFail(128) },
+		]);
+		assert.equal(
+			await remote({ pattern: /my-org/, onUnknown: "block" }, ctx),
+			true,
 		);
 	});
 });

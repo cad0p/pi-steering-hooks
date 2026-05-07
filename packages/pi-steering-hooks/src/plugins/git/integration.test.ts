@@ -341,4 +341,34 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 		);
 		assert.equal(res, undefined);
 	});
+
+	it("`git checkout $VAR && git commit` - walker unknown + fail-closed fires no-main-commit", async () => {
+		// When $VAR is not statically resolvable, the branch tracker
+		// collapses to "unknown". The branch predicate's
+		// onUnknown:"block" default makes the rule fire even though
+		// git's exec fallback (if it ran) would report the starting
+		// branch. This is the fail-closed enforcement the ADR's
+		// walker+predicate story promises at the rule level.
+		//
+		// NB: today the predicate treats walker "unknown" as "absent"
+		// and DOES fall back to exec (see the sibling unit test for
+		// that); the stub here deliberately makes exec FAIL so the
+		// fail-closed policy is what produces the fire. Wiring a
+		// direct walker-unknown -> onUnknown=block short-circuit is
+		// tracked as a follow-up (ADR Phase 5).
+		const { evaluator } = buildRuntime(
+			{ plugins: [gitPlugin], rules: [] },
+			// exec fails -> onUnknown:"block" default fires the rule.
+			async () => ({ stdout: "", stderr: "", code: 128, killed: false }),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("git checkout $VAR && git commit -m 'x'"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(
+			res && res.block === true,
+			"unresolvable branch must fail-closed and fire no-main-commit",
+		);
+	});
 });

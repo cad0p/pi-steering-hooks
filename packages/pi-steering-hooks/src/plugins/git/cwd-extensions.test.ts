@@ -137,6 +137,25 @@ describe("gitCwdExtensions: --work-tree=PATH", () => {
 		const walked = walkCwd("git --work-tree=tree status", "/repo");
 		assert.equal(cwdOf(walked, "git --work-tree"), "/repo/tree");
 	});
+
+	it("`git --work-tree=$V status` collapses cwd to unknown", () => {
+		const walked = walkCwd("git --work-tree=$V status");
+		assert.equal(cwdOf(walked, "git --work-tree"), "unknown");
+	});
+
+	it("`--work-tree=/t` is per-command (doesn't propagate)", () => {
+		const walked = walkCwd(
+			"git --work-tree=/t status && git log",
+			"/initial",
+		);
+		assert.equal(cwdOf(walked, "git --work-tree"), "/t");
+		assert.equal(cwdOf(walked, "git log"), "/initial");
+	});
+
+	it("multiple --git-dir= / --work-tree= flags compose (last absolute wins)", () => {
+		const walked = walkCwd("git --git-dir=/a --work-tree=/b status");
+		assert.equal(cwdOf(walked, "git --git-dir"), "/b");
+	});
 });
 
 // ---------------------------------------------------------------------------

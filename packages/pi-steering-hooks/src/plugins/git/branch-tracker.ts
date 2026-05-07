@@ -117,6 +117,12 @@ const gitBranchModifier: Modifier<string> = {
 		const firstArg = firstArgWord.value ?? firstArgWord.text;
 		if (firstArg === undefined) return current;
 
+		// `git checkout --help` / `git checkout -h` - help request, not a
+		// branch change. Every other unrecognised flag form (e.g. `--`, `.`,
+		// `--force`) still flows through the default branch-name path and
+		// is accepted as a documented false-positive (see test cases).
+		if (firstArg === "--help" || firstArg === "-h") return current;
+
 		// `git checkout -b NEW` / `git switch -c NEW` - the branch
 		// argument is at position i + 2.
 		if (NEW_BRANCH_FLAGS.has(firstArg)) {
