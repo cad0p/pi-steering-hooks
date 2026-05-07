@@ -1,0 +1,27 @@
+{
+  "disable": ["no-force-push"],
+  "rules": [
+    {
+      "name": "no-force-push-strict",
+      "tool": "bash",
+      "field": "command",
+      "pattern": "^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+push\\b.*(?:--force\\b|\\s-f(?:\\s|$))",
+      "reason": "No force pushes of any kind, including --force-with-lease."
+    },
+    {
+      "name": "no-amend",
+      "tool": "bash",
+      "field": "command",
+      "pattern": "^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+commit\\b.*--amend\\b",
+      "reason": "Don't rewrite history with --amend. Create a new commit instead."
+    },
+    {
+      "name": "pr-create-must-be-draft",
+      "tool": "bash",
+      "field": "command",
+      "pattern": "^gh\\s+pr\\s+create\\b",
+      "unless": "--draft\\b",
+      "reason": "PRs must be created as drafts. Mark ready for review only after human approval."
+    }
+  ]
+}

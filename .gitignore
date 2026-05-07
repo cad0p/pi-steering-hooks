@@ -1,2 +1,18 @@
-node_modules
-dist
+# Dependencies
+node_modules/
+.pnpm/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test / coverage output
+coverage/
+
+# OS
+.DS_Store
+
+# Editor / local-only vault metadata (not part of the public repo)
+.napkin/
+.obsidian/
+NAPKIN.md
