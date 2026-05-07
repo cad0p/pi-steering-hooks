@@ -4,9 +4,9 @@
 // @cad0p/pi-steering-hooks — deterministic steering hooks for pi agents.
 // Inspired by @samfp/pi-steering-hooks (schema, override-comment,
 // defaults). AST backend + command-level effective-cwd via
-// unbash-walker. Phase 3c: this file is the thin wiring layer between
-// pi's extension API and the v2 engine (loader + plugin-merger +
-// evaluator + observer-dispatcher).
+// unbash-walker. This file is the thin wiring layer between pi's
+// extension API and the v2 engine (loader + plugin-merger + evaluator
+// + observer-dispatcher).
 
 import type {
 	ExtensionAPI,
@@ -164,50 +164,27 @@ export async function buildSessionRuntime(
 }
 
 // ---------------------------------------------------------------------------
-// Re-exports for consumers embedding the engine or writing their own
-// extensions (e.g. to compose with additional hooks, or to build a CLI
-// that evaluates rules outside the pi runtime).
+// Public surface — the v2 engine.
 //
-// NOTE: v1 re-exports (evaluateBashRule, evaluateRule, prepareBashContext,
-// parseConfig, buildRules, v1 Rule / SteeringConfig) are intentionally
-// retained in this commit so existing consumer code doesn't break in
-// the middle of the v1 → v2 flip. Commit 3 deletes the v1 modules; the
-// next commit unifies the naming (`V2Rule` → `Rule`, etc.).
+// Consumers embedding the engine (building their own extensions, a CLI
+// that lints commands, a test harness, …) import these from the
+// package root.
+//
+// TODO(phase-3): Commit 4 unifies naming — drops the `V2*` aliases and
+// the `loadConfigs as loadConfigsV2` alias now that the v1 loader is
+// gone.
 // ---------------------------------------------------------------------------
 
-export type { Rule, SteeringConfig } from "./schema.ts";
-export type { BashContext, ToolInput, EvalContext } from "./evaluator.ts";
-export { DEFAULT_RULES } from "./defaults.ts";
-export {
-	evaluateBashRule,
-	evaluateBashRuleWithContext,
-	evaluateRule,
-	evaluateRuleForCommand,
-	extractOverride,
-	prepareBashContext,
-} from "./evaluator.ts";
-export { parseConfig, loadConfigs, buildRules } from "./loader.ts";
-
-// ---------------------------------------------------------------------------
-// v2 surface — NOW the live runtime path.
-// ---------------------------------------------------------------------------
+export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
 
 export {
 	buildConfig,
 	defineConfig,
 	fromJSON,
 	FromJSONError,
-	// TODO(phase-3): once the v1 loader is deleted, drop the `as loadConfigsV2`
-	// alias and export `loadConfigs` under its unqualified name.
 	loadConfigs as loadConfigsV2,
 	loadSteeringConfig,
 } from "./v2/index.ts";
-
-// DEFAULT_PLUGINS is net-new (v1 had no plugin concept). DEFAULT_RULES
-// is deliberately NOT re-exported from v2 in this commit — the v1
-// DEFAULT_RULES is still the identity consumers (and v1 tests) compare
-// against. Commit 3 deletes v1 and flips this export to the v2 list.
-export { DEFAULT_PLUGINS } from "./v2/defaults.ts";
 
 export type {
 	ExecOpts,
