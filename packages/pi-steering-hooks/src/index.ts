@@ -2,235 +2,184 @@
 // Part of @cad0p/pi-steering-hooks.
 //
 // @cad0p/pi-steering-hooks — deterministic steering hooks for pi agents.
-// Inspired by @samfp/pi-steering-hooks (schema, override-comment, defaults).
-// AST backend + command-level effective-cwd via unbash-walker.
+// Inspired by @samfp/pi-steering-hooks (schema, override-comment,
+// defaults). AST backend + command-level effective-cwd via
+// unbash-walker. Phase 3c: this file is the thin wiring layer between
+// pi's extension API and the v2 engine (loader + plugin-merger +
+// evaluator + observer-dispatcher).
 
 import type {
-	EditToolCallEvent,
 	ExtensionAPI,
-	ToolCallEventResult,
-	WriteToolCallEvent,
+	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { DEFAULT_RULES } from "./defaults.ts";
+import { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
 import {
-	type BashContext,
-	evaluateBashRuleWithContext,
-	evaluateRule,
-	extractOverride,
-	prepareBashContext,
-	type ToolInput,
-} from "./evaluator.ts";
-import { buildRules, loadConfigs } from "./loader.ts";
-import type { Rule } from "./schema.ts";
+	buildEvaluator,
+	type EvaluatorRuntime,
+	type EvaluatorHost,
+} from "./v2/evaluator.ts";
+import { buildConfig, loadConfigs } from "./v2/loader.ts";
+import {
+	buildObserverDispatcher,
+	type ObserverDispatcher,
+} from "./v2/observer-dispatcher.ts";
+import { resolvePlugins } from "./v2/plugin-merger.ts";
+import type { SteeringConfig } from "./v2/schema.ts";
 
 /**
- * Is this rule overridable given the rule's own `noOverride` and the
- * currently-merged `defaultNoOverride` fallback?
+ * Pi extension factory. Wires the v2 steering engine onto pi's
+ * lifecycle events:
  *
- * Single source of truth so `overrideHint`, the bash branch, and the
- * write/edit helpers can't disagree on whether an override comment is
- * even worth looking for.
+ *   - `turn_start`   — track the current `turnIndex` so tool_call /
+ *                       tool_result handlers can forward it into the
+ *                       evaluator + dispatcher.
+ *   - `session_start` — load the walk-up config (inner-first), merge
+ *                       with DEFAULT_RULES + DEFAULT_PLUGINS unless
+ *                       `disableDefaults: true` is set anywhere in the
+ *                       walk-up chain, then build the evaluator +
+ *                       dispatcher. A broken config layer is logged
+ *                       and skipped by the loader; a thrown error at
+ *                       build time disables the extension for this
+ *                       session (fail-open rather than blocking every
+ *                       tool call).
+ *   - `tool_call`     — gate via the evaluator. Returns a
+ *                       ToolCallEventResult to block or `undefined` to
+ *                       allow.
+ *   - `tool_result`   — dispatch to all matching observers.
  *
- * Semantics:
- *   effective-noOverride = rule.noOverride ?? defaultNoOverride ?? false
- *   overridable          = !effective-noOverride
- */
-function isOverridable(rule: Rule, defaultNoOverride: boolean): boolean {
-	return !(rule.noOverride ?? defaultNoOverride);
-}
-
-/**
- * Build the "to override, add comment ..." hint appended to the block reason.
- * Kept as a single source of truth so the message stays consistent across
- * tool types and tests can assert exact phrasing.
- */
-function overrideHint(
-	rule: Rule,
-	tool: "bash" | "write" | "edit",
-	defaultNoOverride: boolean,
-): string {
-	if (!isOverridable(rule, defaultNoOverride)) return "";
-	const leader = tool === "bash" ? "#" : "//";
-	return ` To override, include a comment: \`${leader} steering-override: ${rule.name} — <reason>\`.`;
-}
-
-/** Format the block reason shown to the agent when a rule fires. */
-function formatBlockReason(
-	rule: Rule,
-	tool: "bash" | "write" | "edit",
-	defaultNoOverride: boolean,
-): string {
-	return `[steering:${rule.name}] ${rule.reason}${overrideHint(rule, tool, defaultNoOverride)}`;
-}
-
-/**
- * Evaluate a single rule against a bash tool call. Returns `true` if the rule
- * fires for any extracted command ref (including commands behind wrappers like
- * `sh -c`, `sudo`, `xargs`, etc.).
- *
- * Convenience one-shot: re-parses the AST on every call. For the hot path
- * (many rules per command) the extension dispatcher uses `prepareBashContext`
- * + `evaluateBashRuleWithContext` to amortize parse cost.
- *
- * Re-exported from `./evaluator.ts`. Exported here for the integration tests
- * and for downstream consumers that want to embed the evaluator without the
- * pi extension shim.
- */
-export { evaluateBashRule } from "./evaluator.ts";
-
-/**
- * Pi extension factory. Wires the steering engine onto `session_start` +
- * `tool_call` hooks. Exported as default per pi's extension convention.
+ * Exported as the default export per pi's extension convention.
  */
 export default function register(pi: ExtensionAPI): void {
-	let rules: Rule[] = [];
-	// Fallback for `Rule.noOverride` when a rule doesn't specify it. Set from
-	// the merged config layers on `session_start` alongside `rules`. Per-rule
-	// `noOverride` still wins — see `isOverridable`.
-	let defaultNoOverride = false;
+	let turnIndex = 0;
+	let evaluator: EvaluatorRuntime | null = null;
+	let dispatcher: ObserverDispatcher | null = null;
 
-	pi.on("session_start", (_event, ctx) => {
-		const configs = loadConfigs(ctx.cwd);
-		const built = buildRules(configs, DEFAULT_RULES);
-		rules = built.rules;
-		defaultNoOverride = built.defaultNoOverride;
+	// Narrow host surface the evaluator + dispatcher need. `bind(pi)`
+	// preserves the `this` context on the API methods (some pi
+	// implementations rely on it; binding is cheap insurance and
+	// identical to pi's own call sites).
+	const host: EvaluatorHost = {
+		exec: pi.exec.bind(pi),
+		appendEntry: pi.appendEntry.bind(pi),
+	};
+
+	pi.on("turn_start", (event) => {
+		turnIndex = event.turnIndex;
 	});
 
-	pi.on("tool_call", (event, ctx): ToolCallEventResult | void => {
-		// Lazy-build the bash AST context on first need and reuse it across
-		// all bash rules for this tool call. Non-bash tool calls skip the
-		// pipeline entirely (ctx stays null).
-		let bashContext: BashContext | null = null;
-		for (const rule of rules) {
-			if (rule.tool === "bash" && isToolCallEventType("bash", event)) {
-				const cmd = event.input.command;
-				bashContext ??= prepareBashContext(cmd, ctx.cwd);
-				if (!evaluateBashRuleWithContext(rule, bashContext)) continue;
-
-				if (isOverridable(rule, defaultNoOverride)) {
-					const reason = extractOverride(cmd, rule.name);
-					if (reason !== null) {
-						pi.appendEntry("steering-override", {
-							rule: rule.name,
-							reason,
-							command: cmd,
-							timestamp: new Date().toISOString(),
-						});
-						continue;
-					}
-				}
-
-				return {
-					block: true,
-					reason: formatBlockReason(rule, "bash", defaultNoOverride),
-				};
-			}
-
-			if (rule.tool === "write" && isToolCallEventType("write", event)) {
-				const result = applyWrite(pi, rule, event, ctx.cwd, defaultNoOverride);
-				if (result === "continue") continue;
-				return result;
-			}
-
-			if (rule.tool === "edit" && isToolCallEventType("edit", event)) {
-				const result = applyEdit(pi, rule, event, ctx.cwd, defaultNoOverride);
-				if (result === "continue") continue;
-				return result;
-			}
+	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+		try {
+			const { evaluator: ev, dispatcher: dp } = await buildSessionRuntime(
+				ctx.cwd,
+				host,
+			);
+			evaluator = ev;
+			dispatcher = dp;
+		} catch (err) {
+			console.error(
+				`[pi-steering-hooks] Failed to load steering config: ` +
+					`${err instanceof Error ? err.message : String(err)}. ` +
+					`Extension will not block any tool calls for this session.`,
+			);
+			evaluator = null;
+			dispatcher = null;
 		}
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		if (!evaluator) return;
+		return evaluator.evaluate(event, ctx, turnIndex);
+	});
+
+	pi.on("tool_result", async (event, ctx) => {
+		if (!dispatcher) return;
+		await dispatcher.dispatch(event, ctx, turnIndex);
 	});
 }
 
 /**
- * Handle the write tool path of the tool_call dispatcher. Factored out so the
- * main handler reads top-to-bottom without nested branching.
+ * Build the per-session evaluator + observer dispatcher from the walk-
+ * up config rooted at `cwd`. Two-pass merge so `disableDefaults: true`
+ * in any layer is honored before defaults are injected:
  *
- * Returns:
- *   - "continue" → rule did not fire OR override accepted; advance to next rule.
- *   - ToolCallEventResult → the tool call is blocked.
+ *   1. `loadConfigs(cwd)` — async IO, read every layer from cwd →
+ *      $HOME.
+ *   2. `buildConfig(layers)` with NO defaults — lets us peek at the
+ *      merged `disableDefaults` flag without DEFAULT_RULES /
+ *      DEFAULT_PLUGINS polluting the result.
+ *   3. Re-run `buildConfig(layers, defaults?)` with defaults
+ *      conditional on `disableDefaults`, producing the effective
+ *      config.
+ *   4. Apply `config.disable` to the merged `rules` — the plugin
+ *      merger handles this for plugin-shipped rules, but
+ *      `buildConfig` leaves user/default rules in `config.rules`
+ *      untouched on the assumption that the caller (this function)
+ *      filters them before handing off to `buildEvaluator`.
+ *
+ * Factored out of `register()` so the wiring is unit-testable without
+ * a pi runtime stub.
  */
-function applyWrite(
-	pi: ExtensionAPI,
-	rule: Rule,
-	event: WriteToolCallEvent,
+export async function buildSessionRuntime(
 	cwd: string,
-	defaultNoOverride: boolean,
-): "continue" | ToolCallEventResult {
-	const input: ToolInput = {
-		tool: "write",
-		path: event.input.path,
-		content: event.input.content,
-	};
-	if (!evaluateRule(rule, input, { cwd })) return "continue";
+	host: EvaluatorHost,
+): Promise<{
+	evaluator: EvaluatorRuntime;
+	dispatcher: ObserverDispatcher;
+	config: SteeringConfig;
+}> {
+	const rawLayers = await loadConfigs(cwd);
+	// First merge without defaults: we only need `disableDefaults` at
+	// this point, and layering defaults in would make the check
+	// meaningless (defaults shouldn't themselves opt into
+	// `disableDefaults`).
+	const probe = buildConfig(rawLayers);
+	const defaults: SteeringConfig | undefined = probe.disableDefaults
+		? undefined
+		: { rules: DEFAULT_RULES, plugins: DEFAULT_PLUGINS };
+	const merged = buildConfig(rawLayers, defaults);
 
-	if (isOverridable(rule, defaultNoOverride)) {
-		const reason = extractOverride(event.input.content, rule.name);
-		if (reason !== null) {
-			pi.appendEntry("steering-override", {
-				rule: rule.name,
-				reason,
-				path: event.input.path,
-				timestamp: new Date().toISOString(),
-			});
-			return "continue";
-		}
+	// Apply `disable` to the merged rule set. Plugin-shipped rules are
+	// filtered inside `resolvePlugins`; user / default rules go through
+	// `config.rules` on the evaluator side, so we filter them here to
+	// keep the semantic consistent across both sources.
+	const disabled = new Set(merged.disable ?? []);
+	const filteredConfig: SteeringConfig = { ...merged };
+	if (merged.rules !== undefined) {
+		const kept = merged.rules.filter((r) => !disabled.has(r.name));
+		if (kept.length > 0) filteredConfig.rules = kept;
+		else delete filteredConfig.rules;
 	}
 
-	return {
-		block: true,
-		reason: formatBlockReason(rule, "write", defaultNoOverride),
-	};
-}
-
-/**
- * Handle the edit tool path of the tool_call dispatcher. See `applyWrite` for
- * the return-value contract.
- */
-function applyEdit(
-	pi: ExtensionAPI,
-	rule: Rule,
-	event: EditToolCallEvent,
-	cwd: string,
-	defaultNoOverride: boolean,
-): "continue" | ToolCallEventResult {
-	const input: ToolInput = {
-		tool: "edit",
-		path: event.input.path,
-		edits: event.input.edits,
-	};
-	if (!evaluateRule(rule, input, { cwd })) return "continue";
-
-	if (isOverridable(rule, defaultNoOverride)) {
-		const allNewText = event.input.edits.map((e) => e.newText).join("\n");
-		const reason = extractOverride(allNewText, rule.name);
-		if (reason !== null) {
-			pi.appendEntry("steering-override", {
-				rule: rule.name,
-				reason,
-				path: event.input.path,
-				timestamp: new Date().toISOString(),
-			});
-			return "continue";
-		}
-	}
-
-	return {
-		block: true,
-		reason: formatBlockReason(rule, "edit", defaultNoOverride),
-	};
+	const resolved = resolvePlugins(
+		filteredConfig.plugins ?? [],
+		filteredConfig,
+	);
+	const evaluator = buildEvaluator(filteredConfig, resolved, host);
+	const dispatcher = buildObserverDispatcher(
+		resolved,
+		filteredConfig.observers ?? [],
+		host,
+	);
+	return { evaluator, dispatcher, config: filteredConfig };
 }
 
 // ---------------------------------------------------------------------------
 // Re-exports for consumers embedding the engine or writing their own
-// extensions (e.g. to compose with additional hooks, or to build a CLI that
-// evaluates rules outside the pi runtime).
+// extensions (e.g. to compose with additional hooks, or to build a CLI
+// that evaluates rules outside the pi runtime).
+//
+// NOTE: v1 re-exports (evaluateBashRule, evaluateRule, prepareBashContext,
+// parseConfig, buildRules, v1 Rule / SteeringConfig) are intentionally
+// retained in this commit so existing consumer code doesn't break in
+// the middle of the v1 → v2 flip. Commit 3 deletes the v1 modules; the
+// next commit unifies the naming (`V2Rule` → `Rule`, etc.).
 // ---------------------------------------------------------------------------
 
 export type { Rule, SteeringConfig } from "./schema.ts";
 export type { BashContext, ToolInput, EvalContext } from "./evaluator.ts";
 export { DEFAULT_RULES } from "./defaults.ts";
 export {
+	evaluateBashRule,
 	evaluateBashRuleWithContext,
 	evaluateRule,
 	evaluateRuleForCommand,
@@ -240,13 +189,7 @@ export {
 export { parseConfig, loadConfigs, buildRules } from "./loader.ts";
 
 // ---------------------------------------------------------------------------
-// v2 surface — NOT yet wired to the extension runtime (Phase 3).
-//
-// The new TS-first config system (defineConfig, TS-only loader, Plugin /
-// Observer / PredicateFn shapes) is additive in Phase 2: plugin authors
-// can start depending on these types, but `register()` above still uses
-// the v1 evaluator + JSON loader. Phase 3 flips the extension to consume
-// the merged SteeringConfig produced by `loadSteeringConfig`.
+// v2 surface — NOW the live runtime path.
 // ---------------------------------------------------------------------------
 
 export {
@@ -259,6 +202,12 @@ export {
 	loadConfigs as loadConfigsV2,
 	loadSteeringConfig,
 } from "./v2/index.ts";
+
+// DEFAULT_PLUGINS is net-new (v1 had no plugin concept). DEFAULT_RULES
+// is deliberately NOT re-exported from v2 in this commit — the v1
+// DEFAULT_RULES is still the identity consumers (and v1 tests) compare
+// against. Commit 3 deletes v1 and flips this export to the v2 list.
+export { DEFAULT_PLUGINS } from "./v2/defaults.ts";
 
 export type {
 	ExecOpts,
@@ -279,5 +228,6 @@ export type {
 } from "./v2/index.ts";
 
 // Walker types re-exported for plugin authors. Forward-compatible with
-// future unbash-walker extraction — imports from this package won't break.
+// future unbash-walker extraction — imports from this package won't
+// break.
 export type { Tracker, Modifier } from "unbash-walker";
