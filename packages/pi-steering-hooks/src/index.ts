@@ -275,3 +275,7 @@ export type {
 	ToolResultEvent,
 	WhenClause,
 } from "./v2/index.ts";
+
+// Walker types re-exported for plugin authors. Forward-compatible with
+// future unbash-walker extraction — imports from this package won't break.
+export type { Tracker, Modifier } from "unbash-walker";
