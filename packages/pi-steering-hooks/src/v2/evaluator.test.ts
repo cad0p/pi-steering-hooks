@@ -40,6 +40,7 @@ import { resolvePlugins } from "./plugin-merger.ts";
 import type {
 	Observer,
 	Plugin,
+	PredicateContext,
 	PredicateHandler,
 	Rule,
 	SteeringConfig,
@@ -187,6 +188,118 @@ describe("buildEvaluator: bash basics", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// requires / unless as PredicateFn
+// ---------------------------------------------------------------------------
+//
+// `requires` and `unless` also accept a PredicateFn (per schema.ts),
+// not just a Pattern. The existing bash-basics block only exercises
+// the Pattern form. These tests pin the PredicateFn form + verify the
+// PredicateContext the fn receives carries the documented fields
+// (cwd, tool, input, turnIndex).
+
+describe("buildEvaluator: requires/unless as PredicateFn", () => {
+	it("requires: PredicateFn gates the rule and sees a full PredicateContext", async () => {
+		const seen: PredicateContext[] = [];
+		let shouldPass = true;
+		const rule: Rule = {
+			name: "req-fn",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "req-fn",
+			requires: async (ctx) => {
+				seen.push(ctx);
+				return shouldPass;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+
+		// requires-fn returns true → rule fires.
+		shouldPass = true;
+		const fires = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/repo"),
+			7,
+		);
+		assert.ok(fires);
+
+		// requires-fn returns false → rule skipped.
+		shouldPass = false;
+		const skips = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/repo"),
+			8,
+		);
+		assert.equal(skips, undefined);
+
+		// Spy verified: ctx shape is the documented PredicateContext for
+		// a bash candidate (cwd = per-ref walker cwd, tool = "bash",
+		// input.command = basename+args, turnIndex forwarded verbatim).
+		assert.equal(seen.length, 2);
+		const ctx = seen[0]!;
+		assert.equal(ctx.cwd, "/repo");
+		assert.equal(ctx.tool, "bash");
+		assert.equal(
+			(ctx.input as { tool: "bash"; command: string }).command,
+			"git push",
+		);
+		assert.equal(ctx.turnIndex, 7);
+		// Functional-shape sanity: the closures the evaluator injected.
+		assert.equal(typeof ctx.exec, "function");
+		assert.equal(typeof ctx.findEntries, "function");
+		assert.equal(typeof ctx.appendEntry, "function");
+		// Second invocation carries the updated turnIndex.
+		assert.equal(seen[1]!.turnIndex, 8);
+	});
+
+	it("unless: PredicateFn exempts the rule and sees a full PredicateContext", async () => {
+		const seen: PredicateContext[] = [];
+		let exempt = false;
+		const rule: Rule = {
+			name: "unl-fn",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "unl-fn",
+			unless: async (ctx) => {
+				seen.push(ctx);
+				return exempt;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+
+		// unless-fn returns false → rule NOT exempt → fires.
+		exempt = false;
+		const fires = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/repo"),
+			3,
+		);
+		assert.ok(fires);
+
+		// unless-fn returns true → rule exempted → skipped.
+		exempt = true;
+		const skips = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/repo"),
+			4,
+		);
+		assert.equal(skips, undefined);
+
+		assert.equal(seen.length, 2);
+		const ctx = seen[0]!;
+		assert.equal(ctx.cwd, "/repo");
+		assert.equal(ctx.tool, "bash");
+		assert.equal(
+			(ctx.input as { tool: "bash"; command: string }).command,
+			"git push",
+		);
+		assert.equal(ctx.turnIndex, 3);
+		assert.equal(seen[1]!.turnIndex, 4);
 	});
 });
 
@@ -368,6 +481,124 @@ describe("buildEvaluator: when.not + when.condition", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// when multi-key (AND semantics + short-circuit) and when.not multi-key
+// ---------------------------------------------------------------------------
+//
+// The existing when.* tests exercise a single key per clause. These
+// pin the two multi-key behaviours {@link evaluateWhen} implements:
+// AND semantics across keys at the SAME level (cwd AND condition),
+// and nested AND inversion through `not` (NOT of the inner AND).
+
+describe("buildEvaluator: when multi-key AND + short-circuit", () => {
+	it("when with multiple keys requires ALL to pass (AND) and short-circuits", async () => {
+		let conditionCalls = 0;
+		const rule: Rule = {
+			name: "multi-key",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "multi-key",
+			// `cwd` key is declared first: Object.entries iterates in
+			// insertion order, so cwd is evaluated before condition. This
+			// property is what lets the evaluator short-circuit: when cwd
+			// misses, the condition fn is never called.
+			when: {
+				cwd: "^/feature/",
+				condition: () => {
+					conditionCalls++;
+					return conditionCalls === 1;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+
+		// (a) cwd matches + condition returns true (first call) → fires.
+		const firesA = await evaluator.evaluate(
+			bashEvent("cd /feature/x && git push"),
+			makeCtx("/home"),
+			0,
+		);
+		assert.ok(firesA, "(a) both true → AND passes → rule fires");
+		assert.equal(conditionCalls, 1);
+
+		// (b) cwd matches + condition returns false (second call) → skipped.
+		const skipsB = await evaluator.evaluate(
+			bashEvent("cd /feature/y && git push"),
+			makeCtx("/home"),
+			0,
+		);
+		assert.equal(skipsB, undefined, "(b) cond false → AND fails → skipped");
+		assert.equal(conditionCalls, 2);
+
+		// (c) cwd doesn't match → evaluator short-circuits BEFORE the
+		// condition fn is called; the counter stays at 2.
+		const skipsC = await evaluator.evaluate(
+			bashEvent("cd /trunk/x && git push"),
+			makeCtx("/home"),
+			0,
+		);
+		assert.equal(
+			skipsC,
+			undefined,
+			"(c) cwd miss → AND fails → rule skipped",
+		);
+		assert.equal(
+			conditionCalls,
+			2,
+			"(c) short-circuit must NOT invoke condition when cwd already failed",
+		);
+	});
+
+	it("when.not inverts the nested clause: NOT (cwd AND condition)", async () => {
+		// Four-cell truth table for NOT (cwd AND condition):
+		//   cwd | cond | inner AND | NOT → rule fires?
+		//    F  |  F   |    F      |  T  → fires
+		//    F  |  T   |    F      |  T  → fires
+		//    T  |  F   |    F      |  T  → fires
+		//    T  |  T   |    T      |  F  → SKIPPED
+		// Only the (T, T) cell should skip; the other three fire.
+		let flag = false;
+		const rule: Rule = {
+			name: "not-multi-key",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "not-multi-key",
+			when: {
+				not: {
+					cwd: "^/main$",
+					condition: () => flag,
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+
+		async function run(cwdPath: string, f: boolean) {
+			flag = f;
+			return evaluator.evaluate(
+				bashEvent(`cd ${cwdPath} && git push`),
+				makeCtx("/home"),
+				0,
+			);
+		}
+
+		// (F, F): cwd mismatch + flag false.
+		assert.ok(await run("/other", false), "(F,F) → NOT(F)=T → fires");
+		// (F, T): cwd mismatch + flag true.
+		assert.ok(await run("/other", true), "(F,T) → NOT(F)=T → fires");
+		// (T, F): cwd match + flag false.
+		assert.ok(await run("/main", false), "(T,F) → NOT(F)=T → fires");
+		// (T, T): cwd match + flag true → inner AND is true → NOT flips to
+		// false → rule skipped.
+		assert.equal(
+			await run("/main", true),
+			undefined,
+			"(T,T) → NOT(T)=F → rule skipped",
+		);
+	});
+});
+
 describe("buildEvaluator: plugin predicates", () => {
 	it("dispatches to resolved.predicates[key]", async () => {
 		const seenArgs: unknown[] = [];
@@ -469,8 +700,11 @@ describe("buildEvaluator: override comments", () => {
 		);
 		assert.ok(res && res.block === true);
 		assert.equal(host.appended.length, 0);
-		// No override hint appended to the reason.
-		assert.doesNotMatch(res!.reason!, /To override/);
+		// Golden-string: noOverride:true must OMIT the override hint tail.
+		// Tighter than a `doesNotMatch(/To override/)` — pins the whole
+		// reason including the `[steering:…]` prefix and lack of trailing
+		// punctuation.
+		assert.equal(res!.reason, "[steering:no-force-push] no force push");
 	});
 
 	it("defaultNoOverride=true (default) blocks even with override comment", async () => {
@@ -511,7 +745,12 @@ describe("buildEvaluator: override comments", () => {
 		assert.equal(host.appended.length, 1);
 	});
 
-	it("block reason includes override hint only when overridable", async () => {
+	it("block reason is a stable golden string (overridable vs not)", async () => {
+		// Golden-string assertions instead of fuzzy regex: pin the
+		// leader character (`#` for bash), the em dash, the backticks,
+		// and the trailing period. These shapes are part of the public
+		// block-reason contract with pi's agent — drift in any
+		// character is an observable behaviour change.
 		const evNoOverride = buildEvaluator(
 			{ rules: [NO_FORCE_PUSH] }, // defaultNoOverride defaults to true
 			resolve(),
@@ -532,8 +771,15 @@ describe("buildEvaluator: override comments", () => {
 			makeCtx("/r"),
 			0,
 		);
-		assert.doesNotMatch(r1!.reason!, /To override/);
-		assert.match(r2!.reason!, /To override.*steering-override: no-force-push/);
+		// Not overridable → no hint tail.
+		assert.equal(r1!.reason, "[steering:no-force-push] no force push");
+		// Overridable → hint tail uses the `#` bash leader, em dash, and
+		// backticked comment template.
+		assert.equal(
+			r2!.reason,
+			"[steering:no-force-push] no force push To override, " +
+				"include a comment: `# steering-override: no-force-push \u2014 <reason>`.",
+		);
 	});
 });
 
@@ -550,13 +796,25 @@ describe("buildEvaluator: write / edit", () => {
 			pattern: "BEGIN RSA PRIVATE KEY",
 			reason: "no private keys",
 		};
-		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const evaluator = buildEvaluator(
+			// Overridable so the block reason carries the override hint.
+			// Lets us pin the write/edit `//` leader variant as a golden
+			// string (leader + em dash + backticks + trailing period).
+			{ defaultNoOverride: false, rules: [rule] },
+			resolve(),
+			makeHost(),
+		);
 		const res = await evaluator.evaluate(
 			writeEvent("/r/k.pem", "-----BEGIN RSA PRIVATE KEY-----"),
 			makeCtx("/r"),
 			0,
 		);
 		assert.ok(res && res.block === true);
+		assert.equal(
+			res!.reason,
+			"[steering:no-private-key] no private keys To override, " +
+				"include a comment: `// steering-override: no-private-key \u2014 <reason>`.",
+		);
 	});
 
 	it("field:path scans path instead of content", async () => {
@@ -787,6 +1045,99 @@ describe("buildEvaluator: walker reuse + exec cache", () => {
 		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
 		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
 		assert.equal(callCount, 2);
+	});
+
+	it("ctx.exec returns schema-shape ExecResult (exitCode, not code)", async () => {
+		// The evaluator owns an adapter (toSchemaExecResult in
+		// context.ts) that renames pi's `code` to the schema's
+		// `exitCode` and drops `killed`. This test pins the boundary:
+		// a host returning pi's shape must surface as the schema
+		// shape inside the predicate context.
+		const host: EvaluatorHost = {
+			exec: async () => ({
+				stdout: "x",
+				stderr: "y",
+				code: 42,
+				killed: false,
+			}),
+			appendEntry: () => {},
+		};
+		let observed: { hasExitCode: boolean; hasCode: boolean } | null = null;
+		const rule: Rule = {
+			name: "exec-shape",
+			tool: "bash",
+			field: "command",
+			pattern: "^git",
+			reason: "shape",
+			when: {
+				condition: async (ctx) => {
+					const r = await ctx.exec("git", ["status"]);
+					observed = {
+						hasExitCode: (r as { exitCode?: number }).exitCode === 42,
+						// Adapter drops `code` — accessing it returns undefined.
+						hasCode:
+							(r as unknown as { code?: number }).code !== undefined,
+					};
+					// Rule fires only when exitCode === 42, which
+					// implicitly proves the rename happened.
+					return r.exitCode === 42;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		const res = await evaluator.evaluate(
+			bashEvent("git status"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.ok(observed, "condition should have been invoked");
+		const obs = observed as unknown as {
+			hasExitCode: boolean;
+			hasCode: boolean;
+		};
+		assert.equal(obs.hasExitCode, true, "exitCode should equal 42");
+		assert.equal(
+			obs.hasCode,
+			false,
+			"adapter must drop pi's `code` field",
+		);
+	});
+
+	it("exec cache keys cwd — different cwd triggers a second call", async () => {
+		// Contrast with the "memoizes by (cmd, args, cwd)" test above,
+		// which reuses one cwd and expects a single call. Here the same
+		// (cmd, args) query runs twice with DIFFERENT cwd values; the
+		// cache key must differ so the host sees two invocations.
+		let callCount = 0;
+		const host: EvaluatorHost = {
+			exec: async () => {
+				callCount++;
+				return { stdout: "", stderr: "", code: 0, killed: false };
+			},
+			appendEntry: () => {},
+		};
+		const rule: Rule = {
+			name: "cwd-key",
+			tool: "bash",
+			field: "command",
+			pattern: "^git",
+			reason: "cwd-key",
+			when: {
+				condition: async (ctx) => {
+					await ctx.exec("git", ["status"], { cwd: "/repo-a" });
+					await ctx.exec("git", ["status"], { cwd: "/repo-b" });
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		await evaluator.evaluate(
+			bashEvent("git status"),
+			makeCtx("/home"),
+			0,
+		);
+		assert.equal(callCount, 2, "different cwds must not collide in cache");
 	});
 });
 
