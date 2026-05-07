@@ -76,14 +76,30 @@ function resolveTarget(current: string, target: string): string {
 }
 
 /**
- * `cd` modifier. Sequential: its effect propagates to subsequent sibling
- * commands in the same scope. Returns `undefined` when the target is
- * dynamic, which the walker translates into the `unknown` sentinel for
- * `cd`'s recorded value AND every subsequent command in the scope.
+ * Sequential modifier for `cd`. Updates the cwd for this command AND
+ * subsequent sibling commands.
  *
- * NOTE: the recorded cwd for the `cd` command itself is the PRE-cd cwd —
- * this is handled by the walker (sequential modifiers update only the
- * threaded value). So `cd /x` is recorded at the cwd BEFORE the change.
+ * IMPORTANT — Phase 1 exception to the Tracker contract.
+ *
+ * Per the Tracker contract (see tracker.ts), a modifier that can't
+ * resolve statically should return `undefined` so the walker emits
+ * `tracker.unknown`. For cd with a dynamic target (`cd $VAR`, `cd $(...)`,
+ * etc.) we deviate: we return `current` unchanged instead of `undefined`.
+ *
+ * Why: the current evaluator's `when.cwd` predicate is a plain regex.
+ * If we emitted `"unknown"` here, the regex `^/workplace/` would NOT
+ * match the literal string `"unknown"`, so any cd-prefixed dynamic path
+ * would bypass cwd-scoped rules. A command like `cd $VAR && rm -rf /x`
+ * would silently skip every cwd-scoped guardrail. That's a new silent-
+ * bypass class that didn't exist in the pre-generalization walker.
+ *
+ * The strict Tracker contract only becomes safe once predicates grow
+ * an explicit `onUnknown: "allow" | "block"` policy (ADR section 3).
+ * Phase 2 lands `onUnknown: "block"` as the default AND converts this
+ * modifier to return `undefined`, both together.
+ *
+ * Handles: absolute paths, relative paths, `..`, `~`, chained cd's.
+ * Skips: `cd -` (no-op; we don't track OLDPWD).
  */
 const cdModifier: Modifier<string> = {
 	scope: "sequential",
@@ -93,21 +109,10 @@ const cdModifier: Modifier<string> = {
 		// `cd` with no arguments → HOME.
 		if (targetWord === undefined) return resolveHome(current);
 
-		// Non-static target: walker records `unknown` for this command AND
-		// subsequent siblings. Matches the original behavior of recording
-		// the `cd` at pre-cd cwd AND leaving subsequent commands at that
-		// pre-cd cwd — EXCEPT the new semantics propagate `unknown` forward
-		// instead. That's the intended upgrade: predicates now see the
-		// `unknown` sentinel and can apply their `onUnknown` policy.
-		//
-		// For the Phase 1 ports we preserve the existing test coverage by
-		// matching the prior effective-cwd behavior exactly: the old walker
-		// stopped propagating cd effects on a dynamic target AND recorded
-		// the cd at pre-cd cwd AND left subsequent commands at pre-cd cwd.
-		// We do that by returning `current` unchanged for sequential here —
-		// matching prior behaviour. Dynamic cwd propagation will be revisited
-		// when predicates grow an explicit `unknown` sentinel interaction
-		// (ADR section 3, "onUnknown policy" — Phase 2+).
+		// Non-static target (e.g. `cd $VAR`, `cd $(pwd)`): see the Phase 1
+		// exception documented in this function's header comment. We return
+		// `current` unchanged instead of `undefined` to avoid a silent
+		// bypass of cwd-scoped predicates whose `when.cwd` is a plain regex.
 		if (!isStaticallyResolvable(targetWord)) return current;
 
 		const target = targetWord.value ?? targetWord.text;
@@ -280,6 +285,19 @@ function applyEnvCwd(args: readonly Word[], current: string): string {
  *
  * `subshellSemantics` is `"isolated"` — real bash semantics: a subshell
  * can `cd` around internally without affecting its parent.
+ *
+ * ## Note for plugin authors
+ *
+ * `cwdTracker` is the reference built-in tracker, but its `cd` modifier
+ * is a documented Phase-1 exception to the Tracker contract: it returns
+ * `current` instead of `undefined` on unresolvable targets. DO NOT copy
+ * this pattern into a new tracker (e.g. a branch tracker, an env tracker).
+ *
+ * The canonical contract for your own trackers is: if a modifier cannot
+ * statically resolve its result, return `undefined`. The walker emits
+ * `tracker.unknown` and predicates consuming that tracker apply their
+ * `onUnknown: "allow" | "block"` policy (default `"block"` once that
+ * schema lands in Phase 2). See `tracker.ts` for the full contract.
  */
 export const cwdTracker: Tracker<string> = {
 	initial: "/",
