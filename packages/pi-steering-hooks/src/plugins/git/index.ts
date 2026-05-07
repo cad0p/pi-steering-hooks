@@ -56,8 +56,14 @@ import { rules } from "./rules.ts";
 /**
  * The git plugin. Default export so `import gitPlugin from
  * "@cad0p/pi-steering-hooks/plugins/git"` gives you the whole thing.
+ *
+ * `as const satisfies Plugin` (rather than `: Plugin`) preserves the
+ * literal `name: "git"` in the inferred type. That literal is the
+ * input to any future `AllPluginNames<P>`-style inference in
+ * `defineConfig`, which needs `name: "git"`, not `name: string`, to
+ * offer string-literal completion for e.g. `disablePlugins`.
  */
-const gitPlugin: Plugin = {
+const gitPlugin = {
 	name: "git",
 	predicates,
 	rules: [...rules],
@@ -73,7 +79,17 @@ const gitPlugin: Plugin = {
 			git: gitCwdExtensions,
 		},
 	},
-};
+} as const satisfies Plugin;
+
+/**
+ * Type-level regression sentinel: if the plugin literal ever loses
+ * the `name: "git"` narrowing (for example, someone reintroducing
+ * `: Plugin` annotation), the inferred type of `GIT_PLUGIN_NAME`
+ * widens to `string` and any downstream literal-name inference
+ * breaks. Keep this export in place to fail compilation loudly when
+ * that happens.
+ */
+export const GIT_PLUGIN_NAME: "git" = gitPlugin.name;
 
 export default gitPlugin;
 
