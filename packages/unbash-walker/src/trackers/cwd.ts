@@ -13,13 +13,9 @@
  *     apply to the command they're attached to only).
  *
  * Both are now modifiers on the same `cwd` tracker, differing only in
- * their `scope`. See the accepted ADR at
- * `.napkin/decisions/2026-05-06T15-00-pi-steering-hooks-config-format.md`
- * (section "Design" → "Built-in cwd tracker") for the rationale. The
- * per-command override behavior is preserved from its original home in
- * `cwd-override-flags.ts` (see the superseded design note
- * `.napkin/features/pi-infra/open-source-steering-hooks/walker-cwd-override-flags-design.md`
- * for the why).
+ * their `scope`. See the accepted ADR (linked from PR #2's description)
+ * for the rationale. The per-command override behavior is preserved from
+ * its original home in the now-removed `cwd-override-flags.ts`.
  *
  * Semantics modelled (identical to the original `effectiveCwd`):
  *

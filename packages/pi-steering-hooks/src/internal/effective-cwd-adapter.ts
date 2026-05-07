@@ -3,10 +3,9 @@
 //
 // Local adapter, to be removed in Phase 2.
 //
-// The Phase 1 ADR for PR #2 (see
-// `.napkin/decisions/2026-05-06T15-00-pi-steering-hooks-config-format.md`)
-// generalized unbash-walker's `effectiveCwd` into a `walk(script, state,
-// trackers, refs?)` function with a tracker registry. The old single-purpose
+// The Phase 1 ADR for PR #2 (linked from the PR description) generalized
+// unbash-walker's `effectiveCwd` into a `walk(script, state, trackers,
+// refs?)` function with a tracker registry. The old single-purpose
 // `effectiveCwd` export is gone — no back-compat shim in `unbash-walker`
 // itself, per the ADR's "no compat wrappers" directive.
 //

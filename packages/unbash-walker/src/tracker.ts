@@ -19,10 +19,9 @@
  * trackers, the walker threads each tracker's state through the script, and
  * every extracted command gets a snapshot of every tracked dimension.
  *
- * See the accepted ADR at
- * `.napkin/decisions/2026-05-06T15-00-pi-steering-hooks-config-format.md`
- * (section "Design" → "Tracker API — extensible walker state registry") for
- * the full design rationale.
+ * See the accepted ADR (linked from PR #2's description) for the full
+ * design rationale — section "Design" → "Tracker API — extensible walker
+ * state registry".
  */
 
 import type {
