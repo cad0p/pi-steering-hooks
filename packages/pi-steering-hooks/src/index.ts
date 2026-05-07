@@ -238,3 +238,40 @@ export {
 	prepareBashContext,
 } from "./evaluator.ts";
 export { parseConfig, loadConfigs, buildRules } from "./loader.ts";
+
+// ---------------------------------------------------------------------------
+// v2 surface — NOT yet wired to the extension runtime (Phase 3).
+//
+// The new TS-first config system (defineConfig, TS-only loader, Plugin /
+// Observer / PredicateFn shapes) is additive in Phase 2: plugin authors
+// can start depending on these types, but `register()` above still uses
+// the v1 evaluator + JSON loader. Phase 3 flips the extension to consume
+// the merged SteeringConfig produced by `loadSteeringConfig`.
+// ---------------------------------------------------------------------------
+
+export {
+	buildConfig,
+	defineConfig,
+	fromJSON,
+	FromJSONError,
+	loadConfigs as loadConfigsV2,
+	loadSteeringConfig,
+} from "./v2/index.ts";
+
+export type {
+	ExecOpts,
+	ExecResult,
+	Observer,
+	ObserverContext,
+	ObserverWatch,
+	Pattern,
+	Plugin,
+	PredicateContext,
+	PredicateFn,
+	PredicateHandler,
+	PredicateToolInput,
+	Rule as V2Rule,
+	SteeringConfig as V2SteeringConfig,
+	ToolResultEvent,
+	WhenClause,
+} from "./v2/index.ts";
