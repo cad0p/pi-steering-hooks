@@ -199,6 +199,52 @@ describe("branchTracker: subshell isolation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Pre-subcommand flags
+// ---------------------------------------------------------------------------
+
+describe("branchTracker: pre-subcommand flags", () => {
+	it("`git -C /other checkout feat && git commit` advances branch to feat", () => {
+		const walked = walkBranches(
+			"git -C /other checkout feat && git commit -m 'x'",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git commit"), "feat");
+	});
+
+	it("`git -c key=val checkout feat` advances (-c consumes next arg)", () => {
+		const walked = walkBranches(
+			"git -c color.ui=never checkout feat && git commit",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git commit"), "feat");
+	});
+
+	it("`git --no-pager checkout feat` advances (long flag without value)", () => {
+		const walked = walkBranches(
+			"git --no-pager checkout feat && git commit",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git commit"), "feat");
+	});
+
+	it("`git --git-dir=/g checkout feat` advances (long flag with =value)", () => {
+		const walked = walkBranches(
+			"git --git-dir=/g checkout feat && git commit",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git commit"), "feat");
+	});
+
+	it("`git -C /other checkout -b new-branch` advances via -b path", () => {
+		const walked = walkBranches(
+			"git -C /other checkout -b new-branch && git commit",
+			"main",
+		);
+		assert.equal(branchOf(walked, "git commit"), "new-branch");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Motivating case: `git checkout A && git commit`
 // ---------------------------------------------------------------------------
 

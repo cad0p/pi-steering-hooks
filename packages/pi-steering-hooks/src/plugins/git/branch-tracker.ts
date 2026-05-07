@@ -73,27 +73,54 @@ const NEW_BRANCH_FLAGS = new Set(["-b", "-c"]);
  * `git commit -m "x"` does NOT collapse the branch to `unknown`);
  * returns `undefined` when the target branch name can't be resolved
  * statically.
+ *
+ * Pre-subcommand flags are skipped before we look at the subcommand
+ * token. Git accepts `git -C PATH`, `git -c KEY=VAL`, `git --no-pager`,
+ * `git --git-dir=/x`, `git --work-tree=/y`, `git --paginate`, etc.
+ * before the subcommand. Without this skip, `git -C /other checkout
+ * feat` would look at the `-C` flag as the subcommand, miss the
+ * checkout, and silently bypass `no-main-commit`. This mirrors the
+ * `applyGitCwd` flag scanner in `unbash-walker/src/trackers/cwd.ts`:
+ * only `-C <path>` and `-c <key=value>` consume an additional token;
+ * every other flag form (short cluster, long with or without attached
+ * value) is a single token.
  */
 const gitBranchModifier: Modifier<string> = {
 	scope: "sequential",
 	apply: (args, current) => {
-		// No subcommand - e.g. bare `git` prints help. Branch unchanged.
-		const subcmdWord = args[0];
+		// Scan past pre-subcommand flags to find the real subcommand.
+		// Known value-consuming flags: `-C <path>`, `-c <key=val>`.
+		// Others (`--no-pager`, `--git-dir=/x`, `--work-tree=/y`,
+		// `--paginate`, `-p`, etc.) are single tokens.
+		let i = 0;
+		while (i < args.length) {
+			const tokWord = args[i];
+			const tok = tokWord?.value ?? tokWord?.text ?? "";
+			if (!tok.startsWith("-")) break; // found the subcommand
+			if (tok === "-C" || tok === "-c") {
+				i += 2;
+				continue;
+			}
+			i++; // --long-flag, --long=value, or -shortcluster
+		}
+
+		// No subcommand - e.g. bare `git` or `git --help`. Branch unchanged.
+		const subcmdWord = args[i];
 		if (!subcmdWord) return current;
 		const subcmd = subcmdWord.value ?? subcmdWord.text;
 		if (!subcmd || !CHECKOUT_SUBCOMMANDS.has(subcmd)) return current;
 
 		// `git checkout` / `git switch` with no further args: also a
 		// help / error case. Leave branch alone.
-		const firstArgWord = args[1];
+		const firstArgWord = args[i + 1];
 		if (!firstArgWord) return current;
 		const firstArg = firstArgWord.value ?? firstArgWord.text;
 		if (firstArg === undefined) return current;
 
 		// `git checkout -b NEW` / `git switch -c NEW` - the branch
-		// argument is at position 2.
+		// argument is at position i + 2.
 		if (NEW_BRANCH_FLAGS.has(firstArg)) {
-			const newBranchWord = args[2];
+			const newBranchWord = args[i + 2];
 			if (!newBranchWord) return current;
 			if (!isStaticallyResolvable(newBranchWord)) return undefined;
 			const newBranch = newBranchWord.value ?? newBranchWord.text;
