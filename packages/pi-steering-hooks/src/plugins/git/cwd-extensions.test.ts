@@ -199,3 +199,22 @@ describe("gitCwdExtensions: non-interference", () => {
 		assert.equal(cwdOf(walked, "git log"), "/initial");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Accepted false-positives
+// ---------------------------------------------------------------------------
+
+describe("cwd extensions: accepted false-positives", () => {
+	it("`git log --git-dir=/repo` over-matches (post-subcommand flag)", () => {
+		// Documented accepted false-positive: we scan all args; real git
+		// treats post-subcommand --git-dir= as a pathspec. Over-match rate
+		// is low; stopping at subcommand would break -C composition.
+		const walked = walkCwd("git log --git-dir=/repo", "/start");
+		assert.equal(cwdOf(walked, "git log"), "/repo");
+	});
+
+	it("`git diff -- --git-dir=/x` over-matches (after `--` should be pathspec)", () => {
+		const walked = walkCwd("git diff -- --git-dir=/x", "/start");
+		assert.equal(cwdOf(walked, "git diff"), "/x");
+	});
+});

@@ -64,6 +64,21 @@
  *     "the command's effective cwd is this path". If a rule author
  *     needs the distinction (e.g. a repo-path vs tree-path
  *     predicate), they can split it in their own plugin.
+ *
+ * Known accepted false-positives:
+ *
+ *   - `git log --git-dir=/repo` -> cwd recorded as /repo. Real git
+ *     treats post-subcommand `--git-dir=` as a pathspec, not a
+ *     global flag. Over-match rate is low in practice (agents emit
+ *     `git --git-dir=/x log`, not the inverse), and stopping the
+ *     scan at the first non-flag token would break composition with
+ *     the core `-C` modifier which iterates the same args list.
+ *     Accepted as a Phase-4 corner.
+ *   - `git diff -- --git-dir=/x` -> cwd recorded as /x. Arguments
+ *     after `--` are always pathspecs in real git. Same mitigation
+ *     rationale as above; stopping the scan at `--` would still
+ *     need to run after the core `-C` scanner has finished, not
+ *     before, to avoid the composition breakage.
  */
 
 import * as path from "node:path";
