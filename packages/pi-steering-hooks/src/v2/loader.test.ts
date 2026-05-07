@@ -86,6 +86,35 @@ describe("v2/loader: ancestorChain", () => {
 			if (prior !== undefined) process.env["HOME"] = prior;
 		}
 	});
+
+	it("cwd === $HOME returns [$HOME] only", () => {
+		const prior = process.env["HOME"];
+		const home = mkdtempSync(join(tmpdir(), "pi-steering-v2-chain-home-"));
+		process.env["HOME"] = home;
+		try {
+			const chain = ancestorChain(home);
+			assert.deepEqual(chain, [home]);
+		} finally {
+			if (prior === undefined) delete process.env["HOME"];
+			else process.env["HOME"] = prior;
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	it("cwd OUTSIDE $HOME tree walks to filesystem root", () => {
+		const prior = process.env["HOME"];
+		process.env["HOME"] = "/home/user";
+		try {
+			// cwd is in /other/path — no shared prefix with $HOME, so the
+			// walk should run to filesystem root rather than terminating
+			// at the (never-reached) $HOME sentinel.
+			const chain = ancestorChain("/other/path");
+			assert.deepEqual(chain, ["/other/path", "/other", "/"]);
+		} finally {
+			if (prior === undefined) delete process.env["HOME"];
+			else process.env["HOME"] = prior;
+		}
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -194,11 +223,42 @@ describe("v2/loader: loadConfigs", () => {
 		assert.deepEqual(layers[0]?.disable, ["directory"]);
 	});
 
+	it("warns when BOTH steering.ts and steering/index.ts coexist, uses directory form", async () => {
+		const cwd = join(tmp, "project");
+		mkdirSync(cwd, { recursive: true });
+		writeConfig(
+			join(cwd, ".pi", "steering.ts"),
+			configModule("{ disable: ['flat-form'] }"),
+		);
+		writeConfig(
+			join(cwd, ".pi", "steering", "index.ts"),
+			configModule("{ disable: ['dir-form'] }"),
+		);
+		const layers = await loadConfigs(cwd);
+		assert.equal(layers.length, 1);
+		assert.deepEqual(
+			layers[0]?.disable,
+			["dir-form"],
+			"directory form should win on ambiguous coexistence",
+		);
+		assert.ok(
+			warnings.some(
+				(w) =>
+					w.includes("both .pi/steering.ts and .pi/steering/index.ts") &&
+					w.includes("using directory form"),
+			),
+			`expected coexistence warning; got: ${JSON.stringify(warnings)}`,
+		);
+	});
+
 	it("warns about non-.ts files under .pi/steering/", async () => {
 		const cwd = join(tmp, "project");
 		mkdirSync(cwd, { recursive: true });
-		// Create the steering/ dir with a stray non-.ts file AND no
-		// index.ts, so the loader has a reason to walk the dir.
+		// Create the steering/ dir with stray non-.ts files AND no
+		// index.ts, so the loader has a reason to walk the dir. Cover
+		// all four file extensions users are likely to fat-finger into
+		// the directory (.mjs / .json per the original test, plus .mts
+		// and .js to catch the TS-lookalike + bare-JS cases).
 		mkdirSync(join(cwd, ".pi", "steering"), { recursive: true });
 		writeFileSync(
 			join(cwd, ".pi", "steering", "rules.mjs"),
@@ -210,13 +270,25 @@ describe("v2/loader: loadConfigs", () => {
 			"{}",
 			"utf8",
 		);
+		writeFileSync(
+			join(cwd, ".pi", "steering", "rules.mts"),
+			"// looks like ts but isn't .ts",
+			"utf8",
+		);
+		writeFileSync(
+			join(cwd, ".pi", "steering", "rules.js"),
+			"// plain js",
+			"utf8",
+		);
 		await loadConfigs(cwd);
 		const relevant = warnings.filter((w) =>
 			w.includes("ignoring non-.ts file"),
 		);
-		assert.equal(relevant.length, 2);
+		assert.equal(relevant.length, 4);
 		assert.ok(relevant.some((w) => w.endsWith("rules.mjs")));
 		assert.ok(relevant.some((w) => w.endsWith("rules.json")));
+		assert.ok(relevant.some((w) => w.endsWith("rules.mts")));
+		assert.ok(relevant.some((w) => w.endsWith("rules.js")));
 	});
 
 	it("does NOT warn about .ts helpers under .pi/steering/", async () => {
@@ -265,6 +337,71 @@ describe("v2/loader: loadConfigs", () => {
 			warnings.some((w) =>
 				w.includes("must be a SteeringConfig object"),
 			),
+		);
+	});
+
+	it("logs + skips a module with no default export", async () => {
+		const cwd = join(tmp, "project");
+		mkdirSync(cwd, { recursive: true });
+		// Named exports only — no `export default`. This used to silently
+		// fall back to treating the module namespace itself as the
+		// config (Fix 2 removed that fallback).
+		writeConfig(
+			join(cwd, ".pi", "steering.ts"),
+			"export const rules = [];\nexport const plugins = [];\n",
+		);
+		const layers = await loadConfigs(cwd);
+		assert.deepEqual(layers, []);
+		assert.ok(
+			warnings.some((w) => w.includes("must have a default export")),
+			`expected 'must have a default export' warning; got: ${JSON.stringify(
+				warnings,
+			)}`,
+		);
+	});
+
+	it("logs + skips a module whose default export is an array", async () => {
+		const cwd = join(tmp, "project");
+		mkdirSync(cwd, { recursive: true });
+		// Arrays pass `typeof === 'object'`; the hardened guard (Fix 3)
+		// rejects them explicitly with an "array" tag in the message.
+		writeConfig(
+			join(cwd, ".pi", "steering.ts"),
+			"export default [];",
+		);
+		const layers = await loadConfigs(cwd);
+		assert.deepEqual(layers, []);
+		assert.ok(
+			warnings.some(
+				(w) =>
+					w.includes("must be a SteeringConfig object") &&
+					w.includes("got array"),
+			),
+			`expected array-rejection warning; got: ${JSON.stringify(warnings)}`,
+		);
+	});
+
+	it("handles heterogeneous config forms across layers (inner flat + outer dir)", async () => {
+		// Inner (session cwd) uses the single-file form .pi/steering.ts;
+		// outer ancestor uses the directory form .pi/steering/index.ts.
+		// Both layers should be collected inner-first without the
+		// loader tripping on the form mismatch.
+		const outer = join(tmp, "a");
+		const inner = join(tmp, "a", "b");
+		mkdirSync(inner, { recursive: true });
+		writeConfig(
+			join(inner, ".pi", "steering.ts"),
+			configModule("{ disable: ['inner-flat'] }"),
+		);
+		writeConfig(
+			join(outer, ".pi", "steering", "index.ts"),
+			configModule("{ disable: ['outer-dir'] }"),
+		);
+		const layers = await loadConfigs(inner);
+		assert.deepEqual(
+			layers.map((l) => l.disable?.[0]),
+			["inner-flat", "outer-dir"],
+			"expected inner-first ordering regardless of per-layer form",
 		);
 	});
 });
@@ -345,6 +482,45 @@ describe("v2/loader: buildConfig", () => {
 		assert.deepEqual(warnings, []);
 	});
 
+	it("soft-warns on within-layer duplicate rules (keeps first)", () => {
+		const merged = buildConfig([
+			{
+				rules: [
+					{
+						name: "dup",
+						tool: "bash",
+						field: "command",
+						pattern: /^FIRST/,
+						reason: "first-wins",
+					},
+					{
+						name: "dup",
+						tool: "bash",
+						field: "command",
+						pattern: /^SECOND/,
+						reason: "dropped",
+					},
+				],
+			},
+		]);
+		assert.equal(merged.rules?.length, 1);
+		assert.equal(
+			merged.rules?.[0]?.reason,
+			"first-wins",
+			"first-registered rule should survive within a layer",
+		);
+		assert.ok(
+			warnings.some(
+				(w) =>
+					w.includes('duplicate rule "dup"') &&
+					w.includes("within single config layer"),
+			),
+			`expected within-layer rule-dup warning; got: ${JSON.stringify(
+				warnings,
+			)}`,
+		);
+	});
+
 	it("unions disable / disablePlugins across layers", () => {
 		const inner: SteeringConfig = {
 			disable: ["a"],
@@ -407,6 +583,25 @@ describe("v2/loader: buildConfig", () => {
 		]);
 		assert.equal(merged.observers?.length, 1);
 		assert.ok(warnings.some((w) => w.includes('duplicate observer "o"')));
+	});
+
+	it("inner observer by same name overrides outer (and stays silent)", () => {
+		const innerFn = () => {};
+		const outerFn = () => {};
+		const merged = buildConfig([
+			{ observers: [{ name: "shared", onResult: innerFn }] },
+			{ observers: [{ name: "shared", onResult: outerFn }] },
+		]);
+		assert.equal(merged.observers?.length, 1);
+		assert.strictEqual(
+			merged.observers?.[0]?.onResult,
+			innerFn,
+			"inner-layer observer should win on cross-layer name collision",
+		);
+		// Cross-layer observer overrides are the intended customization
+		// path — mirror the cross-layer rule-override test and assert no
+		// warning fires. Only within-layer duplicates warn.
+		assert.deepEqual(warnings, []);
 	});
 
 	it("hard-errors on tracker name collision across plugins", () => {
