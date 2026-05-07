@@ -254,6 +254,8 @@ export {
 	defineConfig,
 	fromJSON,
 	FromJSONError,
+	// TODO(phase-3): once the v1 loader is deleted, drop the `as loadConfigsV2`
+	// alias and export `loadConfigs` under its unqualified name.
 	loadConfigs as loadConfigsV2,
 	loadSteeringConfig,
 } from "./v2/index.ts";

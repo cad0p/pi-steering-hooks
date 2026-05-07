@@ -107,6 +107,37 @@ export interface DefineConfigInput<
  * {@link SteeringConfig} shape doesn't constrain mutability). The
  * return value is safe to pass to the loader / buildConfig.
  *
+ * ## Authoring pattern — preserving observer/plugin names for inference
+ *
+ * For compile-time typo detection on rule `observer` references, declare
+ * your observers and plugins with `as const satisfies` so TypeScript
+ * preserves the literal `name` values through to `AllObserverNames`:
+ *
+ *     const myObs = {
+ *       name: "description-read",
+ *       onResult: (event, ctx) => { ... },
+ *     } as const satisfies Observer;
+ *
+ *     const myPlugin = {
+ *       name: "my-plugin",
+ *       observers: [{ name: "sync-done", onResult: ... }],
+ *     } as const satisfies Plugin;
+ *
+ * Authors who prefer type annotations (`const myObs: Observer = ...`)
+ * get widened `name: string`, which collapses `AllObserverNames` to
+ * `string` and silently disables typo detection. Use `as const satisfies`
+ * to keep the inference.
+ *
+ * ## Behavior with no observers declared
+ *
+ * When no plugins contribute observers AND no inline `observers[]` is
+ * passed, `AllObserverNames` resolves to `never`, which causes ANY
+ * string `observer` reference on a Rule to be a compile error. This is
+ * deliberate — fail-closed on unknown observer names. For configs that
+ * deliberately reference observers by name without registering them
+ * inline (e.g., deferred to runtime), use `satisfies SteeringConfig`
+ * as a fallback; you lose typo detection but regain flexibility.
+ *
  * @example
  *   export default defineConfig({
  *     plugins: [gitPlugin],

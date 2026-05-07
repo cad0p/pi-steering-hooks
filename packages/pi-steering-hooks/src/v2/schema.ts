@@ -572,6 +572,11 @@ export interface SteeringConfig {
 	 * Walk-up merge: inner layer wins when specified; missing layer
 	 * leaves the running value alone.
 	 *
+	 * `buildConfig` preserves `undefined` in the merged output so
+	 * downstream evaluators can distinguish "user didn't specify" from
+	 * "user explicitly chose false". The fail-closed `?? true` coercion
+	 * happens at evaluator time.
+	 *
 	 * See ADR "Design → Override default".
 	 */
 	defaultNoOverride?: boolean;

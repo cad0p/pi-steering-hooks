@@ -59,6 +59,14 @@ const MIN_NODE_MAJOR = 22;
 /**
  * Runtime check: throws with an actionable message when Node is older
  * than the minimum supported version.
+ *
+ * Note: native TS type-stripping shipped stable in Node 22.6+. On Node
+ * 22.0–22.5, dynamic import of `.ts` files requires the
+ * `--experimental-strip-types` runtime flag; without it, imports fail
+ * with `ERR_UNKNOWN_FILE_EXTENSION`. The error is caught at the per-layer
+ * boundary and logged, but users seeing repeated import failures on Node
+ * 22.0–22.5 should either upgrade Node or add the flag to their pi
+ * invocation.
  */
 function assertNodeVersion(): void {
 	const raw = process.versions.node;
