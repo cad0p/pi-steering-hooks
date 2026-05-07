@@ -16,6 +16,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "pi-steering": "./dist/bin/pi-steering.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
