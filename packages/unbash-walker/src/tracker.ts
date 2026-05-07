@@ -68,29 +68,43 @@ export type SubshellSemantics = "isolated" | "global";
  * The walker applies both kinds during `handleCommand`: sequential first
  * (updates the value recorded AND threaded), per-command second (updates
  * ONLY the value recorded for this command).
+ *
+ * Discriminated union (not flattened interface). The two variants have
+ * identical `apply` signatures today, but the union form leaves room for
+ * scope-specific metadata in future revisions (e.g., per-command modifiers
+ * declaring their flag vocabulary for smarter tokenization).
+ *
+ * The `apply` contract is the same across both variants:
+ *
+ * Given the command's argument words and the tracker's current value,
+ * return the new value.
+ *
+ * Return `undefined` to signal "can't resolve statically" (e.g. the
+ * target is a `$VAR` or `$(cmd)` whose runtime value we refuse to
+ * invent). The walker responds to `undefined`:
+ *
+ *   - For `per-command` modifiers: the command's recorded value becomes
+ *     the tracker's `unknown` sentinel; the threaded value is left
+ *     unchanged (per-command overrides don't propagate anyway).
+ *   - For `sequential` modifiers: the threaded value also becomes the
+ *     `unknown` sentinel, so every subsequent command in this scope
+ *     sees `unknown` and the walker stops trying to refine it further.
+ *
+ * `apply` must be pure — no I/O, no mutation of `args` or `current`.
  */
-export interface Modifier<T> {
-	/** See {@link Modifier} for semantics. */
-	scope: "sequential" | "per-command";
-	/**
-	 * Given the command's argument words and the tracker's current value,
-	 * return the new value.
-	 *
-	 * Return `undefined` to signal "can't resolve statically" (e.g. the
-	 * target is a `$VAR` or `$(cmd)` whose runtime value we refuse to
-	 * invent). The walker responds to `undefined`:
-	 *
-	 *   - For `per-command` modifiers: the command's recorded value becomes
-	 *     the tracker's `unknown` sentinel; the threaded value is left
-	 *     unchanged (per-command overrides don't propagate anyway).
-	 *   - For `sequential` modifiers: the threaded value also becomes the
-	 *     `unknown` sentinel, so every subsequent command in this scope
-	 *     sees `unknown` and the walker stops trying to refine it further.
-	 *
-	 * `apply` must be pure — no I/O, no mutation of `args` or `current`.
-	 */
-	apply: (args: readonly Word[], current: T) => T | undefined;
-}
+export type Modifier<T> =
+	| {
+			/** Propagates to this command AND all subsequent sibling commands.
+			 *  Example: `cd DIR`, `git checkout X`. */
+			scope: "sequential";
+			apply: (args: readonly Word[], current: T) => T | undefined;
+	  }
+	| {
+			/** Applies to this command only; caller's next-command state is unchanged.
+			 *  Example: `git -C DIR subcmd`, `env -C DIR cmd`, `make -C DIR target`. */
+			scope: "per-command";
+			apply: (args: readonly Word[], current: T) => T | undefined;
+	  };
 
 /**
  * A named dimension of walker state.
