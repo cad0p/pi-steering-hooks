@@ -260,6 +260,11 @@ describe("cwdTracker via walk", () => {
 		it("`cd $VAR && cmd` — cmd sees initial cwd (parameter expansion)", () => {
 			const cwds = cwdByName("cd $VAR && cmd", "/start");
 			assert.equal(cwds["cmd"], "/start");
+			assert.notStrictEqual(
+				cwds["cmd"],
+				cwdTracker.unknown,
+				"Phase 1 preserves prior behavior: cd with dynamic target keeps current cwd, does NOT emit unknown sentinel. Phase 2 flips this simultaneously with onUnknown:block predicate default.",
+			);
 		});
 
 		it('`cd "$HOME/x" && cmd` — cmd sees initial cwd (double-quoted expansion)', () => {

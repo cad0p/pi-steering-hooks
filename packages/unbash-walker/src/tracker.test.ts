@@ -16,6 +16,8 @@ import {
 	type Modifier,
 	type Tracker,
 } from "./tracker.ts";
+import { cwdTracker } from "./trackers/cwd.ts";
+import type { CommandRef } from "./types.ts";
 
 // --------------------------------------------------------------------------
 // Test trackers
@@ -289,6 +291,66 @@ describe("walk — generic Tracker semantics", () => {
 			assert.equal(first?.counter, 10);
 			assert.equal(first?.label, "seeded");
 		});
+
+		it("multi-tracker + same basename: one command can advance two trackers with independent modifiers", () => {
+			// Synthetic branch tracker: sequential modifier on `git` that reads
+			// the subcommand and records a branch label for `checkout`. Shares
+			// the `git` basename with cwdTracker's per-command `-C` modifier.
+			const branchTracker: Tracker<string> = {
+				initial: "main",
+				unknown: "unknown",
+				modifiers: {
+					git: {
+						scope: "sequential",
+						apply: (args, current) => {
+							const subcmd = args[0]?.value ?? args[0]?.text;
+							if (subcmd !== "checkout") return current;
+							const target = args[1]?.value ?? args[1]?.text;
+							return target ?? current;
+						},
+					},
+				},
+			};
+
+			const ast = parseBash(
+				"cd /repo && git checkout feat && git -C /other push && git commit -m x",
+			);
+			const refs = extractAllCommandsFromAST(ast, "");
+			const result = walk(
+				ast,
+				{ cwd: "/start", branch: "main" },
+				{ cwd: cwdTracker, branch: branchTracker },
+				refs,
+			);
+
+			// Pick out the three `git` commands by arg inspection
+			const byArgs = (first: string): readonly CommandRef[] =>
+				refs.filter(
+					(r) =>
+						getBasename(r) === "git" &&
+						(r.node.suffix[0]?.value ?? r.node.suffix[0]?.text) === first,
+				);
+
+			const checkoutRef = byArgs("checkout")[0]!;
+			const pushRef = byArgs("-C")[0]!;
+			const commitRef = byArgs("commit")[0]!;
+
+			// checkout: both trackers have advanced via sequential cd; branch is
+			// initial (checkout itself is the mutation, not the post-state).
+			assert.equal(result.get(checkoutRef)?.cwd, "/repo");
+			assert.equal(result.get(checkoutRef)?.branch, "main");
+
+			// push: cwd overridden per-command by `-C /other`, but the next
+			// command's cwd is still /repo (per-command doesn't propagate).
+			// branch: checkout's sequential effect has propagated → "feat".
+			assert.equal(result.get(pushRef)?.cwd, "/other");
+			assert.equal(result.get(pushRef)?.branch, "feat");
+
+			// commit: cwd back to /repo (push's -C didn't propagate).
+			// branch: still "feat" — the git commit doesn't modify branch.
+			assert.equal(result.get(commitRef)?.cwd, "/repo");
+			assert.equal(result.get(commitRef)?.branch, "feat");
+		});
 	});
 
 	describe("control flow", () => {
@@ -335,6 +397,50 @@ describe("walk — generic Tracker semantics", () => {
 				labelTracker,
 			);
 			assert.equal(out.at(-1)?.[1], "initial");
+		});
+
+		it("per-tracker branch merge: one tracker's branches agree, another's disagree, fallback is per-tracker", () => {
+			// A synthetic tracker whose sequential `mark X` modifier sets the
+			// current value to X. Shares no basename with cwd.
+			const labelTracker: Tracker<string> = {
+				initial: "pre",
+				unknown: "unknown",
+				modifiers: {
+					mark: {
+						scope: "sequential",
+						apply: (args) => (args[0]?.value ?? args[0]?.text) ?? undefined,
+					},
+				},
+			};
+
+			// `if`: both branches `cd /agreed` (cwd agrees at /agreed) but the
+			// `then` branch marks "A" and the `else` branch marks "B" (label
+			// disagrees). After the if, `ls`:
+			//   cwd.ls  === "/agreed"   (branches agree → propagated)
+			//   label.ls === "pre"       (branches disagree → pre-if fallback)
+			const ast = parseBash(
+				"if test -f x; then cd /agreed && mark A; else cd /agreed && mark B; fi\nls",
+			);
+			const refs = extractAllCommandsFromAST(ast, "");
+			const result = walk(
+				ast,
+				{ cwd: "/start", label: "pre" },
+				{ cwd: cwdTracker, label: labelTracker },
+				refs,
+			);
+
+			const ls = refs.find((r) => getBasename(r) === "ls");
+			assert.ok(ls);
+			assert.equal(
+				result.get(ls!)?.cwd,
+				"/agreed",
+				"cwd tracker propagates because branches agree on the final cwd",
+			);
+			assert.equal(
+				result.get(ls!)?.label,
+				"pre",
+				"label tracker falls back to pre-if value because branches disagree",
+			);
 		});
 	});
 
