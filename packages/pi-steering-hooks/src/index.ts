@@ -169,10 +169,6 @@ export async function buildSessionRuntime(
 // Consumers embedding the engine (building their own extensions, a CLI
 // that lints commands, a test harness, …) import these from the
 // package root.
-//
-// TODO(phase-3): Commit 4 unifies naming — drops the `V2*` aliases and
-// the `loadConfigs as loadConfigsV2` alias now that the v1 loader is
-// gone.
 // ---------------------------------------------------------------------------
 
 export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
@@ -182,7 +178,7 @@ export {
 	defineConfig,
 	fromJSON,
 	FromJSONError,
-	loadConfigs as loadConfigsV2,
+	loadConfigs,
 	loadSteeringConfig,
 } from "./v2/index.ts";
 
@@ -198,8 +194,8 @@ export type {
 	PredicateFn,
 	PredicateHandler,
 	PredicateToolInput,
-	Rule as V2Rule,
-	SteeringConfig as V2SteeringConfig,
+	Rule,
+	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
 } from "./v2/index.ts";
