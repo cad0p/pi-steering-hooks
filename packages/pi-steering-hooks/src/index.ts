@@ -241,16 +241,32 @@ export {
 // `defineConfig` from the root doesn't need a second import line for
 // `loadHarness`. See `./testing/index.ts` for the API docs.
 export {
+	expectAllows,
+	expectBlocks,
+	expectRuleFires,
+	formatMatrix,
 	getAppendedEntries,
 	loadHarness,
 	mockContext,
 	mockObserverContext,
+	runMatrix,
+	testObserver,
+	testPredicate,
 } from "./testing/index.ts";
 
 export type {
+	BashShorthand,
+	EditShorthand,
+	ExpectBlocksOptions,
 	Harness,
 	LoadHarnessOptions,
+	MatrixCase,
+	MatrixCaseResult,
+	MatrixResult,
 	MockContextOptions,
 	MockObserverContextOptions,
 	MockEntry,
+	ToolCallShorthand,
+	ToolResultShorthand,
+	WriteShorthand,
 } from "./testing/index.ts";

@@ -28,15 +28,24 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import {
+	expectAllows,
+	expectBlocks,
+	expectRuleFires,
+	formatMatrix,
 	getAppendedEntries,
 	loadHarness,
 	mockContext,
 	mockObserverContext,
+	runMatrix,
+	testObserver,
+	testPredicate,
 } from "./index.ts";
 import type {
+	Observer,
 	ObserverContext,
 	Plugin,
 	PredicateContext,
+	PredicateHandler,
 	Rule,
 } from "../v2/schema.ts";
 import type { EvaluatorHost } from "../v2/evaluator.ts";
@@ -468,5 +477,324 @@ describe("getAppendedEntries", () => {
 		assert.equal(snap.length, 1);
 		// Re-reading picks up both.
 		assert.equal(getAppendedEntries(ctx).length, 2);
+	});
+});
+
+// ===========================================================================
+// Phase 5b — Convenience wrappers
+// ===========================================================================
+
+describe("testPredicate", () => {
+	it("returns the predicate's boolean verdict", async () => {
+		const alwaysTrue: PredicateHandler<unknown> = async () => true;
+		const alwaysFalse: PredicateHandler<unknown> = async () => false;
+		assert.equal(await testPredicate(alwaysTrue, null), true);
+		assert.equal(await testPredicate(alwaysFalse, null), false);
+	});
+
+	it("threads args + ctx (walkerState + exec stub) to the predicate", async () => {
+		const branchEq: PredicateHandler<string> = async (arg, ctx) => {
+			return ctx.walkerState?.["branch"] === arg;
+		};
+		const fires = await testPredicate(branchEq, "main", {
+			walkerState: { branch: "main" },
+		});
+		assert.equal(fires, true);
+	});
+
+	it("predicates can call stubbed exec via ctx", async () => {
+		const readsExec: PredicateHandler<unknown> = async (_, ctx) => {
+			const r = await ctx.exec("echo", ["hi"]);
+			return r.exitCode === 0;
+		};
+		const fires = await testPredicate(readsExec, null, {
+			exec: () => ({ stdout: "hi", stderr: "", exitCode: 0 }),
+		});
+		assert.equal(fires, true);
+	});
+});
+
+describe("testObserver", () => {
+	it("fires onResult when watch matches (or watch is absent)", async () => {
+		const obs: Observer = {
+			name: "all-events",
+			onResult: (_evt, ctx) => {
+				ctx.appendEntry("seen");
+			},
+		};
+		const { entries, watchMatched } = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: "ls" },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(watchMatched, true);
+		assert.equal(entries.length, 1);
+		assert.equal(entries[0]?.customType, "seen");
+	});
+
+	it("does NOT fire onResult when watch filter rejects", async () => {
+		const obs: Observer = {
+			name: "bash-only",
+			watch: { toolName: "bash" },
+			onResult: (_evt, ctx) => {
+				ctx.appendEntry("seen");
+			},
+		};
+		const { entries, watchMatched } = await testObserver(obs, {
+			toolName: "read",
+			input: {},
+			output: {},
+		});
+		assert.equal(watchMatched, false);
+		assert.equal(entries.length, 0);
+	});
+
+	it("watch.inputMatches with absent key is fail-closed", async () => {
+		const obs: Observer = {
+			name: "cmd-match",
+			watch: { inputMatches: { command: /^git/ } },
+			onResult: () => {},
+		};
+		const { watchMatched } = await testObserver(obs, {
+			toolName: "read",
+			input: {}, // no `command` field
+			output: {},
+		});
+		assert.equal(watchMatched, false);
+	});
+
+	it("watch.exitCode: success / failure / numeric / any", async () => {
+		const mk = (code: number | "success" | "failure" | "any") => ({
+			name: "e" + String(code),
+			watch: { exitCode: code },
+			onResult: () => {},
+		});
+		const ok = { toolName: "bash", input: {}, output: {}, exitCode: 0 };
+		const fail = {
+			toolName: "bash",
+			input: {},
+			output: {},
+			exitCode: 2,
+		};
+		assert.equal(
+			(await testObserver(mk("success"), ok)).watchMatched,
+			true,
+		);
+		assert.equal(
+			(await testObserver(mk("success"), fail)).watchMatched,
+			false,
+		);
+		assert.equal(
+			(await testObserver(mk("failure"), fail)).watchMatched,
+			true,
+		);
+		assert.equal(
+			(await testObserver(mk(2), fail)).watchMatched,
+			true,
+		);
+		assert.equal((await testObserver(mk("any"), fail)).watchMatched, true);
+	});
+
+	it("warns when options.exec is set (observers don't see exec)", async () => {
+		const obs: Observer = { name: "n", onResult: () => {} };
+		const warnings: unknown[][] = [];
+		const orig = console.warn;
+		console.warn = (...args: unknown[]) => warnings.push(args);
+		try {
+			await testObserver(
+				obs,
+				{ toolName: "bash", input: {}, output: {} },
+				{ exec: () => ({ stdout: "", stderr: "", exitCode: 0 }) },
+			);
+		} finally {
+			console.warn = orig;
+		}
+		assert.equal(warnings.length, 1);
+		assert.match(String(warnings[0]?.[0] ?? ""), /exec option ignored/);
+	});
+});
+
+describe("expectBlocks / expectAllows / expectRuleFires", () => {
+	const blockAllRule: Rule = {
+		name: "block-all",
+		tool: "bash",
+		field: "command",
+		pattern: /.*/,
+		reason: "test block",
+		noOverride: true,
+	};
+
+	it("expectBlocks returns result on block", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		const result = await expectBlocks(harness, { command: "anything" });
+		assert.ok(result);
+		assert.equal(result.block, true);
+	});
+
+	it("expectBlocks throws AssertionError on allow", async () => {
+		const harness = loadHarness({ config: { rules: [] } });
+		await assert.rejects(
+			() => expectBlocks(harness, { command: "anything" }),
+			/expected block, got allow/,
+		);
+	});
+
+	it("expectBlocks { rule } asserts rule name match", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		await expectBlocks(harness, { command: "x" }, { rule: "block-all" });
+		await assert.rejects(
+			() => expectBlocks(harness, { command: "x" }, { rule: "other-rule" }),
+			/expected rule "other-rule" to fire/,
+		);
+	});
+
+	it("expectBlocks { reason: RegExp } asserts reason match", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		await expectBlocks(
+			harness,
+			{ command: "x" },
+			{ reason: /test block/ },
+		);
+		await assert.rejects(
+			() =>
+				expectBlocks(
+					harness,
+					{ command: "x" },
+					{ reason: /wrong reason/ },
+				),
+			/reason did not match/,
+		);
+	});
+
+	it("expectAllows succeeds on no block", async () => {
+		const harness = loadHarness({ config: { rules: [] } });
+		await expectAllows(harness, { command: "anything" });
+	});
+
+	it("expectAllows throws on block", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		await assert.rejects(
+			() => expectAllows(harness, { command: "x" }),
+			/expected allow, got block/,
+		);
+	});
+
+	it("expectRuleFires delegates to expectBlocks { rule }", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		await expectRuleFires(harness, { command: "x" }, "block-all");
+		await assert.rejects(
+			() => expectRuleFires(harness, { command: "x" }, "nope"),
+			/expected rule "nope" to fire/,
+		);
+	});
+
+	it("accepts a WriteShorthand", async () => {
+		const writeBlock: Rule = {
+			name: "write-block",
+			tool: "write",
+			field: "content",
+			pattern: /forbidden/,
+			reason: "no",
+			noOverride: true,
+		};
+		const harness = loadHarness({ config: { rules: [writeBlock] } });
+		await expectBlocks(harness, {
+			write: { path: "f.txt", content: "forbidden content" },
+		});
+		await expectAllows(harness, {
+			write: { path: "f.txt", content: "ok content" },
+		});
+	});
+});
+
+describe("runMatrix / formatMatrix", () => {
+	const blockAllRule: Rule = {
+		name: "block-all",
+		tool: "bash",
+		field: "command",
+		pattern: /.*/,
+		reason: "test block",
+		noOverride: true,
+	};
+
+	it("tallies pass / fail counts", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		const result = await runMatrix(harness, [
+			{ name: "a", event: { command: "x" }, expect: "block" },
+			{
+				name: "b",
+				event: { command: "y" },
+				expect: { block: true, rule: "block-all" },
+			},
+			{ name: "c", event: { command: "z" }, expect: "allow" }, // will fail
+		]);
+		assert.equal(result.total, 3);
+		assert.equal(result.passed, 2);
+		assert.equal(result.failed, 1);
+		assert.equal(result.cases[0]?.passed, true);
+		assert.equal(result.cases[1]?.passed, true);
+		assert.equal(result.cases[2]?.passed, false);
+		assert.match(
+			result.cases[2]?.errorMessage ?? "",
+			/expected allow.*got block/,
+		);
+	});
+
+	it("block:{rule} expectation catches wrong-rule fires", async () => {
+		const r1: Rule = {
+			name: "rule-one",
+			tool: "bash",
+			field: "command",
+			pattern: /^x/,
+			reason: "r1",
+			noOverride: true,
+		};
+		const r2: Rule = {
+			name: "rule-two",
+			tool: "bash",
+			field: "command",
+			pattern: /^y/,
+			reason: "r2",
+			noOverride: true,
+		};
+		const harness = loadHarness({ config: { rules: [r1, r2] } });
+		const result = await runMatrix(harness, [
+			{
+				name: "wrong-rule",
+				event: { command: "x" },
+				expect: { block: true, rule: "rule-two" }, // r1 fires, not r2
+			},
+		]);
+		assert.equal(result.passed, 0);
+		assert.equal(result.failed, 1);
+		assert.match(
+			result.cases[0]?.errorMessage ?? "",
+			/expected rule "rule-two"; got "rule-one"/,
+		);
+	});
+
+	it("never throws — failures appear in the result", async () => {
+		const harness = loadHarness({ config: { rules: [] } });
+		// All cases will fail.
+		const result = await runMatrix(harness, [
+			{ name: "f1", event: { command: "x" }, expect: "block" },
+			{ name: "f2", event: { command: "y" }, expect: "block" },
+		]);
+		assert.equal(result.passed, 0);
+		assert.equal(result.failed, 2);
+	});
+
+	it("formatMatrix renders a readable report", async () => {
+		const harness = loadHarness({ config: { rules: [blockAllRule] } });
+		const result = await runMatrix(harness, [
+			{ name: "case-a", event: { command: "x" }, expect: "block" },
+			{ name: "case-b", event: { command: "y" }, expect: "allow" },
+		]);
+		const report = formatMatrix(result);
+		assert.match(report, /MATRIX — 2 cases\. 1 pass, 1 fail/);
+		assert.match(report, /\[case-a\].*expect:block.*actual:BLOCK/);
+		assert.match(report, /\[case-b\].*expect:allow.*actual:BLOCK.*FAIL/);
+		assert.match(report, /PASS: 1\/2/);
 	});
 });

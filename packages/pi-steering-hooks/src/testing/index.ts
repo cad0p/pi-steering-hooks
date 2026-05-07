@@ -45,11 +45,20 @@
 import type {
 	ExecOpts,
 	ExecResult,
+	Observer,
 	ObserverContext,
+	ObserverWatch,
 	PredicateContext,
+	PredicateHandler,
 	PredicateToolInput,
 	SteeringConfig,
+	ToolResultEvent as SchemaToolResultEvent,
 } from "../v2/schema.ts";
+import type {
+	ExtensionContext,
+	ToolCallEvent,
+	ToolCallEventResult,
+} from "@mariozechner/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../v2/defaults.ts";
 import {
 	buildEvaluator,
@@ -463,4 +472,522 @@ function buildFindEntries(
 		}
 		return out;
 	};
+}
+
+// ===========================================================================
+// Phase 5b — Convenience wrappers
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Shorthand input types
+// ---------------------------------------------------------------------------
+
+/**
+ * Convenience shape for a bash tool-call event. Accepted by
+ * {@link expectBlocks}, {@link expectAllows}, {@link expectRuleFires},
+ * and {@link runMatrix} in place of a full {@link ToolCallEvent}.
+ */
+export interface BashShorthand {
+	readonly command: string;
+	readonly cwd?: string;
+}
+
+/** Convenience shape for a write tool-call event. */
+export interface WriteShorthand {
+	readonly write: { readonly path: string; readonly content: string };
+	readonly cwd?: string;
+}
+
+/** Convenience shape for an edit tool-call event. */
+export interface EditShorthand {
+	readonly edit: {
+		readonly path: string;
+		readonly edits: ReadonlyArray<{
+			readonly oldText: string;
+			readonly newText: string;
+		}>;
+	};
+	readonly cwd?: string;
+}
+
+/** Union of the bash/write/edit shorthands. */
+export type ToolCallShorthand =
+	| BashShorthand
+	| WriteShorthand
+	| EditShorthand;
+
+/**
+ * Convenience shape for a tool-result event, accepted by
+ * {@link testObserver}. Mirrors the minimal {@link SchemaToolResultEvent}
+ * fields observers actually read.
+ */
+export interface ToolResultShorthand {
+	readonly toolName: string;
+	readonly input?: unknown;
+	readonly output?: unknown;
+	readonly exitCode?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Event + context resolution helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect a {@link ToolCallShorthand} by its tag field. Actual
+ * {@link ToolCallEvent} instances carry a `type: "tool_call"` marker
+ * that shorthands never have.
+ */
+function isShorthand(
+	input: ToolCallEvent | ToolCallShorthand,
+): input is ToolCallShorthand {
+	return !("type" in input && input.type === "tool_call");
+}
+
+/**
+ * Resolve a shorthand-or-event input into a concrete
+ * {@link ToolCallEvent} + a minimal {@link ExtensionContext} stub.
+ * The stub carries only `cwd` and a `sessionManager.getEntries()`
+ * returning `[]` — enough for the evaluator to build its per-call
+ * closures without failing on undefined reads.
+ */
+function resolveToolCallEvent(
+	input: ToolCallEvent | ToolCallShorthand,
+	fallbackCwd: string,
+): { event: ToolCallEvent; ctx: ExtensionContext } {
+	const event = isShorthand(input) ? shorthandToEvent(input) : input;
+	const cwd = isShorthand(input) ? (input.cwd ?? fallbackCwd) : fallbackCwd;
+	const ctx = {
+		cwd,
+		sessionManager: { getEntries: () => [] },
+	} as unknown as ExtensionContext;
+	return { event, ctx };
+}
+
+/** Build a synthetic {@link ToolCallEvent} from a shorthand. */
+function shorthandToEvent(s: ToolCallShorthand): ToolCallEvent {
+	if ("command" in s) {
+		return {
+			type: "tool_call",
+			toolName: "bash",
+			input: { command: s.command },
+		} as unknown as ToolCallEvent;
+	}
+	if ("write" in s) {
+		return {
+			type: "tool_call",
+			toolName: "write",
+			input: { path: s.write.path, content: s.write.content },
+		} as unknown as ToolCallEvent;
+	}
+	return {
+		type: "tool_call",
+		toolName: "edit",
+		input: { path: s.edit.path, edits: s.edit.edits },
+	} as unknown as ToolCallEvent;
+}
+
+/** Short human-readable summary of an event for failure messages. */
+function describeEvent(event: ToolCallEvent): string {
+	const input = (event as unknown as { input: unknown }).input;
+	if (
+		event.toolName === "bash" &&
+		typeof input === "object" &&
+		input !== null &&
+		"command" in input
+	) {
+		const cmd = (input as { command: unknown }).command;
+		return `bash \`${String(cmd)}\``;
+	}
+	if (typeof input === "object" && input !== null && "path" in input) {
+		const p = (input as { path: unknown }).path;
+		return `${event.toolName} ${String(p)}`;
+	}
+	return event.toolName;
+}
+
+/**
+ * Resolve a tool-result event or shorthand into a full
+ * {@link SchemaToolResultEvent}. Used by {@link testObserver} to drive
+ * observers without making the caller stand up a pi-shape result.
+ */
+function resolveToolResultEvent(
+	input: SchemaToolResultEvent | ToolResultShorthand,
+): SchemaToolResultEvent {
+	// Both shapes carry `toolName` + `input` + `output` + `exitCode?`.
+	// Accept either; project to the minimal schema shape.
+	return {
+		toolName: input.toolName,
+		input: (input as { input?: unknown }).input ?? {},
+		output: (input as { output?: unknown }).output ?? {},
+		...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// Watch-filter (local reimplementation of observer-dispatcher's matchesWatch)
+// ---------------------------------------------------------------------------
+
+/**
+ * True if the observer's `watch` filter accepts this event. Missing
+ * watch → matches every event. Mirrors
+ * `observer-dispatcher.ts`'s internal `matchesWatch` — intentionally
+ * reimplemented here so the testing module has zero imports from
+ * dispatcher internals. Keep in sync with the dispatcher if the
+ * filter semantics change.
+ */
+function matchesWatchFilter(
+	watch: ObserverWatch | undefined,
+	event: SchemaToolResultEvent,
+): boolean {
+	if (!watch) return true;
+
+	if (watch.toolName !== undefined && watch.toolName !== event.toolName) {
+		return false;
+	}
+
+	if (watch.inputMatches !== undefined) {
+		const eventInput =
+			typeof event.input === "object" && event.input !== null
+				? (event.input as Record<string, unknown>)
+				: {};
+		for (const [key, pattern] of Object.entries(watch.inputMatches)) {
+			const value = eventInput[key];
+			if (typeof value !== "string") return false; // fail-closed on absent / non-string
+			const re = pattern instanceof RegExp ? pattern : new RegExp(pattern);
+			if (!re.test(value)) return false;
+		}
+	}
+
+	if (watch.exitCode !== undefined && watch.exitCode !== "any") {
+		const code = event.exitCode;
+		if (watch.exitCode === "success") {
+			if (code !== 0) return false;
+		} else if (watch.exitCode === "failure") {
+			if (code === undefined || code === 0) return false;
+		} else if (typeof watch.exitCode === "number") {
+			if (code !== watch.exitCode) return false;
+		}
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// testPredicate
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive a single {@link PredicateHandler} against a {@link mockContext}.
+ * Returns the boolean verdict.
+ *
+ * Usage:
+ * ```ts
+ * const fires = await testPredicate(branch, /^main$/, {
+ *   walkerState: { branch: "main" },
+ * });
+ * ```
+ */
+export async function testPredicate<A = unknown>(
+	predicate: PredicateHandler<A>,
+	args: A,
+	options: MockContextOptions = {},
+): Promise<boolean> {
+	const ctx = mockContext(options);
+	return predicate(args, ctx);
+}
+
+// ---------------------------------------------------------------------------
+// testObserver
+// ---------------------------------------------------------------------------
+
+/**
+ * Fire an {@link Observer} at an event, returning the captured
+ * `appendEntry` writes plus whether the observer's `watch` filter
+ * accepted the event. Use the `entries` field to assert what the
+ * observer recorded; use `watchMatched` to assert the filter gated
+ * firing correctly.
+ *
+ * If the observer's `watch` did NOT match, `onResult` is NOT called
+ * (mirrors production dispatch).
+ *
+ * If `options.exec` is supplied, emits a `console.warn` — observers
+ * don't see `exec`, so the stub can never fire. Exists on the options
+ * shape only because {@link MockObserverContextOptions} is derived
+ * from {@link MockContextOptions} for ergonomic test composition.
+ */
+export async function testObserver(
+	observer: Observer,
+	event: SchemaToolResultEvent | ToolResultShorthand,
+	options: MockObserverContextOptions = {},
+): Promise<{
+	entries: ReadonlyArray<{ customType: string; data?: unknown }>;
+	watchMatched: boolean;
+}> {
+	if (options.exec !== undefined) {
+		console.warn(
+			"testObserver: exec option ignored — ObserverContext doesn't expose exec",
+		);
+	}
+
+	const ctx = mockObserverContext(options);
+	const resolvedEvent = resolveToolResultEvent(event);
+	const watchMatched = matchesWatchFilter(observer.watch, resolvedEvent);
+
+	if (watchMatched) {
+		await Promise.resolve(observer.onResult(resolvedEvent, ctx));
+	}
+
+	return { entries: getAppendedEntries(ctx), watchMatched };
+}
+
+// ---------------------------------------------------------------------------
+// expectBlocks / expectAllows / expectRuleFires
+// ---------------------------------------------------------------------------
+
+/** Options for {@link expectBlocks}. */
+export interface ExpectBlocksOptions {
+	/** Expected rule name — matched against the `[steering:<name>]` prefix. */
+	readonly rule?: string;
+	/** Expected reason — exact string match (string) or pattern match (RegExp). */
+	readonly reason?: string | RegExp;
+}
+
+/** Extract `[steering:<name>]` prefix from a reason string, if present. */
+function extractRuleName(reason: string): string | null {
+	const m = reason.match(/^\[steering:([^\]]+)\]/);
+	return m ? m[1]! : null;
+}
+
+/** Normalize the `ToolCallEventResult` to a concrete block payload or null. */
+function interpretResult(
+	result: ToolCallEventResult | void,
+): { blocked: boolean; reason: string | null } {
+	if (result === undefined || result === null) {
+		return { blocked: false, reason: null };
+	}
+	const r = result as { block?: boolean; reason?: unknown };
+	if (r.block !== true) return { blocked: false, reason: null };
+	return {
+		blocked: true,
+		reason: typeof r.reason === "string" ? r.reason : String(r.reason ?? ""),
+	};
+}
+
+/**
+ * Assert that the harness blocks the given event. Returns the block
+ * payload for further inspection. Throws on allow.
+ *
+ * Optional `expected.rule` / `expected.reason` narrow the assertion:
+ *   - `rule: "no-force-push"` — the fired rule's name must match.
+ *   - `reason: /force-push/` — the reason string must match (exact
+ *     string or regex).
+ */
+export async function expectBlocks(
+	harness: Harness,
+	event: ToolCallEvent | ToolCallShorthand,
+	expected: ExpectBlocksOptions = {},
+): Promise<ToolCallEventResult> {
+	const { event: resolvedEvent, ctx } = resolveToolCallEvent(
+		event,
+		"/tmp/test",
+	);
+	const result = await harness.evaluate(resolvedEvent, ctx, 0);
+	const { blocked, reason } = interpretResult(result);
+
+	if (!blocked) {
+		throw new Error(
+			`expectBlocks: expected block, got allow for ${describeEvent(resolvedEvent)} at ${ctx.cwd}`,
+		);
+	}
+
+	if (expected.rule !== undefined) {
+		const firedRule = extractRuleName(reason ?? "");
+		if (firedRule !== expected.rule) {
+			throw new Error(
+				`expectBlocks: expected rule "${expected.rule}" to fire, ` +
+					`got "${firedRule ?? "<none>"}" for ${describeEvent(resolvedEvent)}\n` +
+					`  reason: ${reason}`,
+			);
+		}
+	}
+
+	if (expected.reason !== undefined && reason !== null) {
+		const matches =
+			expected.reason instanceof RegExp
+				? expected.reason.test(reason)
+				: expected.reason === reason;
+		if (!matches) {
+			throw new Error(
+				`expectBlocks: reason did not match expected pattern\n` +
+					`  expected: ${String(expected.reason)}\n` +
+					`  got:      ${reason}`,
+			);
+		}
+	}
+
+	return result as ToolCallEventResult;
+}
+
+/**
+ * Assert that the harness allows the given event (no rule fires).
+ * Throws with a rich message on block.
+ */
+export async function expectAllows(
+	harness: Harness,
+	event: ToolCallEvent | ToolCallShorthand,
+): Promise<void> {
+	const { event: resolvedEvent, ctx } = resolveToolCallEvent(
+		event,
+		"/tmp/test",
+	);
+	const result = await harness.evaluate(resolvedEvent, ctx, 0);
+	const { blocked, reason } = interpretResult(result);
+
+	if (blocked) {
+		const firedRule = extractRuleName(reason ?? "") ?? "<unknown>";
+		throw new Error(
+			`expectAllows: expected allow, got block for ${describeEvent(resolvedEvent)}\n` +
+				`  rule:   ${firedRule}\n` +
+				`  reason: ${reason}`,
+		);
+	}
+}
+
+/**
+ * Assert that a specific rule fires on the given event. Thin alias
+ * over {@link expectBlocks}; kept as a distinct helper for tests whose
+ * intent is "which rule fired" rather than "the tool was blocked".
+ */
+export async function expectRuleFires(
+	harness: Harness,
+	event: ToolCallEvent | ToolCallShorthand,
+	ruleName: string,
+): Promise<void> {
+	await expectBlocks(harness, event, { rule: ruleName });
+}
+
+// ---------------------------------------------------------------------------
+// runMatrix / formatMatrix
+// ---------------------------------------------------------------------------
+
+/** One row of a {@link runMatrix} input. */
+export interface MatrixCase {
+	readonly name: string;
+	readonly event: ToolCallEvent | ToolCallShorthand;
+	readonly expect:
+		| "block"
+		| "allow"
+		| { readonly block: true; readonly rule?: string };
+	readonly cwd?: string;
+}
+
+/** Per-case outcome. */
+export interface MatrixCaseResult {
+	readonly case: MatrixCase;
+	readonly passed: boolean;
+	readonly actual: "block" | "allow";
+	readonly reason?: string;
+	readonly errorMessage?: string;
+}
+
+/** Aggregate outcome of {@link runMatrix}. */
+export interface MatrixResult {
+	readonly total: number;
+	readonly passed: number;
+	readonly failed: number;
+	readonly cases: ReadonlyArray<MatrixCaseResult>;
+}
+
+/**
+ * Batch-evaluate a list of cases against a harness. Never throws —
+ * failures surface in `result.cases`. Pair with {@link formatMatrix}
+ * to render a human-readable report.
+ */
+export async function runMatrix(
+	harness: Harness,
+	cases: readonly MatrixCase[],
+): Promise<MatrixResult> {
+	const caseResults: MatrixCaseResult[] = [];
+
+	for (const c of cases) {
+		const fallback = c.cwd ?? "/tmp/test";
+		const { event, ctx } = resolveToolCallEvent(c.event, fallback);
+		const evalResult = await harness.evaluate(event, ctx, 0);
+		const { blocked, reason } = interpretResult(evalResult);
+		const actual: "block" | "allow" = blocked ? "block" : "allow";
+
+		let passed = false;
+		let errorMessage: string | undefined;
+
+		if (c.expect === "allow") {
+			passed = !blocked;
+			if (!passed) {
+				errorMessage = `expected allow; got block (${extractRuleName(reason ?? "") ?? "<unknown>"})`;
+			}
+		} else if (c.expect === "block") {
+			passed = blocked;
+			if (!passed) errorMessage = "expected block; got allow";
+		} else {
+			if (!blocked) {
+				passed = false;
+				errorMessage = "expected block; got allow";
+			} else if (c.expect.rule !== undefined) {
+				const firedRule = extractRuleName(reason ?? "");
+				passed = firedRule === c.expect.rule;
+				if (!passed) {
+					errorMessage = `expected rule "${c.expect.rule}"; got "${firedRule ?? "<unknown>"}"`;
+				}
+			} else {
+				passed = true;
+			}
+		}
+
+		caseResults.push({
+			case: c,
+			passed,
+			actual,
+			...(reason !== null ? { reason } : {}),
+			...(errorMessage !== undefined ? { errorMessage } : {}),
+		});
+	}
+
+	const passed = caseResults.filter((r) => r.passed).length;
+	return {
+		total: caseResults.length,
+		passed,
+		failed: caseResults.length - passed,
+		cases: caseResults,
+	};
+}
+
+/**
+ * Pretty-print a {@link MatrixResult}. ASCII-friendly for CI log
+ * aggregators; structure mirrors the adversarial-matrix report style.
+ */
+export function formatMatrix(result: MatrixResult): string {
+	const lines: string[] = [];
+	lines.push(
+		`MATRIX — ${result.total} cases. ${result.passed} pass, ${result.failed} fail.`,
+	);
+	lines.push("=".repeat(64));
+	for (const r of result.cases) {
+		const expect =
+			typeof r.case.expect === "string"
+				? r.case.expect
+				: `block:${r.case.expect.rule ?? "*"}`;
+		const actualLabel =
+			r.actual === "block"
+				? `BLOCK (${extractRuleName(r.reason ?? "") ?? "?"})`
+				: "allow";
+		const status = r.passed ? "" : "  FAIL";
+		lines.push(
+			`[${r.case.name}]  expect:${expect}  actual:${actualLabel}${status}`,
+		);
+		if (!r.passed && r.errorMessage) {
+			lines.push(`  ↳ ${r.errorMessage}`);
+		}
+	}
+	lines.push("=".repeat(64));
+	lines.push(`PASS: ${result.passed}/${result.total}`);
+	return lines.join("\n");
 }
