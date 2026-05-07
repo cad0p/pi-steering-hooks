@@ -146,12 +146,26 @@ export function ancestorChain(cwd: string): string[] {
  * Find the config file (if any) for a single layer. Returns `null`
  * when neither candidate exists at that layer.
  *
+ * Emits a `console.warn` when BOTH `.pi/steering/index.ts` AND
+ * `.pi/steering.ts` exist in the same directory — the directory form
+ * wins, but ambiguous coexistence is almost always an authoring
+ * mistake (partial migration, stale file).
+ *
  * Exported for tests.
  */
 export function findConfigFile(dir: string): string | null {
-	for (const candidate of configCandidates(dir)) {
-		if (existsSync(candidate)) return candidate;
+	const [indexForm, flatForm] = configCandidates(dir);
+	const indexExists = indexForm !== undefined && existsSync(indexForm);
+	const flatExists = flatForm !== undefined && existsSync(flatForm);
+	if (indexExists && flatExists) {
+		console.warn(
+			`[pi-steering-hooks] both .pi/steering.ts and .pi/steering/index.ts ` +
+				`exist at ${dir}; using directory form. ` +
+				"Delete .pi/steering.ts to remove this warning.",
+		);
 	}
+	if (indexExists) return indexForm ?? null;
+	if (flatExists) return flatForm ?? null;
 	return null;
 }
 
@@ -160,14 +174,15 @@ export function findConfigFile(dir: string): string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Dynamic-import a single config file and return the merged `default`
- * export or the module namespace itself. Accepts either a module that
- * `export default`s a {@link SteeringConfig} or a module whose
- * namespace already matches the config shape.
+ * Dynamic-import a single config file and return its default export.
+ * The module MUST `export default` a {@link SteeringConfig} object —
+ * the loader does not accept module-namespace imports as a fallback,
+ * to keep the authoring contract unambiguous.
  *
- * Throws a scoped error when the import fails OR the result isn't an
- * object — the loader surfaces these per-layer without bringing the
- * whole session down (a single bad layer shouldn't nuke the engine).
+ * Throws a scoped error when the import fails, when the module has no
+ * default export, or when the default export isn't a plain object —
+ * the caller surfaces these per-layer without bringing the whole
+ * session down (a single bad layer shouldn't nuke the engine).
  */
 async function importConfigFile(path: string): Promise<SteeringConfig> {
 	const url = pathToFileURL(path).href;
@@ -175,12 +190,22 @@ async function importConfigFile(path: string): Promise<SteeringConfig> {
 		default?: unknown;
 	} & Record<string, unknown>;
 
-	const candidate =
-		mod.default !== undefined ? mod.default : (mod as unknown);
-	if (candidate === null || typeof candidate !== "object") {
+	if (mod.default === undefined) {
 		throw new Error(
-			`config at ${path} must export a SteeringConfig object ` +
-				`(got ${candidate === null ? "null" : typeof candidate}).`,
+			`Config file ${path} must have a default export. Use ` +
+				"`export default { ... } satisfies SteeringConfig` or " +
+				"`export default defineConfig({ ... })`.",
+		);
+	}
+	const candidate = mod.default;
+	if (
+		candidate === null ||
+		typeof candidate !== "object" ||
+		Array.isArray(candidate)
+	) {
+		throw new Error(
+			`Config file ${path} default export must be a SteeringConfig object, ` +
+				`got ${Array.isArray(candidate) ? "array" : typeof candidate}.`,
 		);
 	}
 	return candidate as SteeringConfig;
@@ -272,12 +297,26 @@ function mergePlugins(layers: readonly SteeringConfig[]): Plugin[] {
  * Merge rules across layers — inner layer's rule name overrides outer.
  * Declaration order within a layer is preserved; cross-layer order is
  * "first layer that mentions a given rule name wins for its slot".
+ *
+ * Soft-warn on duplicate names WITHIN a single layer (authoring
+ * mistake) — mirrors {@link mergeObservers}. Cross-layer collisions
+ * stay silent: overriding a rule by name is the documented
+ * customization path.
  */
 function mergeRules(layers: readonly SteeringConfig[]): Rule[] {
 	const byName = new Map<string, Rule>();
 	for (const layer of layers) {
 		if (!layer.rules) continue;
+		const seenInLayer = new Set<string>();
 		for (const rule of layer.rules) {
+			if (seenInLayer.has(rule.name)) {
+				console.warn(
+					`[pi-steering-hooks] duplicate rule "${rule.name}" within ` +
+						"single config layer; keeping first, dropping subsequent",
+				);
+				continue;
+			}
+			seenInLayer.add(rule.name);
 			if (!byName.has(rule.name)) {
 				byName.set(rule.name, rule);
 			}

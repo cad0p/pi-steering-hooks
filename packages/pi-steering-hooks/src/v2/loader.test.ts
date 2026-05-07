@@ -262,7 +262,9 @@ describe("v2/loader: loadConfigs", () => {
 		const layers = await loadConfigs(cwd);
 		assert.deepEqual(layers, []);
 		assert.ok(
-			warnings.some((w) => w.includes("must export a SteeringConfig")),
+			warnings.some((w) =>
+				w.includes("must be a SteeringConfig object"),
+			),
 		);
 	});
 });
