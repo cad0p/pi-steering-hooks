@@ -4,7 +4,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	effectiveCwd,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	getBasename,
@@ -20,6 +19,7 @@ import {
 	prepareBashContext,
 	type ToolInput,
 } from "./evaluator.ts";
+import { effectiveCwd } from "./internal/effective-cwd-adapter.ts";
 import type { Rule } from "./schema.ts";
 
 /**

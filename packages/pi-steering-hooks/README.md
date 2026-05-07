@@ -157,7 +157,7 @@ interface Rule {
 | `pattern` | Regex matched against the AST-extracted command string (`basename + " " + args.join(" ")`). **Anchor with `^` to match the basename; unanchored patterns match inside joined args.** For `write`/`edit`, applied to the raw field value. |
 | `requires` | Optional. Must ALSO match. |
 | `unless` | Optional. Exemption — if this matches, the rule does not fire. |
-| `when.cwd` | Optional. Tested against the command's effective cwd (via [`effectiveCwd`](../unbash-walker/src/effective-cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
+| `when.cwd` | Optional. Tested against the command's effective cwd (computed by `unbash-walker`'s [`walk`](../unbash-walker/src/tracker.ts) function over the built-in [`cwdTracker`](../unbash-walker/src/trackers/cwd.ts)) for bash, or `ctx.cwd` for write/edit. |
 | `reason` | Human- and agent-readable message shown when blocked. Write it for the *agent*. |
 | `noOverride` | If `true`, no override escape hatch. If `false`, override always allowed (explicit opt-in — beats `defaultNoOverride`). Omitted: falls back to the config-level `defaultNoOverride`, which itself defaults to `false`. See [Config-level override default](#config-level-override-default). |
 

@@ -12,9 +12,10 @@
  *     the silent-bypass classes that regex-on-raw-text has (quoted args,
  *     `sh -c` / `bash -c`, nested `sudo xargs`, …).
  *   - `when.cwd` is tested against the *effective* cwd of the command.
- *     For bash, that's the cwd computed by unbash-walker's `effectiveCwd`
- *     walker (so `cd ~/personal && git commit --amend` sees `~/personal`).
- *     For write/edit, `when.cwd` tests against the session cwd directly.
+ *     For bash, that's the cwd computed by unbash-walker's `walk` function
+ *     over the built-in `cwdTracker` (so `cd ~/personal && git commit --amend`
+ *     sees `~/personal`). For write/edit, `when.cwd` tests against the
+ *     session cwd directly.
  */
 
 /** A single steering rule evaluated per tool call. */
@@ -52,9 +53,9 @@ export interface Rule {
 	when?: {
 		/**
 		 * Regex tested against the effective cwd of the command.
-		 * For the `bash` tool: uses `effectiveCwd` from unbash-walker per
-		 * command ref. For `write` / `edit`: uses the session cwd directly.
-		 * Rule only fires if this matches.
+		 * For the `bash` tool: uses `walk` + `cwdTracker` from unbash-walker
+		 * per command ref. For `write` / `edit`: uses the session cwd
+		 * directly. Rule only fires if this matches.
 		 */
 		cwd?: string;
 	};

@@ -34,7 +34,6 @@
  */
 
 import {
-	effectiveCwd,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	getBasename,
@@ -42,6 +41,7 @@ import {
 	parse as parseBash,
 	type CommandRef,
 } from "unbash-walker";
+import { effectiveCwd } from "./internal/effective-cwd-adapter.ts";
 import type { Rule } from "./schema.ts";
 
 /**
