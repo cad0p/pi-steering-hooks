@@ -98,6 +98,43 @@ export function createExecCache(
 }
 
 /**
+ * Key under which the engine auto-injects the current `agentLoopIndex`
+ * into every entry written via `PredicateContext.appendEntry` or
+ * `ObserverContext.appendEntry`. Rules using
+ * `when.happened: { in: "agent_loop" }` filter session entries by
+ * comparing this key against `ctx.agentLoopIndex`.
+ *
+ * Exposed as a module-level constant so predicates / observers that
+ * need to manually inspect the tag can reference it by name rather
+ * than hardcoding the string.
+ */
+export const AGENT_LOOP_INDEX_KEY = "_agentLoopIndex" as const;
+
+/**
+ * Wrap a raw `host.appendEntry` so every write auto-injects the
+ * current `agentLoopIndex` into the payload. Object payloads get the
+ * field merged in; primitive / undefined payloads get wrapped as
+ * `{ value, _agentLoopIndex }` so downstream consumers always see an
+ * object shape.
+ *
+ * The returned closure matches both {@link PredicateContext.appendEntry}
+ * and {@link ObserverContext.appendEntry} so the evaluator and the
+ * observer dispatcher share one wrapper.
+ */
+export function createAppendEntry(
+	host: EvaluatorHost,
+	agentLoopIndex: number,
+): PredicateContext["appendEntry"] {
+	return <T>(customType: string, data?: T) => {
+		const tagged =
+			typeof data === "object" && data !== null
+				? { ...(data as object), [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
+				: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
+		host.appendEntry(customType, tagged);
+	};
+}
+
+/**
  * Adapt pi's `sessionManager.getEntries()` into the typed-and-filtered
  * view predicates (and observers) expect.
  *

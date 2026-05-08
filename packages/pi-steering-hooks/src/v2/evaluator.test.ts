@@ -1319,6 +1319,61 @@ describe("buildEvaluator: findEntries", () => {
 // Default fail-closed defaultNoOverride (sanity)
 // ---------------------------------------------------------------------------
 
+describe("buildEvaluator: appendEntry auto-tags with _agentLoopIndex", () => {
+	it("object payload gets _agentLoopIndex merged in", async () => {
+		const host = makeHost();
+		const rule: Rule = {
+			name: "tag-object",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "tag-object",
+			when: {
+				condition: (ctx) => {
+					ctx.appendEntry("pred-write", { foo: "bar" });
+					return false; // never fires; only side effect matters
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		await evaluator.evaluate(bashEvent("echo hi"), makeCtx("/r"), 5);
+		const found = host.appended.find((e) => e.type === "pred-write");
+		assert.ok(found);
+		assert.deepEqual(found.data, { foo: "bar", _agentLoopIndex: 5 });
+	});
+
+	it("primitive / undefined payloads wrap as { value, _agentLoopIndex }", async () => {
+		const host = makeHost();
+		const rule: Rule = {
+			name: "tag-prim",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "tag-prim",
+			when: {
+				condition: (ctx) => {
+					ctx.appendEntry("no-data");
+					ctx.appendEntry("num", 7);
+					ctx.appendEntry("str", "hi");
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		await evaluator.evaluate(bashEvent("echo hi"), makeCtx("/r"), 2);
+		const pred = host.appended.filter((e) =>
+			["no-data", "num", "str"].includes(e.type),
+		);
+		assert.equal(pred.length, 3);
+		assert.deepEqual(pred[0]!.data, {
+			value: undefined,
+			_agentLoopIndex: 2,
+		});
+		assert.deepEqual(pred[1]!.data, { value: 7, _agentLoopIndex: 2 });
+		assert.deepEqual(pred[2]!.data, { value: "hi", _agentLoopIndex: 2 });
+	});
+});
+
 describe("buildEvaluator: defaults", () => {
 	it("omitted defaultNoOverride coerces to true (fail-closed)", async () => {
 		// Same as the noOverride:true case above, but without any rule

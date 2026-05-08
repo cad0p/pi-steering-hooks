@@ -37,6 +37,7 @@ import type {
 	ToolResultEvent as PiToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
 import {
+	createAppendEntry,
 	createFindEntries,
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
@@ -132,6 +133,10 @@ async function dispatchEvent(
 	// same event see (mirroring evaluator semantics — evaluator rebuilds
 	// on every tool_call, dispatcher rebuilds on every tool_result).
 	const findEntries = createFindEntries(ctx);
+	// Shared appendEntry: auto-tags writes with `_agentLoopIndex` so
+	// `when.happened: { in: "agent_loop" }` can filter by agent-loop
+	// scope. Safe to hoist out of the loop: the wrapper is stateless.
+	const appendEntry = createAppendEntry(host, agentLoopIndex);
 
 	// Hoist the per-event projections out of the loop so N observers
 	// each get the identical event shape + exit code without paying N
@@ -148,7 +153,7 @@ async function dispatchEvent(
 		const observerCtx: ObserverContext = {
 			cwd: ctx.cwd,
 			agentLoopIndex,
-			appendEntry: (type, data) => host.appendEntry(type, data),
+			appendEntry,
 			findEntries,
 		};
 

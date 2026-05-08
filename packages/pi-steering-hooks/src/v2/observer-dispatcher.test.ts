@@ -476,7 +476,10 @@ describe("buildObserverDispatcher: appendEntry + findEntries", () => {
 		await dispatcher.dispatch(bashResult("ls", 0), ctx, 7);
 		assert.equal(host.appended.length, 1);
 		assert.equal(seenAcross.length, 1);
-		assert.deepEqual(seenAcross[0]!.data, { n: 1 });
+		// Observer appendEntry auto-tags with the current agentLoopIndex so
+		// rules using `when.happened` can filter by scope. The reader sees
+		// the tagged shape via findEntries.
+		assert.deepEqual(seenAcross[0]!.data, { n: 1, _agentLoopIndex: 7 });
 	});
 
 	it("observerCtx.agentLoopIndex is threaded from dispatch args", async () => {
@@ -494,6 +497,58 @@ describe("buildObserverDispatcher: appendEntry + findEntries", () => {
 		);
 		await dispatcher.dispatch(bashResult("x", 0), makeCtx("/r"), 42);
 		assert.equal(seen, 42);
+	});
+
+	it("observer appendEntry auto-injects _agentLoopIndex into object payloads", async () => {
+		const host = makeHost();
+		const obs: Observer = {
+			name: "w",
+			onResult: (_e, ctx) => {
+				ctx.appendEntry("marker", { foo: "bar" });
+			},
+		};
+		const dispatcher = buildObserverDispatcher(
+			resolvePlugins([], {}),
+			[obs],
+			host,
+		);
+		await dispatcher.dispatch(bashResult("x", 0), makeCtx("/r"), 9);
+		assert.equal(host.appended.length, 1);
+		assert.deepEqual(host.appended[0]!.data, {
+			foo: "bar",
+			_agentLoopIndex: 9,
+		});
+	});
+
+	it("observer appendEntry wraps primitive / undefined payloads as { value, _agentLoopIndex }", async () => {
+		const host = makeHost();
+		const obs: Observer = {
+			name: "w",
+			onResult: (_e, ctx) => {
+				ctx.appendEntry("no-data");
+				ctx.appendEntry("str", "hello");
+				ctx.appendEntry("num", 42);
+			},
+		};
+		const dispatcher = buildObserverDispatcher(
+			resolvePlugins([], {}),
+			[obs],
+			host,
+		);
+		await dispatcher.dispatch(bashResult("x", 0), makeCtx("/r"), 3);
+		assert.equal(host.appended.length, 3);
+		assert.deepEqual(host.appended[0]!.data, {
+			value: undefined,
+			_agentLoopIndex: 3,
+		});
+		assert.deepEqual(host.appended[1]!.data, {
+			value: "hello",
+			_agentLoopIndex: 3,
+		});
+		assert.deepEqual(host.appended[2]!.data, {
+			value: 42,
+			_agentLoopIndex: 3,
+		});
 	});
 });
 

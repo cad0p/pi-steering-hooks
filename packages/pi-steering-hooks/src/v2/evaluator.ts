@@ -62,6 +62,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import {
+	createAppendEntry,
 	createExecCache,
 	createFindEntries,
 	type EvaluatorHost,
@@ -457,11 +458,11 @@ async function evaluateEvent(
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
 	// findEntries reads the current session JSONL on demand; appendEntry
-	// just passes through.
+	// auto-tags writes with `_agentLoopIndex` so rules using
+	// `when.happened` can filter by agent-loop scope.
 	const exec = createExecCache(host, ctx.cwd);
 	const findEntries = createFindEntries(ctx);
-	const appendEntry: PredicateContext["appendEntry"] = (type, data) =>
-		host.appendEntry(type, data);
+	const appendEntry = createAppendEntry(host, agentLoopIndex);
 
 	const shared: SharedEvalContext = {
 		agentLoopIndex,
