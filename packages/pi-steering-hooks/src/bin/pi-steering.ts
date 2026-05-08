@@ -3,27 +3,33 @@
 // Part of pi-steering.
 
 /**
- * `pi-steering` CLI. Currently exposes one subcommand:
+ * `pi-steering` CLI. Two subcommands:
  *
  *   pi-steering import-json <input.json> [-o <output.ts>]
+ *     Convert a v1 JSON config to the v2 TS config shape.
  *
- * Converts a v1 JSON config (the shape shipped in PR #1) to the v2
- * TS config shape. Writes to stdout if `-o` is omitted.
- *
- * The output uses `defineConfig` and imports from the package root, so
- * the user gets compile-time inference on observer-name references
- * (not that a converted v1 config has observers, but the import path
- * is future-proof for the user adding some).
+ *   pi-steering list [--format=text|json]
+ *     Resolve the walk-up config from the CWD and print the
+ *     effective plugins / rules / observers / disables.
  *
  * Exit codes:
- *   0 — success
- *   1 — invalid arguments / file read / parse error
- *   2 — conversion error ({@link FromJSONError})
+ *   0 - success
+ *   1 - invalid arguments / file read / parse error
+ *   2 - import-json conversion error ({@link FromJSONError})
  */
 
 import { readFile, writeFile } from "node:fs/promises";
 import { FromJSONError, fromJSON } from "../v2/compat.ts";
-import type { SteeringConfig } from "../v2/schema.ts";
+import {
+	buildConfig,
+	loadConfigs,
+} from "../v2/loader.ts";
+import type {
+	Observer,
+	Rule,
+	SteeringConfig,
+	WhenClause,
+} from "../v2/schema.ts";
 
 /**
  * CLI entrypoint. Exported (not just `void main(...)` at module top)
@@ -41,6 +47,9 @@ export async function main(argv: string[]): Promise<number> {
 	const [subcommand, ...rest] = args;
 	if (subcommand === "import-json") {
 		return runImportJson(rest);
+	}
+	if (subcommand === "list") {
+		return runList(rest);
 	}
 
 	process.stderr.write(
@@ -61,6 +70,12 @@ SUBCOMMANDS
       Convert a v1 JSON steering config to v2 TS form. Writes to
       <output.ts> if specified, else stdout. See the migration guide
       in the README for details.
+
+  list [--format=text|json]
+      Load the effective config for the current directory (walk-up
+      from cwd) and print the resolved plugins, rules, and observers,
+      grouped by source. Useful for answering "which rules are
+      active here?" without reading the config files by hand.
 
 OPTIONS
   -h, --help    Show this help.
@@ -164,6 +179,307 @@ import { defineConfig } from "pi-steering";
 
 export default defineConfig(${body});
 `;
+}
+
+// ---------------------------------------------------------------------------
+// `list` subcommand
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the `list` flag set and print the resolved config.
+ *
+ * Flags:
+ *   --format=text   (default)
+ *   --format=json   machine-readable JSON
+ *   -h / --help     per-subcommand help
+ */
+async function runList(args: string[]): Promise<number> {
+	let format: "text" | "json" = "text";
+	for (const a of args) {
+		if (a === "--help" || a === "-h") {
+			printListHelp();
+			return 0;
+		}
+		if (a === "--format=text") {
+			format = "text";
+		} else if (a === "--format=json") {
+			format = "json";
+		} else if (a.startsWith("--format=")) {
+			process.stderr.write(
+				`pi-steering: unknown --format value "${a.slice("--format=".length)}"; use text|json\n`,
+			);
+			return 1;
+		} else {
+			process.stderr.write(`pi-steering: unknown flag "${a}"\n`);
+			return 1;
+		}
+	}
+
+	// Walk up from cwd and merge. We intentionally DON'T inject
+	// DEFAULT_PLUGINS / DEFAULT_RULES here — the `list` output should
+	// reflect what the USER authored, not the engine's built-ins. Users
+	// wanting to see built-ins can check the package README or run with
+	// a verbose flag we can add later.
+	let layers;
+	try {
+		layers = await loadConfigs(process.cwd());
+	} catch (err) {
+		process.stderr.write(
+			`pi-steering: failed to load config: ${
+				err instanceof Error ? err.message : String(err)
+			}\n`,
+		);
+		return 1;
+	}
+
+	if (layers.length === 0) {
+		if (format === "json") {
+			process.stdout.write(
+				`${JSON.stringify(emptyListJSON(), null, 2)}\n`,
+			);
+		} else {
+			process.stdout.write("No steering config found.\n");
+		}
+		return 0;
+	}
+
+	const config = buildConfig(layers);
+
+	if (format === "json") {
+		process.stdout.write(
+			`${JSON.stringify(renderListJSON(config), null, 2)}\n`,
+		);
+	} else {
+		process.stdout.write(renderListText(config));
+	}
+	return 0;
+}
+
+function printListHelp(): void {
+	process.stdout.write(`pi-steering list — show the resolved config
+
+USAGE
+  pi-steering list [--format=text|json]
+
+Walks up from the current directory looking for .pi/steering/index.ts
+(or .pi/steering.ts) at each ancestor. Merges the layers inner-first
+and prints the effective plugins, rules, and observers.
+
+FLAGS
+  --format=text   (default) human-readable grouped output
+  --format=json   machine-readable JSON
+  -h, --help      show this help
+
+EXAMPLES
+  pi-steering list
+  pi-steering list --format=json
+
+`);
+}
+
+/**
+ * Curated mapping from a plugin's `name` to a short human-readable
+ * source label (used in the `name [source]` header in text output).
+ * Covers plugins shipped by this package. Unknown plugin names get
+ * no bracket — the plugin name alone is enough for the user to
+ * locate it.
+ */
+const KNOWN_PLUGIN_SOURCES: Record<string, string> = {
+	git: "pi-steering/plugins/git",
+};
+
+/**
+ * Render the config as JSON for machine consumption.
+ *
+ * Shape:
+ *   {
+ *     plugins: [{ name, source?, rules: [{ name, tool, when }], observers: [...] }],
+ *     userRules: [{ name, tool, when }],
+ *     userObservers: [{ name, writes }],
+ *     disabled: { rules: [...], plugins: [...] },
+ *     defaultNoOverride: bool|null,
+ *     disableDefaults: bool|null
+ *   }
+ */
+function renderListJSON(config: SteeringConfig): unknown {
+	const plugins = (config.plugins ?? []).map((p) => ({
+		name: p.name,
+		...(KNOWN_PLUGIN_SOURCES[p.name] !== undefined
+			? { source: KNOWN_PLUGIN_SOURCES[p.name] }
+			: {}),
+		rules: (p.rules ?? []).map((r) => ruleJSON(r)),
+		observers: (p.observers ?? []).map((o) => observerJSON(o)),
+	}));
+
+	return {
+		plugins,
+		userRules: (config.rules ?? []).map((r) => ruleJSON(r)),
+		userObservers: (config.observers ?? []).map((o) => observerJSON(o)),
+		disabled: {
+			rules: config.disable ?? [],
+			plugins: config.disablePlugins ?? [],
+		},
+		defaultNoOverride: config.defaultNoOverride ?? null,
+		disableDefaults: config.disableDefaults ?? null,
+	};
+}
+
+function emptyListJSON(): unknown {
+	return {
+		plugins: [],
+		userRules: [],
+		userObservers: [],
+		disabled: { rules: [], plugins: [] },
+		defaultNoOverride: null,
+		disableDefaults: null,
+	};
+}
+
+function ruleJSON(r: Rule): unknown {
+	return {
+		name: r.name,
+		tool: r.tool,
+		...(r.when !== undefined ? { when: whenSummaryKeys(r.when) } : {}),
+	};
+}
+
+function observerJSON(o: Observer): unknown {
+	return {
+		name: o.name,
+		writes: o.writes ?? [],
+	};
+}
+
+/**
+ * Render the config as a grouped text block.
+ *
+ * Shape mirrors ADR §16:
+ *
+ *   Resolved config: 2 plugins, 4 rules, 1 observer.
+ *
+ *   git  [pi-steering/plugins/git]
+ *     no-main-commit     bash  when: branch
+ *     ...
+ *
+ *   User (.pi/steering/index.ts):
+ *     (none)
+ *
+ *   Disabled: (none)
+ */
+function renderListText(config: SteeringConfig): string {
+	const plugins = config.plugins ?? [];
+	const userRules = config.rules ?? [];
+	const userObservers = config.observers ?? [];
+	const disabled = config.disable ?? [];
+	const disabledPlugins = config.disablePlugins ?? [];
+
+	const totalRules =
+		plugins.reduce((n, p) => n + (p.rules?.length ?? 0), 0) +
+		userRules.length;
+	const totalObservers =
+		plugins.reduce((n, p) => n + (p.observers?.length ?? 0), 0) +
+		userObservers.length;
+
+	const lines: string[] = [];
+	lines.push(
+		`Resolved config: ${plugins.length} ${plural("plugin", plugins.length)}, ${totalRules} ${plural("rule", totalRules)}, ${totalObservers} ${plural("observer", totalObservers)}.`,
+	);
+	lines.push("");
+
+	// Per-plugin block.
+	for (const plugin of plugins) {
+		const source = KNOWN_PLUGIN_SOURCES[plugin.name];
+		const header = source ? `${plugin.name}  [${source}]` : plugin.name;
+		lines.push(header);
+		renderRuleLines(plugin.rules ?? [], lines);
+		renderObserverLines(plugin.observers ?? [], lines);
+		lines.push("");
+	}
+
+	// User block.
+	lines.push("User (.pi/steering/index.ts):");
+	if (userRules.length === 0 && userObservers.length === 0) {
+		lines.push("  (none)");
+	} else {
+		renderRuleLines(userRules, lines);
+		renderObserverLines(userObservers, lines);
+	}
+	lines.push("");
+
+	// Disabled block.
+	if (disabled.length === 0 && disabledPlugins.length === 0) {
+		lines.push("Disabled: (none)");
+	} else {
+		if (disabled.length > 0) {
+			lines.push(`Disabled rules: ${disabled.join(", ")}`);
+		}
+		if (disabledPlugins.length > 0) {
+			lines.push(`Disabled plugins: ${disabledPlugins.join(", ")}`);
+		}
+	}
+	lines.push("");
+
+	return lines.join("\n");
+}
+
+function renderRuleLines(rules: readonly Rule[], lines: string[]): void {
+	if (rules.length === 0) return;
+	const nameWidth = Math.max(...rules.map((r) => r.name.length), 20);
+	for (const r of rules) {
+		const tools = r.tool.padEnd(5);
+		const whenSummary = r.when
+			? `  when: ${whenSummaryKeys(r.when)}`
+			: "";
+		lines.push(`  ${r.name.padEnd(nameWidth)} ${tools}${whenSummary}`);
+	}
+}
+
+function renderObserverLines(
+	observers: readonly Observer[],
+	lines: string[],
+): void {
+	if (observers.length === 0) return;
+	for (const o of observers) {
+		const writes = o.writes && o.writes.length > 0
+			? `  writes: ${o.writes.join(", ")}`
+			: "";
+		lines.push(`  observer: ${o.name}${writes}`);
+	}
+}
+
+/**
+ * Compact summary of a `WhenClause`. Returns a comma-separated list
+ * of keys (e.g. `branch, cwd`). Built-in keys get special labels so
+ * the output is informative without dumping full predicate values:
+ *   - `happened` becomes `happened:<type>`
+ *   - `not` becomes `not:...`
+ *   - `condition` stays `condition`
+ *   - plugin predicates just show the key name (`branch`, `upstream`, …).
+ */
+function whenSummaryKeys(when: WhenClause): string {
+	const parts: string[] = [];
+	for (const key of Object.keys(when)) {
+		if (key === "happened") {
+			const happened = when.happened;
+			if (happened !== undefined) {
+				parts.push(`happened:${happened.type}`);
+			} else {
+				parts.push("happened");
+			}
+		} else if (key === "not") {
+			parts.push("not:...");
+		} else {
+			// Everything else (cwd, condition, plugin predicates) renders
+			// as its key name — the source file is the canonical place
+			// to look up the full value.
+			parts.push(key);
+		}
+	}
+	return parts.join(", ");
+}
+
+function plural(word: string, n: number): string {
+	return n === 1 ? word : `${word}s`;
 }
 
 // Bootstrap: only invoke `main` when this module is the entry point,
