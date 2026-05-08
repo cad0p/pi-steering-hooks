@@ -1005,6 +1005,129 @@ describe("buildEvaluator: Rule.onFire", () => {
 		const after = host.appended.find((e) => e.type === "after-await");
 		assert.ok(after);
 	});
+
+	it("sync-throwing onFire is caught, warn is logged, rule still blocks (F4 / G1)", async () => {
+		const host = makeHost();
+		const rule: Rule = {
+			name: "bad-onfire-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "bad",
+			onFire: () => {
+				throw new Error("boom-sync");
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		const warns: unknown[][] = [];
+		const origWarn = console.warn;
+		console.warn = (...a) => {
+			warns.push(a);
+		};
+		try {
+			const res = await evaluator.evaluate(
+				bashEvent("echo hi"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.ok(res && res.block === true);
+		} finally {
+			console.warn = origWarn;
+		}
+		assert.equal(warns.length, 1);
+		assert.match(
+			String(warns[0]![0]),
+			/onFire for rule "bad-onfire-sync" threw:.*boom-sync/s,
+		);
+	});
+
+	it("rejected-promise onFire is caught, warn is logged, rule still blocks (F4 / G1)", async () => {
+		const host = makeHost();
+		const rule: Rule = {
+			name: "bad-onfire-async",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "bad",
+			onFire: async () => {
+				await Promise.resolve();
+				throw new Error("boom-async");
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		const warns: unknown[][] = [];
+		const origWarn = console.warn;
+		console.warn = (...a) => {
+			warns.push(a);
+		};
+		try {
+			const res = await evaluator.evaluate(
+				bashEvent("echo hi"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.ok(res && res.block === true);
+		} finally {
+			console.warn = origWarn;
+		}
+		assert.equal(warns.length, 1);
+		assert.match(
+			String(warns[0]![0]),
+			/onFire for rule "bad-onfire-async" threw:.*boom-async/s,
+		);
+	});
+
+	it("throwing onFire on the first-matching rule does not abort the verdict (F4)", async () => {
+		// First-match-wins: rule A fires first, its onFire throws, the
+		// verdict still returns, rule B is never consulted. This pins
+		// that the throw didn't propagate up to pi OR cause fallthrough
+		// to later rules.
+		const host = makeHost();
+		let bCalled = false;
+		const ruleA: Rule = {
+			name: "a",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "ra",
+			onFire: () => {
+				throw new Error("a-boom");
+			},
+		};
+		const ruleB: Rule = {
+			name: "b",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "rb",
+			onFire: () => {
+				bCalled = true;
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [ruleA, ruleB] },
+			resolve(),
+			host,
+		);
+		const origWarn = console.warn;
+		console.warn = () => {};
+		try {
+			const res = await evaluator.evaluate(
+				bashEvent("echo hi"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.ok(res && res.block === true);
+			assert.match(res!.reason!, /\[steering:a@user\]/);
+		} finally {
+			console.warn = origWarn;
+		}
+		assert.equal(
+			bCalled,
+			false,
+			"first-match-wins — rule B's onFire must not run",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------

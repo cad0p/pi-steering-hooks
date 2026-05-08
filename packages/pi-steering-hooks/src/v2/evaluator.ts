@@ -501,8 +501,21 @@ async function evaluateCandidate(
 	// paths above already returned, so onFire is skipped when the rule
 	// was overridden; fail-closed defaults with no override comment fall
 	// through here normally.
+	//
+	// Fail-closed semantics on onFire errors: a sync throw or rejected
+	// promise is logged and SWALLOWED — the block still returns. The
+	// block decision already passed every predicate; a broken
+	// best-effort side effect must not silently invalidate it. Mirrors
+	// the observer-dispatcher's per-observer try/catch (observers are
+	// isolated for the same reason).
 	if (rule.onFire) {
-		await rule.onFire(ctx);
+		try {
+			await rule.onFire(ctx);
+		} catch (err) {
+			console.warn(
+				`[pi-steering-hooks] onFire for rule "${rule.name}" threw: ${formatOnFireError(err)}`,
+			);
+		}
 	}
 
 	return {
@@ -703,6 +716,26 @@ async function evaluateWriteEditRule(
 	const r = await evaluateCandidate(rule, cand, shared);
 	if (r === "no-fire" || r === "overridden") return undefined;
 	return r;
+}
+
+// ---------------------------------------------------------------------------
+// Error formatting
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an unknown thrown value for an `onFire` warning. Mirrors the
+ * observer-dispatcher's error formatter so the log shape stays
+ * consistent across the two hook surfaces: `message\nstack` for
+ * proper Errors, best-effort JSON otherwise, falling through to
+ * `String(err)`.
+ */
+function formatOnFireError(err: unknown): string {
+	if (err instanceof Error) return `${err.message}\n${err.stack ?? ""}`;
+	try {
+		return JSON.stringify(err);
+	} catch {
+		return String(err);
+	}
 }
 
 // Re-export supporting types for consumers embedding the evaluator.

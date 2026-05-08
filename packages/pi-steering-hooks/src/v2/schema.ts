@@ -298,6 +298,17 @@ export interface Rule<ObsName extends string = string> {
 	 *   - Runs for rules that will actually BLOCK. Rules suppressed by an
 	 *     inline override comment do NOT trigger `onFire` — the agent
 	 *     overrode the rule, so its side effects are bypassed too.
+	 *   - Fail-closed rules (noOverride omitted or true) ignore override
+	 *     comments entirely, so `onFire` runs on every fire even when
+	 *     the agent wrote an override comment the engine rejected.
+	 *
+	 * Error handling: `onFire` is a best-effort side effect. If it
+	 * throws (sync) or its returned promise rejects, the engine logs
+	 * the error with `console.warn` and proceeds to return the block
+	 * verdict. The block is not affected by an `onFire` failure — the
+	 * block decision already passed every predicate, and a broken
+	 * self-mark must not invalidate it. Mirrors the observer
+	 * dispatcher's per-observer isolation.
 	 *
 	 * Async OK: the evaluator awaits.
 	 */
