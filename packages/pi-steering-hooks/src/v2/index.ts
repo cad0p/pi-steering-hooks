@@ -33,7 +33,7 @@ export type {
 } from "./schema.ts";
 
 // Config helper
-export type { AllObserverNames, DefineConfigInput } from "./define-config.ts";
+export type { DefineConfigInput } from "./define-config.ts";
 export { defineConfig } from "./define-config.ts";
 
 // Predicate helper
