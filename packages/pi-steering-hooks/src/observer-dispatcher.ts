@@ -50,6 +50,7 @@ import {
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
 import { matchesPattern } from "./evaluator-internals/predicates.ts";
+import { validateName } from "./plugin-merger.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
 	Observer,
@@ -104,6 +105,14 @@ export function buildObserverDispatcher(
 	userObservers: readonly Observer[],
 	host: EvaluatorHost,
 ): ObserverDispatcher {
+	// S3: validate user-supplied observer names. Plugin observer names
+	// are validated inside `resolvePlugins` when the plugin is loaded;
+	// user-level observers flow in here directly and need their own
+	// gate.
+	for (const o of userObservers) {
+		validateName("observer", o.name, "user config");
+	}
+
 	// Merge user and plugin observers; duplicates of observer.name are
 	// deduped here by first-registered (user takes precedence over a
 	// plugin observer of the same name — matches the "user overrides

@@ -930,6 +930,24 @@ describe("buildObserverDispatcher: schema event shape", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// S3: name validation (user-supplied observers via buildObserverDispatcher)
+// ---------------------------------------------------------------------------
+
+describe("buildObserverDispatcher: user observer-name validation (S3)", () => {
+	it("throws when a user observer name contains disallowed chars", () => {
+		const obs: Observer = {
+			name: "bad name",
+			onResult: () => {},
+		};
+		assert.throws(
+			() =>
+				buildObserverDispatcher(resolvePlugins([], {}), [obs], makeHost()),
+			/observer name "bad name".*disallowed/,
+		);
+	});
+});
+
 // Keep the pi `ToolResultEvent` import from appearing unused if future
 // refactors remove the event-shape test above.
 const _resultTypeKeepalive = null as unknown as ToolResultEvent | null;
