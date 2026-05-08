@@ -199,7 +199,7 @@ describe("buildEvaluator: bash basics", () => {
 // not just a Pattern. The existing bash-basics block only exercises
 // the Pattern form. These tests pin the PredicateFn form + verify the
 // PredicateContext the fn receives carries the documented fields
-// (cwd, tool, input, turnIndex).
+// (cwd, tool, input, agentLoopIndex).
 
 describe("buildEvaluator: requires/unless as PredicateFn", () => {
 	it("requires: PredicateFn gates the rule and sees a full PredicateContext", async () => {
@@ -238,7 +238,7 @@ describe("buildEvaluator: requires/unless as PredicateFn", () => {
 
 		// Spy verified: ctx shape is the documented PredicateContext for
 		// a bash candidate (cwd = per-ref walker cwd, tool = "bash",
-		// input.command = basename+args, turnIndex forwarded verbatim).
+		// input.command = basename+args, agentLoopIndex forwarded verbatim).
 		assert.equal(seen.length, 2);
 		const ctx = seen[0]!;
 		assert.equal(ctx.cwd, "/repo");
@@ -247,13 +247,13 @@ describe("buildEvaluator: requires/unless as PredicateFn", () => {
 			(ctx.input as { tool: "bash"; command: string }).command,
 			"git push",
 		);
-		assert.equal(ctx.turnIndex, 7);
+		assert.equal(ctx.agentLoopIndex, 7);
 		// Functional-shape sanity: the closures the evaluator injected.
 		assert.equal(typeof ctx.exec, "function");
 		assert.equal(typeof ctx.findEntries, "function");
 		assert.equal(typeof ctx.appendEntry, "function");
-		// Second invocation carries the updated turnIndex.
-		assert.equal(seen[1]!.turnIndex, 8);
+		// Second invocation carries the updated agentLoopIndex.
+		assert.equal(seen[1]!.agentLoopIndex, 8);
 	});
 
 	it("unless: PredicateFn exempts the rule and sees a full PredicateContext", async () => {
@@ -298,8 +298,8 @@ describe("buildEvaluator: requires/unless as PredicateFn", () => {
 			(ctx.input as { tool: "bash"; command: string }).command,
 			"git push",
 		);
-		assert.equal(ctx.turnIndex, 3);
-		assert.equal(seen[1]!.turnIndex, 4);
+		assert.equal(ctx.agentLoopIndex, 3);
+		assert.equal(seen[1]!.agentLoopIndex, 4);
 	});
 });
 

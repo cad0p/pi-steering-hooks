@@ -249,8 +249,8 @@ export interface MockContextOptions {
 	/** Defaults to `"/tmp/test"`. */
 	readonly cwd?: string;
 
-	/** pi turn counter. Defaults to `0`. */
-	readonly turnIndex?: number;
+	/** Engine agent-loop counter. Defaults to `0`. */
+	readonly agentLoopIndex?: number;
 
 	/**
 	 * Which tool this predicate is evaluating under. Defaults to
@@ -313,7 +313,7 @@ export function mockContext(
 		cwd,
 		tool,
 		input,
-		turnIndex: options.turnIndex ?? 0,
+		agentLoopIndex: options.agentLoopIndex ?? 0,
 		exec: buildExec(options.exec, "mockContext"),
 		appendEntry: <T>(customType: string, data?: T) => {
 			buffer.push({
@@ -387,7 +387,7 @@ export function mockObserverContext(
 
 	const ctx: ObserverContext = {
 		cwd,
-		turnIndex: options.turnIndex ?? 0,
+		agentLoopIndex: options.agentLoopIndex ?? 0,
 		appendEntry: <T>(customType: string, data?: T) => {
 			buffer.push({
 				customType,

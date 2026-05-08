@@ -479,12 +479,12 @@ describe("buildObserverDispatcher: appendEntry + findEntries", () => {
 		assert.deepEqual(seenAcross[0]!.data, { n: 1 });
 	});
 
-	it("observerCtx.turnIndex is threaded from dispatch args", async () => {
+	it("observerCtx.agentLoopIndex is threaded from dispatch args", async () => {
 		let seen = -1;
 		const obs: Observer = {
 			name: "t",
 			onResult: (_e, ctx) => {
-				seen = ctx.turnIndex;
+				seen = ctx.agentLoopIndex;
 			},
 		};
 		const dispatcher = buildObserverDispatcher(

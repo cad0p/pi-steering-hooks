@@ -272,23 +272,23 @@ describe("mockContext", () => {
 		assert.equal(typeof ctx.cwd, "string");
 		assert.equal(ctx.tool, "bash");
 		assert.deepEqual(ctx.input, { tool: "bash", command: "" });
-		assert.equal(ctx.turnIndex, 0);
+		assert.equal(ctx.agentLoopIndex, 0);
 		assert.equal(typeof ctx.exec, "function");
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
 		assert.deepEqual(ctx.walkerState, { cwd: "/tmp/test" });
 	});
 
-	it("applies cwd / turnIndex / tool / input / walkerState overrides", () => {
+	it("applies cwd / agentLoopIndex / tool / input / walkerState overrides", () => {
 		const ctx = mockContext({
 			cwd: "/work",
-			turnIndex: 7,
+			agentLoopIndex: 7,
 			tool: "write",
 			input: { tool: "write", path: "/a.ts", content: "x" },
 			walkerState: { cwd: "/work", branch: "main" },
 		});
 		assert.equal(ctx.cwd, "/work");
-		assert.equal(ctx.turnIndex, 7);
+		assert.equal(ctx.agentLoopIndex, 7);
 		assert.equal(ctx.tool, "write");
 		assert.deepEqual(ctx.input, {
 			tool: "write",
@@ -387,16 +387,16 @@ describe("mockObserverContext", () => {
 	it("returns a ctx with all required ObserverContext fields populated", () => {
 		const ctx = mockObserverContext();
 		assert.equal(ctx.cwd, "/tmp/test");
-		assert.equal(ctx.turnIndex, 0);
+		assert.equal(ctx.agentLoopIndex, 0);
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
 	});
 
-	it("applies cwd / turnIndex / entries overrides", () => {
+	it("applies cwd / agentLoopIndex / entries overrides", () => {
 		const iso = "2026-03-04T05:06:07.000Z";
 		const ctx = mockObserverContext({
 			cwd: "/work",
-			turnIndex: 3,
+			agentLoopIndex: 3,
 			entries: [
 				{
 					type: "custom",
@@ -407,7 +407,7 @@ describe("mockObserverContext", () => {
 			],
 		});
 		assert.equal(ctx.cwd, "/work");
-		assert.equal(ctx.turnIndex, 3);
+		assert.equal(ctx.agentLoopIndex, 3);
 		const hits = ctx.findEntries<{ n: number }>("seen");
 		assert.equal(hits.length, 1);
 		assert.deepEqual(hits[0]!.data, { n: 42 });
@@ -452,7 +452,7 @@ describe("getAppendedEntries", () => {
 			cwd: "/",
 			tool: "bash",
 			input: { tool: "bash", command: "" },
-			turnIndex: 0,
+			agentLoopIndex: 0,
 			exec: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
 			appendEntry: () => {},
 			findEntries: () => [],
@@ -461,7 +461,7 @@ describe("getAppendedEntries", () => {
 		// Same for an ad-hoc ObserverContext.
 		const adhocObs: ObserverContext = {
 			cwd: "/",
-			turnIndex: 0,
+			agentLoopIndex: 0,
 			appendEntry: () => {},
 			findEntries: () => [],
 		};

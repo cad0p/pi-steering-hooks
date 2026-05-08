@@ -7,7 +7,7 @@
  * Uses an in-memory mock of `ExtensionAPI` that captures `on(...)`
  * handlers and records `appendEntry(...)` + `exec(...)` calls. We then
  * drive the extension by firing lifecycle events in order
- * (`turn_start`, `session_start`, `tool_call`, `tool_result`) and
+ * (`agent_start`, `session_start`, `tool_call`, `tool_result`) and
  * assert on:
  *
  *   - the `tool_call` handler's return value (block / allow),
@@ -41,7 +41,7 @@ import register, { buildSessionRuntime } from "./index.ts";
 /* -------------------------------------------------------------------------- */
 
 type EventName =
-	| "turn_start"
+	| "agent_start"
 	| "session_start"
 	| "tool_call"
 	| "tool_result";
@@ -92,10 +92,10 @@ function makeMockPi(): MockPi {
 	return { api, handlers, entries, execCalls, warnings, errors };
 }
 
-function fireTurnStart(mock: MockPi, turnIndex: number): void {
-	const h = mock.handlers.turn_start;
-	if (!h) throw new Error("turn_start handler not registered");
-	h({ type: "turn_start", turnIndex, timestamp: Date.now() }, {});
+function fireAgentStart(mock: MockPi): void {
+	const h = mock.handlers.agent_start;
+	if (!h) throw new Error("agent_start handler not registered");
+	h({ type: "agent_start" }, {});
 }
 
 /**
@@ -646,16 +646,16 @@ describe("register(): unrelated tool calls pass through", () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Turn index threading                                                       */
+/* Agent-loop index threading                                                 */
 /* -------------------------------------------------------------------------- */
 
-describe("register(): turn_start threads turnIndex into evaluator", () => {
+describe("register(): agent_start bumps agentLoopIndex threaded into evaluator", () => {
 	useIsolatedHome();
 
-	it("passes the current turnIndex into predicate context", async () => {
-		// Rule uses when.condition to assert turnIndex threading.
+	it("passes the current agentLoopIndex into predicate context", async () => {
+		// Rule uses when.condition to assert agentLoopIndex threading.
 		// The condition appends an audit entry the test consults to
-		// confirm the turnIndex the evaluator saw.
+		// confirm the agentLoopIndex the evaluator saw.
 		writeSteeringConfig(
 			tmpHome,
 			`{
@@ -668,7 +668,7 @@ describe("register(): turn_start threads turnIndex into evaluator", () => {
 						reason: "capture",
 						when: {
 							condition: (ctx) => {
-								ctx.appendEntry("captured", { turnIndex: ctx.turnIndex });
+								ctx.appendEntry("captured", { agentLoopIndex: ctx.agentLoopIndex });
 								return false; // never fires; only side effect matters
 							},
 						},
@@ -681,13 +681,21 @@ describe("register(): turn_start threads turnIndex into evaluator", () => {
 		register(mock.api as never);
 		await fireSessionStart(mock, tmpHome);
 
-		// Advance the turn counter THEN fire tool_call.
-		fireTurnStart(mock, 5);
+		// Each agent_start bumps the engine's internal counter by 1.
+		// Fire 5 times so the first tool_call sees agentLoopIndex === 5.
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
 		await fireBashToolCall(mock, "echo hi", tmpHome);
 
 		const captured = mock.entries.find((e) => e.kind === "captured");
 		assert.ok(captured);
-		assert.deepEqual(captured.data, { turnIndex: 5 });
+		assert.deepEqual(
+			(captured.data as { agentLoopIndex: number }).agentLoopIndex,
+			5,
+		);
 	});
 });
 

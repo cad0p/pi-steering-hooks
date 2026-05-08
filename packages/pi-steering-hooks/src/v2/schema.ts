@@ -291,8 +291,14 @@ export interface ObserverContext {
 	/** Session cwd at the time the tool_result arrived. */
 	cwd: string;
 
-	/** pi's `turnIndex` for the turn this tool_result belongs to. */
-	turnIndex: number;
+	/**
+	 * Monotonically-increasing agent-loop counter maintained by the
+	 * engine. Bumped on each `agent_start` pi event (one agent loop =
+	 * one user prompt + its tool calls). Observers writing session
+	 * entries get this tag auto-injected into the payload so rules
+	 * using `when.happened` with `in: "agent_loop"` can filter by it.
+	 */
+	agentLoopIndex: number;
 
 	/**
 	 * Append a typed entry into pi's session JSONL. Observers
@@ -418,11 +424,12 @@ export interface ExecResult {
  *
  * Rationale per ADR "Design → Predicate context":
  *   - `cwd`, `tool`, `input` — what the agent is about to do.
- *   - `turnIndex` — pi's monotonically-increasing turn counter. The key
- *     ingredient for turn-state rules like "must have read the file in
- *     a PRIOR turn". The strict-less-than check
- *     (`entry.turnIndex < ctx.turnIndex`) makes such rules bypass-proof:
- *     same-turn reads don't satisfy the predicate.
+ *   - `agentLoopIndex` — engine-maintained counter bumped on each
+ *     pi `agent_start` event (one agent loop = one user prompt + its
+ *     tool calls). Rules gate "since the user's last message" state
+ *     by comparing entries' auto-tagged `_agentLoopIndex` against
+ *     `ctx.agentLoopIndex`, which is what `when.happened` with
+ *     `in: "agent_loop"` does internally.
  *   - `exec` — shell escape hatch. The evaluator memoizes results per
  *     `(cmd, args, cwd)` within a single tool_call; no cross-call cache.
  *     This schema commits to the TYPE only — memoization is the
@@ -441,8 +448,11 @@ export interface PredicateContext {
 	/** Tool input — evaluator populates whichever fields apply to `tool`. */
 	input: PredicateToolInput;
 
-	/** pi's turn counter for the turn containing this tool_call. */
-	turnIndex: number;
+	/**
+	 * Engine-maintained agent-loop counter (bumped on each pi
+	 * `agent_start` event). See {@link ObserverContext.agentLoopIndex}.
+	 */
+	agentLoopIndex: number;
 
 	/**
 	 * Run a command and return its result. Memoized by the evaluator

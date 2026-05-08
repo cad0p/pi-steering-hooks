@@ -192,7 +192,7 @@ describe("v2/schema: shape smoke tests", () => {
 			cwd: "/",
 			tool: "bash",
 			input: { tool: "bash", command: "echo" },
-			turnIndex: 0,
+			agentLoopIndex: 0,
 			exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
 			appendEntry: () => {},
 			findEntries: () => [],

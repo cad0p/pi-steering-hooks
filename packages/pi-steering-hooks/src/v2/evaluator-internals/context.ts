@@ -19,7 +19,7 @@
  *
  * The evaluator itself assembles the final {@link PredicateContext}
  * from these closures plus per-candidate fields (cwd / tool / input /
- * turnIndex) as an object literal — no helper needed once the shape
+ * agentLoopIndex) as an object literal — no helper needed once the shape
  * is shared across bash and write/edit code paths.
  *
  * Kept internal (under `evaluator-internals/`) so consumers can swap

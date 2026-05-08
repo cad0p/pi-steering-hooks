@@ -29,7 +29,7 @@
  * rule's `when.condition` pre-execution, not in an observer.
  *
  * Wiring (Phase 3c): the extension runtime subscribes to `tool_result`
- * and forwards the event + current `turnIndex` into `dispatch`.
+ * and forwards the event + current `agentLoopIndex` into `dispatch`.
  */
 
 import type {
@@ -67,7 +67,7 @@ export interface ObserverDispatcher {
 	dispatch(
 		event: PiToolResultEvent,
 		ctx: ExtensionContext,
-		turnIndex: number,
+		agentLoopIndex: number,
 	): Promise<void>;
 }
 
@@ -111,8 +111,8 @@ export function buildObserverDispatcher(
 	}
 
 	return {
-		dispatch: (event, ctx, turnIndex) =>
-			dispatchEvent(event, ctx, turnIndex, merged, host),
+		dispatch: (event, ctx, agentLoopIndex) =>
+			dispatchEvent(event, ctx, agentLoopIndex, merged, host),
 	};
 }
 
@@ -123,7 +123,7 @@ export function buildObserverDispatcher(
 async function dispatchEvent(
 	event: PiToolResultEvent,
 	ctx: ExtensionContext,
-	turnIndex: number,
+	agentLoopIndex: number,
 	observers: readonly Observer[],
 	host: EvaluatorHost,
 ): Promise<void> {
@@ -147,7 +147,7 @@ async function dispatchEvent(
 		// hooks, not shell-out points.
 		const observerCtx: ObserverContext = {
 			cwd: ctx.cwd,
-			turnIndex,
+			agentLoopIndex,
 			appendEntry: (type, data) => host.appendEntry(type, data),
 			findEntries,
 		};

@@ -61,7 +61,7 @@ function makeCtx(
 		cwd: opts?.cwd ?? "/repo",
 		tool: "bash",
 		input: { tool: "bash", command: "" },
-		turnIndex: 0,
+		agentLoopIndex: 0,
 		exec: async (cmd, args, execOpts) => {
 			execCalls.push({ cmd, args: [...args], cwd: execOpts?.cwd });
 			for (const entry of responses) {

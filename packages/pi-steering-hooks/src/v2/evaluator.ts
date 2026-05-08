@@ -99,7 +99,7 @@ export interface EvaluatorRuntime {
 	evaluate(
 		event: ToolCallEvent,
 		ctx: ExtensionContext,
-		turnIndex: number,
+		agentLoopIndex: number,
 	): Promise<ToolCallEventResult | void>;
 }
 
@@ -159,11 +159,11 @@ export function buildEvaluator(
 	}
 
 	return {
-		evaluate: (event, ctx, turnIndex) =>
+		evaluate: (event, ctx, agentLoopIndex) =>
 			evaluateEvent(
 				event,
 				ctx,
-				turnIndex,
+				agentLoopIndex,
 				allRules,
 				trackers,
 				resolved.predicates,
@@ -303,7 +303,7 @@ function formatReason(
  * don't fit the `PredicateContext.appendEntry` signature.
  */
 interface SharedEvalContext {
-	readonly turnIndex: number;
+	readonly agentLoopIndex: number;
 	readonly predicates: ResolvedPluginState["predicates"];
 	readonly exec: PredicateContext["exec"];
 	readonly appendEntry: PredicateContext["appendEntry"];
@@ -399,7 +399,7 @@ async function evaluateCandidate(
 		cwd: cand.cwd,
 		tool: cand.tool,
 		input: cand.input,
-		turnIndex: shared.turnIndex,
+		agentLoopIndex: shared.agentLoopIndex,
 		exec: shared.exec,
 		appendEntry: shared.appendEntry,
 		findEntries: shared.findEntries,
@@ -448,7 +448,7 @@ async function evaluateCandidate(
 async function evaluateEvent(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
-	turnIndex: number,
+	agentLoopIndex: number,
 	rules: readonly Rule[],
 	trackers: Record<string, Tracker<unknown>>,
 	predicates: ResolvedPluginState["predicates"],
@@ -464,7 +464,7 @@ async function evaluateEvent(
 		host.appendEntry(type, data);
 
 	const shared: SharedEvalContext = {
-		turnIndex,
+		agentLoopIndex,
 		predicates,
 		exec,
 		appendEntry,

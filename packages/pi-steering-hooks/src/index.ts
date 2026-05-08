@@ -30,9 +30,10 @@ import type { SteeringConfig } from "./v2/schema.ts";
  * Pi extension factory. Wires the v2 steering engine onto pi's
  * lifecycle events:
  *
- *   - `turn_start`   — track the current `turnIndex` so tool_call /
- *                       tool_result handlers can forward it into the
- *                       evaluator + dispatcher.
+ *   - `agent_start`  — bump the internal `agentLoopIndex` counter so
+ *                       tool_call / tool_result handlers can forward it
+ *                       into the evaluator + dispatcher. One agent loop
+ *                       = one user prompt + all the tool calls it spawns.
  *   - `session_start` — load the walk-up config (inner-first), merge
  *                       with DEFAULT_RULES + DEFAULT_PLUGINS unless
  *                       `disableDefaults: true` is set anywhere in the
@@ -50,7 +51,7 @@ import type { SteeringConfig } from "./v2/schema.ts";
  * Exported as the default export per pi's extension convention.
  */
 export default function register(pi: ExtensionAPI): void {
-	let turnIndex = 0;
+	let agentLoopIndex = 0;
 	let evaluator: EvaluatorRuntime | null = null;
 	let dispatcher: ObserverDispatcher | null = null;
 
@@ -63,8 +64,8 @@ export default function register(pi: ExtensionAPI): void {
 		appendEntry: pi.appendEntry.bind(pi),
 	};
 
-	pi.on("turn_start", (event) => {
-		turnIndex = event.turnIndex;
+	pi.on("agent_start", () => {
+		agentLoopIndex += 1;
 	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -88,12 +89,12 @@ export default function register(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!evaluator) return;
-		return evaluator.evaluate(event, ctx, turnIndex);
+		return evaluator.evaluate(event, ctx, agentLoopIndex);
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
 		if (!dispatcher) return;
-		await dispatcher.dispatch(event, ctx, turnIndex);
+		await dispatcher.dispatch(event, ctx, agentLoopIndex);
 	});
 }
 
