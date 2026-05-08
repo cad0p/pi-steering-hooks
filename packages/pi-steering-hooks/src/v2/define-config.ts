@@ -20,6 +20,18 @@
  *
  * The function itself does minimal runtime work — it just returns the
  * config unchanged. All the value is in the types.
+ *
+ * Generics threaded through (ADR §8):
+ *   - `AllObserverNames<P, Inline>` — for `Rule.observer` string refs.
+ *   - `AllWrites<P, R, Inline>`     — for `Rule.when.happened.type`.
+ *   - `AllRuleNames<P, R>`          — for `config.disable`.
+ *   - `AllPluginNames<P>`           — for `config.disablePlugins`.
+ *
+ * All four helpers are exported from this module but NOT re-exported
+ * from the package root; they're internal plumbing, not user-facing
+ * API. Stable enough that plugin authors who import them directly can
+ * rely on their shape within a single minor version, but the contract
+ * is "use via defineConfig".
  */
 
 import type {
@@ -75,20 +87,178 @@ type ObserversFromInline<O extends readonly Observer[]> =
 			: never
 		: never;
 
+// ---------------------------------------------------------------------------
+// AllPluginNames — union of plugin `.name` literals across loaded plugins.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the union of plugin names registered in the `plugins` tuple.
+ *
+ * Used to constrain {@link SteeringConfig.disablePlugins} so typos
+ * surface as compile errors.
+ *
+ * Falls back to `never` when no plugins are registered — typing
+ * `disablePlugins` against an empty registry rejects every string (a
+ * deliberate fail-closed choice: the only valid value is the empty
+ * tuple, matching the user's stated intent).
+ */
+export type AllPluginNames<P extends readonly Plugin[]> =
+	P extends readonly [infer First, ...infer Rest]
+		? First extends { name: infer N extends string }
+			? N | (Rest extends readonly Plugin[] ? AllPluginNames<Rest> : never)
+			: Rest extends readonly Plugin[]
+				? AllPluginNames<Rest>
+				: never
+		: never;
+
+// ---------------------------------------------------------------------------
+// AllRuleNames — union of rule `.name` literals across plugins + user rules.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the union of rule names across:
+ *   - every plugin's `rules: Rule[]` array, AND
+ *   - the top-level inline `rules: Rule[]` array.
+ *
+ * Used to constrain {@link SteeringConfig.disable} so typos surface as
+ * compile errors. Falls back to `never` when no rules are registered.
+ */
+export type AllRuleNames<
+	P extends readonly Plugin[],
+	R extends readonly Rule[],
+> =
+	| RuleNamesFromPlugins<P>
+	| RuleNamesFromInline<R>;
+
+type RuleNamesFromPlugins<P extends readonly Plugin[]> =
+	P extends readonly [infer First, ...infer Rest]
+		? First extends Plugin
+			? (First["rules"] extends infer Rs
+					? Rs extends readonly Rule[]
+						? RuleNamesFromInline<Rs>
+						: never
+					: never)
+					| (Rest extends readonly Plugin[]
+						? RuleNamesFromPlugins<Rest>
+						: never)
+			: never
+		: never;
+
+type RuleNamesFromInline<R extends readonly Rule[]> =
+	R extends readonly (infer Element)[]
+		? Element extends { name: infer N extends string }
+			? N
+			: never
+		: never;
+
+// ---------------------------------------------------------------------------
+// AllWrites — union of `writes[]` literals across rules + observers.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the union of session-entry custom types declared via `writes`
+ * arrays across:
+ *   - every plugin's `rules: Rule[]` (rule-side writes via `onFire`),
+ *   - every plugin's `observers: Observer[]` (observer-side writes),
+ *   - the top-level inline `rules`, AND
+ *   - the top-level inline `observers`.
+ *
+ * Used to constrain {@link WhenClause.happened} `type` so typos
+ * (e.g., `happened: { type: "sync-don" }` when the observer writes
+ * `"sync-done"`) surface as compile errors.
+ *
+ * Authors who omit `writes` on a rule/observer don't contribute to the
+ * union — the rule's write is undeclared, and any downstream
+ * `when.happened.type` referencing it will be rejected. Matches the
+ * "declare your writes" discipline that `writes[]` encourages.
+ */
+export type AllWrites<
+	P extends readonly Plugin[],
+	R extends readonly Rule[],
+	Inline extends readonly Observer[] = readonly [],
+> =
+	| WritesFromPluginRules<P>
+	| WritesFromPluginObservers<P>
+	| WritesFromRules<R>
+	| WritesFromObservers<Inline>;
+
+type WritesFromRules<R extends readonly Rule[]> =
+	R extends readonly (infer Element)[]
+		? Element extends { writes: infer W }
+			? W extends readonly (infer S)[]
+				? S extends string
+					? S
+					: never
+				: never
+			: never
+		: never;
+
+type WritesFromObservers<O extends readonly Observer[]> =
+	O extends readonly (infer Element)[]
+		? Element extends { writes: infer W }
+			? W extends readonly (infer S)[]
+				? S extends string
+					? S
+					: never
+				: never
+			: never
+		: never;
+
+type WritesFromPluginRules<P extends readonly Plugin[]> =
+	P extends readonly [infer First, ...infer Rest]
+		? First extends Plugin
+			? (First["rules"] extends infer Rs
+					? Rs extends readonly Rule[]
+						? WritesFromRules<Rs>
+						: never
+					: never)
+					| (Rest extends readonly Plugin[]
+						? WritesFromPluginRules<Rest>
+						: never)
+			: never
+		: never;
+
+type WritesFromPluginObservers<P extends readonly Plugin[]> =
+	P extends readonly [infer First, ...infer Rest]
+		? First extends Plugin
+			? (First["observers"] extends infer Os
+					? Os extends readonly Observer[]
+						? WritesFromObservers<Os>
+						: never
+					: never)
+					| (Rest extends readonly Plugin[]
+						? WritesFromPluginObservers<Rest>
+						: never)
+			: never
+		: never;
+
+// ---------------------------------------------------------------------------
+// DefineConfigInput
+// ---------------------------------------------------------------------------
+
 /**
  * Config author surface — the shape `defineConfig` accepts. Matches
  * {@link SteeringConfig} but with `const`-generic tuple slots on
  * `plugins` / `rules` / `observers` so tuple literal types survive
  * through the call and drive name inference.
+ *
+ * Generic constraints:
+ *   - `disable` / `disablePlugins` typed against the rule / plugin
+ *     name unions — typos rejected at compile time.
+ *   - `rules[].when.happened.type` typed against `AllWrites` — typos
+ *     rejected at compile time.
  */
 export interface DefineConfigInput<
 	P extends readonly Plugin[],
 	Inline extends readonly Observer[],
-	R extends readonly Rule<AllObserverNames<P, Inline>>[],
+	R extends readonly Rule<
+		AllObserverNames<P, Inline>,
+		AllWrites<P, R, Inline>
+	>[],
 > {
 	defaultNoOverride?: boolean;
-	disable?: readonly string[];
-	disablePlugins?: readonly string[];
+	disable?: readonly AllRuleNames<P, R>[];
+	disablePlugins?: readonly AllPluginNames<P>[];
 	disableDefaults?: boolean;
 	plugins?: P;
 	rules?: R;
@@ -101,6 +271,13 @@ export interface DefineConfigInput<
  * Observer references in {@link Rule.observer} are typed against the
  * union of observer names gathered from `plugins[*].observers` AND the
  * top-level `observers` array — a typo produces a compile error.
+ *
+ * The `disable` / `disablePlugins` arrays are typed against the unions
+ * of registered rule / plugin names — typos rejected.
+ *
+ * `rules[].when.happened.type` is typed against the union of all
+ * `writes` declarations across plugin rules, plugin observers, user
+ * rules, and user observers — typos rejected.
  *
  * Runtime behavior: returns a shallow copy of the input with optional
  * fields normalized from `readonly` arrays to mutable arrays (the
@@ -150,7 +327,10 @@ export interface DefineConfigInput<
 export function defineConfig<
 	const P extends readonly Plugin[] = [],
 	const Inline extends readonly Observer[] = [],
-	const R extends readonly Rule<AllObserverNames<P, Inline>>[] = [],
+	const R extends readonly Rule<
+		AllObserverNames<P, Inline>,
+		AllWrites<P, R, Inline>
+	>[] = [],
 >(config: DefineConfigInput<P, Inline, R>): SteeringConfig {
 	// Runtime work is minimal: copy the supplied config, widening the
 	// `readonly` tuple slots back to plain arrays for downstream

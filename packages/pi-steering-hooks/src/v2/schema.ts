@@ -107,7 +107,7 @@ export type PredicateHandler<A = unknown> = (
  *
  * See ADR "Design → Rule schema" → WhenClause.
  */
-export interface WhenClause {
+export interface WhenClause<Writes extends string = string> {
 	/**
 	 * Constrain the rule to commands whose *effective* cwd matches
 	 * the given pattern. For bash, the walker's `cwdTracker` resolves
@@ -140,8 +140,14 @@ export interface WhenClause {
 	 * Inversion: place inside `not` to flip —
 	 * `not: { happened: { type, in } }` fires when the type HAS
 	 * happened. See ADR §5.
+	 *
+	 * Compile-time constraint: inside {@link defineConfig}, the `type`
+	 * field is narrowed to the union of all `writes` declared across
+	 * plugin rules, plugin observers, user rules, and user observers.
+	 * Typos become compile errors. Outside `defineConfig` the
+	 * `Writes` parameter defaults to `string` so the check is skipped.
 	 */
-	happened?: { type: string; in: "agent_loop" | "session" };
+	happened?: { type: Writes; in: "agent_loop" | "session" };
 
 	/**
 	 * Boolean NOT: the rule fires only when every nested predicate
@@ -149,7 +155,7 @@ export interface WhenClause {
 	 * `when: { not: { upstream: /origin\/main/ } }` — block unless the
 	 * upstream is origin/main.
 	 */
-	not?: WhenClause;
+	not?: WhenClause<Writes>;
 
 	/**
 	 * Escape-hatch predicate for one-off logic. Prefer plugin-registered
@@ -199,7 +205,10 @@ export interface WhenClause {
  *
  * See ADR "Design → Rule schema".
  */
-export interface Rule<ObsName extends string = string> {
+export interface Rule<
+	ObsName extends string = string,
+	Writes extends string = string,
+> {
 	/** Unique rule identifier. Used in override comments and audit logs. */
 	name: string;
 
@@ -242,8 +251,12 @@ export interface Rule<ObsName extends string = string> {
 
 	/**
 	 * Composable predicate block. See {@link WhenClause}.
+	 *
+	 * `Writes` is the union of session-entry `type` literals the rule's
+	 * `when.happened.type` is allowed to reference. Threaded through by
+	 * {@link defineConfig} from all declared `writes` arrays in scope.
 	 */
-	when?: WhenClause;
+	when?: WhenClause<Writes>;
 
 	/** Message shown to the agent when blocked. Should be actionable. */
 	reason: string;
