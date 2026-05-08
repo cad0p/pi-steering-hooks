@@ -25,7 +25,7 @@
  * only defines shapes. Evaluation is Phase 3's concern.
  */
 
-import type { Tracker } from "unbash-walker";
+import type { Tracker, Word } from "unbash-walker";
 
 // ---------------------------------------------------------------------------
 // Primitive predicate types
@@ -450,11 +450,39 @@ export interface ToolResultEvent {
  * Predicates are tool-agnostic (the same predicate can gate bash, write,
  * or edit rules). `tool` tells the predicate which discriminator applies;
  * the evaluator populates whichever fields belong to that tool.
+ *
+ * Bash note (per ADR §9): `command`, `basename`, and `args` are
+ * populated PER extracted command ref — a bash invocation of
+ * `git push --force && ls` runs the predicate once per ref, with
+ * `command: "git push --force"` (flattened for pattern matching),
+ * `basename: "git"`, and `args: [<Word>, <Word>]` (suffix `Word[]`
+ * with quote-aware `.value`). `rawCommand` and full AST node access
+ * are deliberately NOT exposed — the wrapper context would be wrong
+ * for inner refs, and AST walking belongs in plugin code that imports
+ * unbash-walker directly.
  */
 export interface PredicateToolInput {
 	tool: "bash" | "write" | "edit";
-	/** bash: the full command string. */
+	/** bash: flattened `basename + args` string, per extracted ref. */
 	command?: string;
+	/**
+	 * bash: extracted ref basename (e.g. `"git"` for `/usr/bin/git`).
+	 * Sugar over `command.split(/\s+/)[0]` that handles path stripping
+	 * correctly. Undefined for non-bash tools.
+	 */
+	basename?: string;
+	/**
+	 * bash: suffix `Word[]` for the extracted ref — quote-aware
+	 * structured access with `.value` giving the lexical value and
+	 * `.text` the raw source. Prefer this over splitting `command`
+	 * when the predicate needs to preserve quoting (e.g. reading a
+	 * `-m "conventional: subject"` message without munging spaces).
+	 *
+	 * Sourced from `CommandRef.node.suffix` via unbash-walker; the
+	 * walker already parses into Word[] so we expose it directly.
+	 * Undefined for non-bash tools.
+	 */
+	args?: readonly Word[];
 	/** write / edit: the target path. */
 	path?: string;
 	/** write: the file content being written. */

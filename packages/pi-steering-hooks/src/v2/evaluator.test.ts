@@ -1770,6 +1770,157 @@ describe("buildEvaluator: plugin-shipped rules", () => {
 	});
 });
 
+// ---------------------------------------------------------------------------
+// PredicateToolInput bash-only fields: basename + args
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: PredicateToolInput.basename + args", () => {
+	it("bash refs populate basename and args (Word[]) per extracted ref", async () => {
+		const seen: PredicateContext[] = [];
+		const rule: Rule = {
+			name: "peek",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false; // never fires; only capture the ctx
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			bashEvent("git commit -m 'conventional: subject'"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input as {
+			tool: "bash";
+			command?: string;
+			basename?: string;
+			args?: ReadonlyArray<{ value?: string; text?: string }>;
+		};
+		assert.equal(input.basename, "git");
+		assert.ok(Array.isArray(input.args));
+		assert.equal(input.args!.length, 3);
+		// First suffix word = "commit", second = "-m", third = the quoted msg
+		assert.equal(input.args![0]!.value ?? input.args![0]!.text, "commit");
+		assert.equal(input.args![1]!.value ?? input.args![1]!.text, "-m");
+		// Quote-aware: the Word[] preserves the unquoted lexical value
+		// rather than munging it into the whitespace-split `command`.
+		assert.equal(
+			input.args![2]!.value ?? input.args![2]!.text,
+			"conventional: subject",
+		);
+	});
+
+	it("multiple refs each get their own basename + args", async () => {
+		const seen: Array<{ basename?: string | undefined; args?: readonly unknown[] | undefined }> = [];
+		const rule: Rule = {
+			name: "multi",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "multi",
+			when: {
+				condition: (ctx) => {
+					const i = ctx.input as {
+						basename?: string;
+						args?: readonly unknown[];
+					};
+					seen.push({ basename: i.basename, args: i.args });
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			bashEvent("git push && ls -la"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 2);
+		assert.equal(seen[0]!.basename, "git");
+		assert.equal(seen[1]!.basename, "ls");
+		assert.equal(seen[0]!.args!.length, 1);
+		assert.equal(seen[1]!.args!.length, 1);
+	});
+
+	it("write / edit rules leave basename + args undefined", async () => {
+		const seenWrite: PredicateContext[] = [];
+		const seenEdit: PredicateContext[] = [];
+		const writeRule: Rule = {
+			name: "w",
+			tool: "write",
+			field: "content",
+			pattern: /./,
+			reason: "w",
+			when: {
+				condition: (ctx) => {
+					seenWrite.push(ctx);
+					return false;
+				},
+			},
+		};
+		const editRule: Rule = {
+			name: "e",
+			tool: "edit",
+			field: "content",
+			pattern: /./,
+			reason: "e",
+			when: {
+				condition: (ctx) => {
+					seenEdit.push(ctx);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [writeRule, editRule] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			{
+				type: "tool_call",
+				toolName: "write",
+				input: { path: "/tmp/x", content: "hi" },
+			} as unknown as ToolCallEvent,
+			makeCtx("/r"),
+			0,
+		);
+		await evaluator.evaluate(
+			{
+				type: "tool_call",
+				toolName: "edit",
+				input: {
+					path: "/tmp/x",
+					edits: [{ oldText: "a", newText: "b" }],
+				},
+			} as unknown as ToolCallEvent,
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seenWrite.length, 1);
+		assert.equal(seenEdit.length, 1);
+		const w = seenWrite[0]!.input as {
+			basename?: string;
+			args?: readonly unknown[];
+		};
+		const e = seenEdit[0]!.input as {
+			basename?: string;
+			args?: readonly unknown[];
+		};
+		assert.equal(w.basename, undefined);
+		assert.equal(w.args, undefined);
+		assert.equal(e.basename, undefined);
+		assert.equal(e.args, undefined);
+	});
+});
+
 // Keep `Observer` import referenced — downstream tests in
 // observer-dispatcher.test.ts exercise it directly; keeping the symbol
 // used here avoids "unused import" diagnostics if this file migrates.

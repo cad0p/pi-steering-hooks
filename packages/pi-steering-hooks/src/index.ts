@@ -218,6 +218,8 @@ export type {
 	SubshellSemantics,
 	Tracker,
 	WalkResult,
+	Word,
+	WordPart,
 } from "unbash-walker";
 
 // Walker functions re-exported for plugin authors writing custom

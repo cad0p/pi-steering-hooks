@@ -54,6 +54,7 @@ import {
 	type CommandRef,
 	type Modifier,
 	type Tracker,
+	type Word,
 } from "unbash-walker";
 import type {
 	ExtensionContext,
@@ -219,14 +220,18 @@ function composeBuiltinCwd(
 
 /**
  * Walker-state snapshot per extracted bash command ref plus the
- * stringified `basename + args` text for regex testing.
+ * stringified `basename + args` text for regex testing, the basename
+ * sugar, and the suffix `Word[]` for quote-aware structured access.
  *
  * Built once per tool_call (in {@link prepareBashState}) so N rules
- * against M refs cost N×M regex tests — no N parses or N walks.
+ * against M refs cost N×M regex tests — no N parses or N walks, and
+ * `basename` / `args` are computed once per ref rather than per rule.
  */
 interface BashRefState {
 	readonly ref: CommandRef;
 	readonly text: string;
+	readonly basename: string;
+	readonly args: readonly Word[];
 	readonly walkerState: Record<string, unknown>;
 }
 
@@ -251,6 +256,11 @@ function prepareBashState(
 	return refs.map((ref) => ({
 		ref,
 		text: `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim(),
+		basename: getBasename(ref),
+		// `node.suffix` is the quote-aware Word[] for the ref. Exposed
+		// to predicates via PredicateToolInput.args; the walker already
+		// parsed it so we just pass it through.
+		args: ref.node.suffix,
 		walkerState: walkResult.get(ref) ?? { cwd: sessionCwd },
 	}));
 }
@@ -593,7 +603,12 @@ async function evaluateBashRule(
 				typeof refState.walkerState["cwd"] === "string"
 					? (refState.walkerState["cwd"] as string)
 					: "unknown",
-			input: { tool: "bash", command: refState.text },
+			input: {
+				tool: "bash",
+				command: refState.text,
+				basename: refState.basename,
+				args: refState.args,
+			},
 			overrideCarrier: rawCommand,
 			tool: "bash",
 			overrideEntryExtras: { command: rawCommand },
