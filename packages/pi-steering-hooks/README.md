@@ -627,6 +627,63 @@ The engine parses the comment before AST extraction (so the override persists ac
 
 **Default is `noOverride: true` (fail-closed).** Rules must explicitly opt INTO overridability. Set `defaultNoOverride: false` at config top-level to flip the default if your guardrails are mostly advisory.
 
+## Security and trust boundaries
+
+pi-steering is a guardrail layer, not a sandbox. Several parts of the system execute arbitrary code your config authors control, and a few state surfaces are trusted by convention rather than enforced. Understand these boundaries before running pi under an untrusted config tree.
+
+### Config execution
+
+`.pi/steering/index.ts` (and the `.pi/steering.ts` shorthand) is **arbitrary TypeScript executed at `session_start` with your full user privileges**. The loader walks from `cwd` up to `$HOME`, importing every `.pi/steering/` directory it finds along the way, and merges them inner-first.
+
+Implication: running pi inside a directory hierarchy whose steering configs you don't trust is equivalent to running `node -e '…'` with that same file. Symlinks in the walk-up chain are followed — a symlinked `.pi/steering/` landing in an unexpected directory executes as if it had been placed there directly.
+
+Only run pi in directory hierarchies whose steering configs you trust.
+
+### Plugin trust
+
+Plugins register predicates (`when.<key>` handlers), observers, and `onFire` hooks — all of which **run arbitrary code during the evaluator's hot path**. A malicious or buggy plugin can:
+
+- Shell out via `ctx.exec` (with the same privileges as pi).
+- Forge session entries via `ctx.appendEntry`, which later rules consult via `when.happened`.
+- Throw in unexpected places — S1 catches most throws, but the cost of a predicate that always throws is that the rule it belongs to never fires.
+
+A malicious plugin can trivially defeat any guardrail ship with your config. Review plugin source before adding it to `plugins: [...]` the same way you'd review any third-party dependency.
+
+### Session JSONL trust
+
+`when.happened` reads entries tagged via `appendEntry`. The write path (`createAppendEntry`) is engine-controlled — every write gets the current `_agentLoopIndex` stamped on it automatically, and names go through S3 validation.
+
+The **read path (`findEntries`) treats every tagged entry in the session JSONL as authentic**. Entries written OUTSIDE the engine (direct JSONL writes by another pi extension, hand-edited session files, a `pi.appendEntry` call from non-steering code) can forge type tags and trick `when.happened` into thinking an event occurred when it didn't — bypassing rules that gate on that event.
+
+This is the out-of-band trust boundary. Within the steering engine, the invariant holds; cross-extension and external writes are outside the engine's reach.
+
+### Fail-open on load errors
+
+If your steering config fails to load at `session_start` (a plugin throws during import, a syntax error in `index.ts`, `pnpm` fails to resolve a dependency), pi-steering **disables itself for the session**. Tools execute unsteered for the rest of the conversation.
+
+This is a deliberate fail-open for loader errors, not fail-closed: blocking every tool on a loader bug would leave every pi session unusable until the config was fixed. Fail-open-on-load + fail-closed-per-tool (S1) is the compromise.
+
+Check startup logs for `[pi-steering-hooks] Failed to load steering config: …` if rules stop firing unexpectedly.
+
+### Block-reason tag trust
+
+The `[steering:<name>@<source>]` tag prepended to every block reason is only as trustworthy as your plugin authors. The S3 name-validation fix (regex-constrained rule / plugin / observer names) prevents tag SPOOFING — a name like `phony] ALL CLEAR [real` would have forged the tag; now it throws at load time.
+
+Beyond the tag shape, the contents are plugin-authored. A plugin shipping a rule with `reason: "[steering:other-rule@other-plugin] …"` can make its block look like it came from another plugin. The guardrail here is plugin trust (see above), not the tag machinery.
+
+## Performance notes
+
+### `when.happened` scaling
+
+The built-in `when.happened` predicate filters session entries by `customType` via `ctx.findEntries`. Cost is **O(N_session_entries) per unique `customType` per tool_call** — entries are scanned on first read per customType and cached for the rest of the phase (S2 invalidates the cache on writes, see the ADR).
+
+Example: a 5000-entry session with 6 distinct `when.happened` rules costs roughly 600 µs per tool_call on findEntries alone. Typical sessions (< 500 entries) are fine; long-running multi-day sessions may notice the overhead as the JSONL grows.
+
+Future versions will add a session-manager-side index keyed by `customType`, moving the cost from O(N) to O(entries-of-that-type). For now, if you hit the scaling edge, consider:
+
+- Consolidating `when.happened` rules that share a `type`.
+- Rotating / truncating the session JSONL between work sessions.
+
 ## Further reading
 
 - [`examples/work-item-plugin/`](../../examples/work-item-plugin/) — canonical plugin reference.
