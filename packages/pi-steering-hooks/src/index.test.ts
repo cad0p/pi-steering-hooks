@@ -34,7 +34,8 @@ import type {
 	ToolCallEventResult,
 	ToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
-import register, { buildSessionRuntime } from "./index.ts";
+import register from "./index.ts";
+import { buildSessionRuntime } from "./internal/session-runtime.ts";
 
 /* -------------------------------------------------------------------------- */
 /* Mock ExtensionAPI                                                          */
