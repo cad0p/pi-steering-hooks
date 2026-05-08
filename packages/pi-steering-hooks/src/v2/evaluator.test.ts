@@ -835,6 +835,138 @@ describe("buildEvaluator: plugin predicates", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rule.onFire side-effect hook
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: Rule.onFire", () => {
+	it("runs when the rule fires and before the block verdict is returned", async () => {
+		const host = makeHost();
+		const order: string[] = [];
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "f",
+			onFire: (ctx) => {
+				order.push("onFire");
+				ctx.appendEntry("marker", { saw: ctx.cwd });
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		const res = await evaluator.evaluate(
+			bashEvent("echo hi"),
+			makeCtx("/r"),
+			3,
+		);
+		assert.ok(res && res.block === true);
+		assert.deepEqual(order, ["onFire"]);
+		const marker = host.appended.find((e) => e.type === "marker");
+		assert.ok(marker);
+		// Auto-tag from item 4 stays in effect: writes inside onFire get
+		// the current agentLoopIndex merged in.
+		assert.deepEqual(marker.data, { saw: "/r", _agentLoopIndex: 3 });
+	});
+
+	it("does NOT run when a predicate (when.cwd) fails", async () => {
+		let called = false;
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "f",
+			when: { cwd: "/mainline/" },
+			onFire: () => {
+				called = true;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd /feature/x && git push"), // cwd = /feature/x, no match
+			makeCtx("/repo"),
+			0,
+		);
+		assert.equal(res, undefined);
+		assert.equal(called, false);
+	});
+
+	it("does NOT run when the rule is overridden (noOverride: false + comment)", async () => {
+		let called = false;
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "f",
+			noOverride: false,
+			onFire: () => {
+				called = true;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("git push # steering-override: f — need to"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(res, undefined);
+		assert.equal(called, false);
+	});
+
+	it("runs on fail-closed rules that actually block (even with bogus override comment)", async () => {
+		// noOverride defaults to true — the override comment is ignored,
+		// rule blocks, onFire runs.
+		let called = false;
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "f",
+			onFire: () => {
+				called = true;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("git push # steering-override: f — ignored"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.equal(called, true);
+	});
+
+	it("awaits async onFire before returning the block verdict", async () => {
+		const host = makeHost();
+		let awaited = false;
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "f",
+			onFire: async (ctx) => {
+				await new Promise((r) => setImmediate(r));
+				awaited = true;
+				ctx.appendEntry("after-await", { ok: true });
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		const res = await evaluator.evaluate(
+			bashEvent("echo hi"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.equal(awaited, true);
+		const after = host.appended.find((e) => e.type === "after-await");
+		assert.ok(after);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Override comments + noOverride
 // ---------------------------------------------------------------------------
 

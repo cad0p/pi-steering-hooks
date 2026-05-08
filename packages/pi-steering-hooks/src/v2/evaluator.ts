@@ -440,6 +440,18 @@ async function evaluateCandidate(
 			return "overridden";
 		}
 	}
+
+	// Block is going to fire. Run the optional side-effect hook before
+	// returning the verdict — rules using `onFire` to self-mark (e.g.
+	// "write a session entry so my next attempt this agent loop passes")
+	// need the write to land before the agent sees the block. Override
+	// paths above already returned, so onFire is skipped when the rule
+	// was overridden; fail-closed defaults with no override comment fall
+	// through here normally.
+	if (rule.onFire) {
+		await rule.onFire(ctx);
+	}
+
 	return {
 		block: true,
 		reason: formatReason(rule, cand.tool, noOverride),

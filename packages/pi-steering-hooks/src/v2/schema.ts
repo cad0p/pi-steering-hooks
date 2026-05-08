@@ -267,6 +267,29 @@ export interface Rule<ObsName extends string = string> {
 	 * known at {@link defineConfig} call sites (typo → compile error).
 	 */
 	observer?: Observer | ObsName;
+
+	/**
+	 * Side-effect hook invoked when the rule decides to fire (all
+	 * predicates passed) and BEFORE the block verdict is returned.
+	 *
+	 * Use for self-marking patterns where the rule's fire IS the event
+	 * (e.g. `cr-description-check` — first attempt per agent loop blocks
+	 * as reminder, self-marks via `onFire` so subsequent attempts pass).
+	 * Anything written via `ctx.appendEntry` gets auto-tagged with the
+	 * current `_agentLoopIndex` so a follow-up `when.happened:
+	 * { in: "agent_loop" }` check can detect it.
+	 *
+	 * Timing guarantees:
+	 *   - Runs after `pattern` / `requires` / `unless` / `when` have all
+	 *     evaluated favourably. If `when.cwd` or any other predicate
+	 *     fails, the rule doesn't fire and `onFire` doesn't run.
+	 *   - Runs for rules that will actually BLOCK. Rules suppressed by an
+	 *     inline override comment do NOT trigger `onFire` — the agent
+	 *     overrode the rule, so its side effects are bypassed too.
+	 *
+	 * Async OK: the evaluator awaits.
+	 */
+	onFire?: (ctx: PredicateContext) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
