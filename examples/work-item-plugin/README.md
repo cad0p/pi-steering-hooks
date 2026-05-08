@@ -42,12 +42,14 @@ examples/work-item-plugin/
 
 ## ADR references
 
-- [§6 — `Rule.onFire` side-effect hook](../../NAPKIN.md) (self-marking pattern)
-- [§7 — `Observer.writes` and `Rule.writes` declarations](../../NAPKIN.md) (compile-time type constraints)
-- [§9 — `PredicateToolInput.args` + `basename`](../../NAPKIN.md) (quote-aware structured access)
-- [§10 — `definePredicate<T>` helper](../../NAPKIN.md) (typed variance cast)
-- [§14 — Observer encapsulation convention](../../NAPKIN.md) (type + helper + consumer pattern)
-- [§15 — This example plugin's goals](../../NAPKIN.md)
+The canonical references for every pattern this plugin demonstrates live in the repo's ADR log (napkin vault):
+
+- §6 — `Rule.onFire` side-effect hook (self-marking pattern)
+- §7 — `Observer.writes` and `Rule.writes` declarations (compile-time type constraints)
+- §9 — `PredicateToolInput.args` + `basename` (quote-aware structured access)
+- §10 — `definePredicate<T>` helper (typed variance cast)
+- §14 — Observer encapsulation convention (type + helper + consumer pattern)
+- §15 — This example plugin's goals
 
 ## Running the tests
 
