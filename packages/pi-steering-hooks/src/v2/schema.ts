@@ -270,13 +270,17 @@ export interface Rule<ObsName extends string = string> {
 
 	/**
 	 * Session-entry custom types this rule's {@link onFire} may write.
-	 * Purely documentation + IDE enforcement; the engine does NOT
-	 * verify that `onFire` only calls `appendEntry` with these types.
 	 *
-	 * Fed into {@link defineConfig}'s type inference: the union of all
-	 * `writes` across loaded plugins + user rules + observers
-	 * constrains `when.happened.type` so typos become compile errors.
-	 * Expansion of those generic constraints lands in Phase A2.
+	 * Declarative-only in v0.1.0 — documents which custom types this
+	 * rule may write via `onFire`. The engine does NOT verify writes
+	 * match, and TypeScript does NOT constrain `when.happened.type`
+	 * based on this field in this release.
+	 *
+	 * Reserved for future `defineConfig` type inference: the union of
+	 * all `writes` across loaded plugins + user rules + observers will
+	 * eventually constrain `when.happened.type` so typos become compile
+	 * errors. Author against this field today and the compile-time
+	 * check lights up automatically when that generic lands.
 	 */
 	writes?: readonly string[];
 
@@ -405,11 +409,17 @@ export interface Observer {
 
 	/**
 	 * Session-entry custom types this observer's {@link onResult} may
-	 * write. Purely documentation + IDE enforcement; the engine does
-	 * NOT verify writes match.
+	 * write.
 	 *
-	 * Feeds into {@link defineConfig}'s type inference alongside
-	 * {@link Rule.writes} (see that field for the full rationale).
+	 * Declarative-only in v0.1.0 — documents which custom types this
+	 * observer may write via `onResult`. The engine does NOT verify
+	 * writes match, and TypeScript does NOT constrain
+	 * `when.happened.type` based on this field in this release.
+	 *
+	 * Reserved for future `defineConfig` type inference, symmetric
+	 * with {@link Rule.writes}: the union of all `writes` across
+	 * loaded plugins + user rules + observers will eventually
+	 * constrain `when.happened.type` so typos become compile errors.
 	 */
 	writes?: readonly string[];
 
