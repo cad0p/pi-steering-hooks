@@ -269,6 +269,18 @@ export interface Rule<ObsName extends string = string> {
 	observer?: Observer | ObsName;
 
 	/**
+	 * Session-entry custom types this rule's {@link onFire} may write.
+	 * Purely documentation + IDE enforcement; the engine does NOT
+	 * verify that `onFire` only calls `appendEntry` with these types.
+	 *
+	 * Fed into {@link defineConfig}'s type inference: the union of all
+	 * `writes` across loaded plugins + user rules + observers
+	 * constrains `when.happened.type` so typos become compile errors.
+	 * Expansion of those generic constraints lands in Phase A2.
+	 */
+	writes?: readonly string[];
+
+	/**
 	 * Side-effect hook invoked when the rule decides to fire (all
 	 * predicates passed) and BEFORE the block verdict is returned.
 	 *
@@ -379,6 +391,16 @@ export interface Observer {
 	 * Referenced from {@link Rule.observer} as a string.
 	 */
 	name: string;
+
+	/**
+	 * Session-entry custom types this observer's {@link onResult} may
+	 * write. Purely documentation + IDE enforcement; the engine does
+	 * NOT verify writes match.
+	 *
+	 * Feeds into {@link defineConfig}'s type inference alongside
+	 * {@link Rule.writes} (see that field for the full rationale).
+	 */
+	writes?: readonly string[];
 
 	/**
 	 * Filter narrowing which tool_result events trigger this observer.

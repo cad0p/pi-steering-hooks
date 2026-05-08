@@ -173,6 +173,42 @@ describe("v2/schema: shape smoke tests", () => {
 		assert.ok(typeof inline.observer === "object");
 	});
 
+	it("Rule accepts writes + onFire for self-marking patterns", () => {
+		const rule: Rule = {
+			name: "self-marker",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "r",
+			writes: ["cr-attempted"],
+			onFire: (ctx) => {
+				ctx.appendEntry("cr-attempted", {});
+			},
+		};
+		assert.deepEqual(rule.writes, ["cr-attempted"]);
+		assert.equal(typeof rule.onFire, "function");
+	});
+
+	it("Observer accepts writes declaration", () => {
+		const obs: Observer = {
+			name: "tracker",
+			writes: ["ws-sync-done", "ws-sync-failed"],
+			onResult: () => {},
+		};
+		assert.deepEqual(obs.writes, ["ws-sync-done", "ws-sync-failed"]);
+	});
+
+	it("WhenClause.happened accepts the { type, in } shape", () => {
+		const loop: WhenClause = {
+			happened: { type: "ws-sync-done", in: "agent_loop" },
+		};
+		const session: WhenClause = {
+			happened: { type: "welcome-shown", in: "session" },
+		};
+		assert.equal(loop.happened?.type, "ws-sync-done");
+		assert.equal(session.happened?.in, "session");
+	});
+
 	it("SteeringConfig accepts every top-level field", () => {
 		const cfg: SteeringConfig = {
 			defaultNoOverride: true,
