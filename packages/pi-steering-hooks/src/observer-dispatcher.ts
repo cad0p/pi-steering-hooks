@@ -53,6 +53,7 @@ import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
 	Observer,
 	ObserverContext,
+	ObserverWatch,
 	Pattern,
 	ToolResultEvent as SchemaToolResultEvent,
 } from "./schema.ts";
@@ -162,12 +163,12 @@ async function dispatchEvent(
 	let refTextsCache: readonly string[] | null | undefined = undefined;
 	const getRefTexts = (): readonly string[] | null => {
 		if (refTextsCache !== undefined) return refTextsCache;
-		refTextsCache = extractRefTextsForBash(event);
+		refTextsCache = extractRefTextsForBash(schemaEvent);
 		return refTextsCache;
 	};
 
 	for (const observer of observers) {
-		if (!matchesWatch(observer, event, exitCode, getRefTexts)) continue;
+		if (!matchesWatch(observer.watch, schemaEvent, getRefTexts)) continue;
 
 		// Each observer gets its own ctx so appendEntry writes attribute
 		// cleanly. `exec` is intentionally absent — observers are recording
@@ -210,9 +211,11 @@ async function dispatchEvent(
  *     checks don't silently pass when the expected field isn't present.
  *   - `exitCode` — `"success"` → 0, `"failure"` → non-zero,
  *     `"any"`/omitted → pass, numeric → exact match. `exitCode` is
- *     sourced from bash's `details.exitCode`; other tool results don't
- *     carry exit codes and satisfy everything except a numeric
- *     `exitCode:` (treated as "no match" — bash-specific filter).
+ *     sourced from the event's `exitCode` field (bash only via pi's
+ *     `details.exitCode` after projection to the schema shape); other
+ *     tool results leave it `undefined` and satisfy everything except
+ *     a numeric `exitCode:` (treated as "no match" — bash-specific
+ *     filter).
  *
  * Wrapper-aware command matching (ADR §12): when `inputMatches.command`
  * is set AND the event is a bash event, the pattern matches if EITHER
@@ -220,16 +223,24 @@ async function dispatchEvent(
  * text matches. So `sh -c 'brazil ws sync'` with pattern
  * `/^brazil\s+ws\s+sync$/` fires the observer — the outer raw command
  * starts with `sh`, but the walker-extracted ref `brazil ws sync` does
- * hit the anchored pattern. Parse is done once per dispatch (shared
- * across all observers via `getRefTexts`).
+ * hit the anchored pattern.
+ *
+ * Exported so the testing module's `testObserver` can reuse the exact
+ * same filter semantics as production — prevents silent drift between
+ * the test harness and the real dispatcher on wrapper-aware matching
+ * and fail-closed edge cases.
+ *
+ * Performance: when multiple observers share the same event (the
+ * production dispatch path), pass a memoizing `refTextsProvider` to
+ * parse the bash command once across observers. Standalone callers
+ * (e.g. `testObserver` evaluating one observer in isolation) can omit
+ * it — the default provider parses on demand.
  */
-function matchesWatch(
-	observer: Observer,
-	event: PiToolResultEvent,
-	exitCode: number | undefined,
-	getRefTexts: () => readonly string[] | null,
+export function matchesWatch(
+	watch: ObserverWatch | undefined,
+	event: SchemaToolResultEvent,
+	refTextsProvider?: () => readonly string[] | null,
 ): boolean {
-	const watch = observer.watch;
 	if (!watch) return true;
 
 	if (watch.toolName !== undefined && watch.toolName !== event.toolName) {
@@ -237,7 +248,13 @@ function matchesWatch(
 	}
 
 	if (watch.inputMatches) {
-		const input = event.input as Record<string, unknown>;
+		const rawInput = event.input;
+		const input: Record<string, unknown> =
+			typeof rawInput === "object" && rawInput !== null
+				? (rawInput as Record<string, unknown>)
+				: {};
+		const getRefTexts =
+			refTextsProvider ?? (() => extractRefTextsForBash(event));
 		for (const [key, pat] of Object.entries(watch.inputMatches)) {
 			const value = input[key];
 			if (typeof value !== "string") return false;
@@ -248,7 +265,7 @@ function matchesWatch(
 	}
 
 	if (watch.exitCode !== undefined && watch.exitCode !== "any") {
-		if (!matchesExitCode(exitCode, watch.exitCode)) return false;
+		if (!matchesExitCode(event.exitCode, watch.exitCode)) return false;
 	}
 	return true;
 }
@@ -268,7 +285,7 @@ function matchesInputField(
 	key: string,
 	pat: Pattern,
 	value: string,
-	event: PiToolResultEvent,
+	event: SchemaToolResultEvent,
 	getRefTexts: () => readonly string[] | null,
 ): boolean {
 	if (matchesPattern(pat, value)) return true;
@@ -302,10 +319,13 @@ function matchesInputField(
  * stages suffice.
  */
 function extractRefTextsForBash(
-	event: PiToolResultEvent,
+	event: SchemaToolResultEvent,
 ): readonly string[] | null {
 	if (event.toolName !== "bash") return null;
-	const input = event.input as { command?: unknown } | undefined;
+	const input =
+		typeof event.input === "object" && event.input !== null
+			? (event.input as { command?: unknown })
+			: undefined;
 	const command = input?.command;
 	if (typeof command !== "string" || command.length === 0) return null;
 	try {

@@ -417,6 +417,80 @@ interface Candidate {
 type CandidateOutcome = ToolCallEventResult | "no-fire" | "overridden";
 
 /**
+ * Run a rule's predicate chain (pattern → requires → unless → when).
+ * Returns the built {@link PredicateContext} when every predicate
+ * passes (rule fires), or `null` when the chain short-circuits to
+ * "no-fire" — **either** because a predicate legitimately rejected
+ * the candidate, **or** because a predicate threw.
+ *
+ * Throws are the S1 hardening: a predicate function (built-in or
+ * plugin-supplied) that throws synchronously or rejects asynchronously
+ * gets its error logged with the rule name + source and the rule is
+ * treated as NOT firing. Evaluation continues with the next rule.
+ *
+ * Why "does not fire" (vs "block" / "abort the whole evaluate"):
+ *   - Mirrors the observer-dispatcher's per-observer isolation —
+ *     one broken predicate must not poison the rest of the rule list.
+ *   - A buggy predicate blocking everything would be worse UX than
+ *     a buggy predicate silently failing — the block reason would
+ *     leak the raw error message to the LLM (the pre-hardening
+ *     behaviour). Top-level engine-throws still fail CLOSED; see
+ *     {@link evaluateEvent}.
+ */
+async function runPredicateChain(
+	rule: Rule,
+	cand: Candidate,
+	shared: SharedEvalContext,
+): Promise<PredicateContext | null> {
+	try {
+		// Pattern-miss is the common case; exit before allocating ctx.
+		if (!matchesPattern(rule.pattern, cand.target)) return null;
+
+		const ctx: PredicateContext = {
+			cwd: cand.cwd,
+			tool: cand.tool,
+			input: cand.input,
+			agentLoopIndex: shared.agentLoopIndex,
+			exec: shared.exec,
+			appendEntry: shared.appendEntry,
+			findEntries: shared.findEntries,
+			...(cand.walkerState !== undefined
+				? { walkerState: cand.walkerState }
+				: {}),
+		};
+
+		if (rule.requires !== undefined) {
+			const ok = await matchesPatternOrFn(
+				rule.requires,
+				cand.target,
+				ctx,
+			);
+			if (!ok) return null;
+		}
+		if (rule.unless !== undefined) {
+			const ok = await matchesPatternOrFn(rule.unless, cand.target, ctx);
+			if (ok) return null;
+		}
+		const whenOk = await evaluateWhen(
+			rule.when,
+			{ cwd: cand.cwd },
+			ctx,
+			shared.predicates,
+			rule.name,
+		);
+		if (!whenOk) return null;
+
+		return ctx;
+	} catch (err) {
+		const source = shared.ruleSources.get(rule) ?? "user";
+		console.warn(
+			`[pi-steering-hooks] predicate threw for rule "${rule.name}"@${source}: ${formatError(err)}`,
+		);
+		return null;
+	}
+}
+
+/**
  * Evaluate one candidate against one rule. This is the single pipeline
  * every tool funnels through — differences between bash, write, and
  * edit live entirely in the {@link Candidate} input.
@@ -430,6 +504,13 @@ type CandidateOutcome = ToolCallEventResult | "no-fire" | "overridden";
  *   4. `when`      — clause tree (`cwd`, `not`, `condition`, plugin
  *                     predicates).
  *
+ * All four steps are wrapped in a try/catch via
+ * {@link runPredicateChain} — a throw is logged and treated as "rule
+ * did not fire". That way a buggy predicate neither short-circuits the
+ * whole rule list (a broken guardrail rule silently poisoning the
+ * rest) nor leaks its raw `error.message` back to the agent via a
+ * pi-level error tool_result.
+ *
  * On rule fire, check for an override comment addressing the rule by
  * name (unless the rule opts out of overrides). An accepted override
  * logs a `steering-override` audit entry and returns `"overridden"`.
@@ -439,38 +520,8 @@ async function evaluateCandidate(
 	cand: Candidate,
 	shared: SharedEvalContext,
 ): Promise<CandidateOutcome> {
-	// Pattern-miss is the common case; exit before allocating ctx.
-	if (!matchesPattern(rule.pattern, cand.target)) return "no-fire";
-
-	const ctx: PredicateContext = {
-		cwd: cand.cwd,
-		tool: cand.tool,
-		input: cand.input,
-		agentLoopIndex: shared.agentLoopIndex,
-		exec: shared.exec,
-		appendEntry: shared.appendEntry,
-		findEntries: shared.findEntries,
-		...(cand.walkerState !== undefined
-			? { walkerState: cand.walkerState }
-			: {}),
-	};
-
-	if (rule.requires !== undefined) {
-		const ok = await matchesPatternOrFn(rule.requires, cand.target, ctx);
-		if (!ok) return "no-fire";
-	}
-	if (rule.unless !== undefined) {
-		const ok = await matchesPatternOrFn(rule.unless, cand.target, ctx);
-		if (ok) return "no-fire";
-	}
-	const whenOk = await evaluateWhen(
-		rule.when,
-		{ cwd: cand.cwd },
-		ctx,
-		shared.predicates,
-		rule.name,
-	);
-	if (!whenOk) return "no-fire";
+	const ctx = await runPredicateChain(rule, cand, shared);
+	if (ctx === null) return "no-fire";
 
 	// Rule fires. Check for override (if allowed) before committing to
 	// blocking.
@@ -513,7 +564,7 @@ async function evaluateCandidate(
 			await rule.onFire(ctx);
 		} catch (err) {
 			console.warn(
-				`[pi-steering-hooks] onFire for rule "${rule.name}" threw: ${formatOnFireError(err)}`,
+				`[pi-steering-hooks] onFire for rule "${rule.name}" threw: ${formatError(err)}`,
 			);
 		}
 	}
@@ -530,6 +581,49 @@ async function evaluateCandidate(
 }
 
 async function evaluateEvent(
+	event: ToolCallEvent,
+	ctx: ExtensionContext,
+	agentLoopIndex: number,
+	rules: readonly Rule[],
+	trackers: Record<string, Tracker<unknown>>,
+	predicates: ResolvedPluginState["predicates"],
+	host: EvaluatorHost,
+	defaultNoOverride: boolean,
+	ruleSources: ReadonlyMap<Rule, string>,
+): Promise<ToolCallEventResult | void> {
+	// Top-level fail-closed wrap (S1). If the engine's own scaffolding
+	// throws — parse errors, walker bugs, corrupted session JSONL, etc.
+	// — we block the tool AS A SAFETY MEASURE and tag the reason so the
+	// agent sees it came from the engine, not from a rule or plugin.
+	// Per-predicate throws are handled one level down in
+	// {@link runPredicateChain} (treated as "rule does not fire"); this
+	// outer wrap only catches throws OUTSIDE the per-rule try/catch.
+	try {
+		return await evaluateEventInner(
+			event,
+			ctx,
+			agentLoopIndex,
+			rules,
+			trackers,
+			predicates,
+			host,
+			defaultNoOverride,
+			ruleSources,
+		);
+	} catch (err) {
+		console.error(
+			`[pi-steering-hooks] steering engine threw: ${formatError(err)}`,
+		);
+		return {
+			block: true,
+			reason:
+				"[steering:engine@internal] steering engine error; " +
+				"tool blocked as a safety measure",
+		};
+	}
+}
+
+async function evaluateEventInner(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
 	agentLoopIndex: number,
@@ -723,13 +817,19 @@ async function evaluateWriteEditRule(
 // ---------------------------------------------------------------------------
 
 /**
- * Format an unknown thrown value for an `onFire` warning. Mirrors the
- * observer-dispatcher's error formatter so the log shape stays
- * consistent across the two hook surfaces: `message\nstack` for
+ * Format an unknown thrown value for a warning log. Shared across the
+ * three places the evaluator catches throws:
+ *
+ *   - per-predicate try/catch in {@link runPredicateChain} (S1).
+ *   - per-rule `onFire` try/catch in {@link evaluateCandidate}.
+ *   - top-level engine try/catch in {@link evaluateEvent}.
+ *
+ * Mirrors the observer-dispatcher's `formatError` so the log shape
+ * stays consistent across the two hook surfaces: `message\nstack` for
  * proper Errors, best-effort JSON otherwise, falling through to
  * `String(err)`.
  */
-function formatOnFireError(err: unknown): string {
+function formatError(err: unknown): string {
 	if (err instanceof Error) return `${err.message}\n${err.stack ?? ""}`;
 	try {
 		return JSON.stringify(err);

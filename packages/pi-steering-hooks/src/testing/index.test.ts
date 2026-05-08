@@ -232,7 +232,13 @@ describe("loadHarness", () => {
 		assert.equal(execCalls, 1);
 	});
 
-	it("default host's unstubbed exec rejects with a clear error", async () => {
+	it("default host's unstubbed exec surfaces as a logged warning (S1)", async () => {
+		// S1: a throwing predicate (here: the default host's `exec`
+		// throwing 'exec not stubbed') is caught by the evaluator and
+		// treated as 'rule did not fire' with a warning log. The test's
+		// original intent — 'authors who forget to stub exec see a clear
+		// error' — still holds: the warning names the rule + source, and
+		// carries the original error message.
 		const rule: Rule = {
 			name: "uses-exec",
 			tool: "bash",
@@ -247,20 +253,36 @@ describe("loadHarness", () => {
 			},
 		};
 		const h = loadHarness({ config: { rules: [rule] } });
-		await assert.rejects(
-			() =>
-				h.evaluate(
-					{
-						type: "tool_call",
-						toolCallId: "t",
-						toolName: "bash",
-						input: { command: "git status" },
-					},
-					makeExtCtx(),
-					0,
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map((a) => String(a)).join(" "));
+		};
+		try {
+			const result = await h.evaluate(
+				{
+					type: "tool_call",
+					toolCallId: "t",
+					toolName: "bash",
+					input: { command: "git status" },
+				},
+				makeExtCtx(),
+				0,
+			);
+			// Rule does NOT fire (predicate threw → S1 isolates).
+			assert.equal(result, undefined);
+			// Warning names the rule + the unstubbed-exec message.
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "uses-exec".*exec not stubbed/.test(
+						w,
+					),
 				),
-			/exec not stubbed/,
-		);
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			console.warn = originalWarn;
+		}
 	});
 });
 
@@ -666,6 +688,57 @@ describe("testObserver", () => {
 		}
 		assert.equal(warnings.length, 1);
 		assert.match(String(warnings[0]?.[0] ?? ""), /exec option ignored/);
+	});
+
+	it("watch.inputMatches.command is wrapper-aware on bash events (ADR §12)", async () => {
+		// Regression test for the former testing-side reimplementation
+		// of matchesWatch: it did a raw-string match only, so a watch of
+		// `command: /^git commit/` silently missed `sh -c 'git commit ...'`
+		// while production correctly fired on it. Now `testObserver`
+		// shares `matchesWatch` with the dispatcher so both paths agree.
+		const fired: string[] = [];
+		const obs: Observer = {
+			name: "commit-watcher",
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^git commit/ },
+			},
+			onResult: (evt) => {
+				fired.push(String((evt.input as { command?: unknown }).command));
+			},
+		};
+
+		// Raw match still works (outer command IS `git commit ...`).
+		const raw = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: 'git commit -m "x"' },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(raw.watchMatched, true);
+
+		// Wrapper-aware: outer is `sh -c '...'`, the inner extracted ref
+		// is `git commit -m "x"` — the pattern matches the inner ref, so
+		// the observer fires. This previously failed silently under the
+		// reimplemented filter.
+		const wrapped = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: `sh -c 'git commit -m "x"'` },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(wrapped.watchMatched, true);
+		assert.equal(fired.length, 2);
+
+		// Negative control: an unrelated outer command doesn't match,
+		// even though it's a bash event.
+		const miss = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: "ls -la" },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(miss.watchMatched, false);
 	});
 });
 

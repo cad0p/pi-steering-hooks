@@ -90,6 +90,41 @@ function resolve(plugins: Plugin[] = []): ResolvedPluginState {
 	return resolvePlugins(plugins, {});
 }
 
+/**
+ * Capture `console.warn` invocations for the S1 tests asserting that
+ * a predicate throw is logged (vs. propagating up into pi's
+ * `tool_result` shim and leaking the raw `error.message` to the LLM).
+ *
+ * Usage:
+ *
+ * ```ts
+ * const warnings = captureWarnings();
+ * try {
+ *   // ... code that should log ...
+ *   assert.ok(warnings.some((w) => /expected/.test(w)));
+ * } finally {
+ *   warnings.restore();
+ * }
+ * ```
+ *
+ * Implemented as direct reassignment rather than `t.mock.method` so
+ * the helper works regardless of which describe/it block it's called
+ * from (some tests don't take `t` — adding it everywhere was noisier
+ * than the 4-line util).
+ */
+function captureWarnings(): string[] & { restore: () => void } {
+	const warnings: string[] = [];
+	const original = console.warn;
+	console.warn = (...args: unknown[]) => {
+		warnings.push(args.map((a) => String(a)).join(" "));
+	};
+	return Object.assign(warnings, {
+		restore: () => {
+			console.warn = original;
+		},
+	});
+}
+
 // ---------------------------------------------------------------------------
 // Baseline bash behaviour
 // ---------------------------------------------------------------------------
@@ -587,7 +622,7 @@ describe("buildEvaluator: when.happened", () => {
 		assert.equal(skips, undefined);
 	});
 
-	it("throws on malformed value", async () => {
+	it("treats a predicate throw as 'rule did not fire' and logs a warning (S1)", async () => {
 		const rule: Rule = {
 			name: "bad",
 			tool: "bash",
@@ -597,15 +632,43 @@ describe("buildEvaluator: when.happened", () => {
 			// @ts-expect-error — deliberately malformed for runtime check
 			when: { happened: "not-an-object" },
 		};
-		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		await assert.rejects(
-			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
-			(err: Error) =>
-				/Rule "bad".*when\.happened expected/.test(err.message),
-		);
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("cr"),
+				makeCtx("/r"),
+				0,
+			);
+			// Rule does NOT fire — a throwing predicate is isolated from the
+			// rest of the rule list (S1). No block verdict returned.
+			assert.equal(result, undefined);
+			// Warning names the rule + source tag and contains the original
+			// error message (so operators can locate + fix the bug).
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "bad"@user.*when\.happened expected/.test(
+						w,
+					),
+				),
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
 	});
 
-	it('throws migration hint when in: "turn" (v0.0.0-poc name)', async () => {
+	it('isolates the "turn" migration error (S1 × migration)', async () => {
+		// The "turn" → "agent_loop" migration error path is still the
+		// correct thing to throw from inside the predicate (it's how
+		// migrating users get told what to rename). With S1, the throw is
+		// now CAUGHT by the evaluator — the user sees a warning on
+		// startup / first fire and the rule stops firing, rather than the
+		// error leaking back to the LLM via pi's tool-result shim.
 		const rule: Rule = {
 			name: "legacy-turn",
 			tool: "bash",
@@ -615,17 +678,33 @@ describe("buildEvaluator: when.happened", () => {
 			// @ts-expect-error — "turn" is the removed v0.0.0-poc scope name
 			when: { happened: { type: "ws-sync-done", in: "turn" } },
 		};
-		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		await assert.rejects(
-			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
-			(err: Error) =>
-				/Rule "legacy-turn".*"turn" is no longer supported/.test(
-					err.message,
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("cr"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(result, undefined);
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "legacy-turn"@user.*"turn" is no longer supported/.test(
+						w,
+					),
 				),
-		);
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
 	});
 
-	it('throws on typo scope like "agentLoop" (camelCase)', async () => {
+	it('isolates a typo-scope throw like "agentLoop" (camelCase, S1)', async () => {
 		const rule: Rule = {
 			name: "typo",
 			tool: "bash",
@@ -635,14 +714,30 @@ describe("buildEvaluator: when.happened", () => {
 			// @ts-expect-error — camelCase is not a valid scope
 			when: { happened: { type: "ws-sync-done", in: "agentLoop" } },
 		};
-		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		await assert.rejects(
-			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
-			(err: Error) =>
-				/Rule "typo".*when\.happened\.in must be.*"agent_loop" or "session"/.test(
-					err.message,
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("cr"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(result, undefined);
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "typo"@user.*when\.happened\.in must be.*"agent_loop" or "session"/.test(
+						w,
+					),
 				),
-		);
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
 	});
 
 	it("untagged entries are treated as 'not happened this loop' (G5)", async () => {
@@ -883,7 +978,12 @@ describe("buildEvaluator: plugin predicates", () => {
 		assert.deepEqual(seenArgs, [{ wrt: "origin/main", eq: 1 }]);
 	});
 
-	it("throws a clear error on unknown when.<key>", async () => {
+	it("isolates an unknown when.<key> throw as 'rule did not fire' (S1)", async () => {
+		// UnknownPredicateError is still the right thing to throw from
+		// inside the predicate dispatcher (it names the offending key so
+		// operators can locate the typo / missing plugin). S1 catches it
+		// at the evaluator boundary so the raw error message doesn't leak
+		// back to the agent via pi's tool-result shim.
 		const rule: Rule = {
 			name: "bad-when",
 			tool: "bash",
@@ -892,11 +992,30 @@ describe("buildEvaluator: plugin predicates", () => {
 			reason: "bad",
 			when: { totallyMadeUp: /whatever/ },
 		};
-		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		await assert.rejects(
-			evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0),
-			/unknown when\.totallyMadeUp/,
-		);
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("git status"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(result, undefined);
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "bad-when"@user.*unknown when\.totallyMadeUp/.test(
+						w,
+					),
+				),
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
 	});
 });
 
@@ -2603,6 +2722,174 @@ describe("buildEvaluator: PredicateToolInput.basename + args", () => {
 			seen[0]!.args as ReadonlyArray<{ value?: string; text?: string }>
 		).map((w) => w.value ?? w.text);
 		assert.deepEqual(argValues, ["push"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// S1: top-level engine fail-closed + per-predicate isolation coverage
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: top-level engine failures (S1)", () => {
+	it("returns an engine-error block when evaluator scaffolding throws", async () => {
+		// Force the engine scaffolding to throw by handing it a ctx whose
+		// `cwd` getter throws — createExecCache dereferences `ctx.cwd`
+		// SYNCHRONOUSLY at the top of evaluateEventInner, so the throw lands
+		// in the outer try/catch (not the per-rule one).
+		const rule: Rule = {
+			name: "irrelevant",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "n/a",
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule] },
+			resolve(),
+			makeHost(),
+		);
+		const boomCtx = {
+			get cwd(): string {
+				throw new Error("boom: ctx.cwd read failed");
+			},
+			sessionManager: {
+				getEntries: () => [],
+			} as unknown as ReturnType<typeof makeCtx>["sessionManager"],
+		} as unknown as ReturnType<typeof makeCtx>;
+
+		const originalError = console.error;
+		const errors: string[] = [];
+		console.error = (...args: unknown[]) => {
+			errors.push(args.map((a) => String(a)).join(" "));
+		};
+		try {
+			const result = await evaluator.evaluate(
+				bashEvent("git status"),
+				boomCtx,
+				0,
+			);
+			// Fail-closed: return a block with the engine@internal tag so
+			// the LLM sees it's an engine-level failure, not a rule match.
+			assert.ok(result && result.block === true);
+			assert.ok(
+				/^\[steering:engine@internal\]/.test(result.reason ?? ""),
+				`expected engine@internal tag; got: ${result.reason}`,
+			);
+			assert.ok(
+				/safety measure/.test(result.reason ?? ""),
+				`expected safety-measure phrasing; got: ${result.reason}`,
+			);
+			assert.ok(
+				errors.some((e) =>
+					/steering engine threw.*boom: ctx\.cwd read failed/.test(e),
+				),
+				`no matching console.error in:\n${errors.join("\n")}`,
+			);
+		} finally {
+			console.error = originalError;
+		}
+	});
+
+	it("a throwing predicate does not prevent subsequent rules from evaluating", async () => {
+		// Rule A throws in its predicate; rule B is a normal rule that
+		// would block on the same command. S1 policy: A is skipped, B still
+		// fires. (If S1 instead poisoned the whole evaluate, B wouldn't
+		// fire and the test would fail.)
+		const ruleA: Rule = {
+			name: "a-throws",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "a-throws",
+			when: {
+				condition: () => {
+					throw new Error("leaked secret: db-password=hunter2");
+				},
+			},
+		};
+		const ruleB: Rule = {
+			name: "b-blocks",
+			tool: "bash",
+			field: "command",
+			pattern: /^git\s+push/,
+			reason: "b blocks",
+		};
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [ruleA, ruleB] },
+				resolve(),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("git push"),
+				makeCtx("/r"),
+				0,
+			);
+			// Rule B fires (A's throw did NOT poison the chain).
+			assert.ok(result && result.block === true);
+			assert.ok(
+				/\[steering:b-blocks@user\]/.test(result.reason ?? ""),
+				`expected b-blocks reason; got: ${result.reason}`,
+			);
+			// The secret from A's error message is NOT in B's block reason
+			// (the whole point of S1). The warning carries it for operators,
+			// but the LLM only sees B's reason.
+			assert.ok(
+				!/hunter2/.test(result.reason ?? ""),
+				`block reason leaked the error message: ${result.reason}`,
+			);
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "a-throws"@user/.test(w),
+				),
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
+	});
+
+	it("surfaces the plugin source in the warning tag for plugin rules", async () => {
+		// Rule comes from a plugin; the warning's @source tag must read
+		// `@<plugin-name>` (not `@user`). Matches block-reason formatting.
+		const pluginRule: Rule = {
+			name: "bad-plugin-rule",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "bad",
+			when: {
+				condition: () => {
+					throw new Error("plugin predicate bug");
+				},
+			},
+		};
+		const plugin: Plugin = {
+			name: "my-plugin",
+			rules: [pluginRule],
+		};
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{},
+				resolve([plugin]),
+				makeHost(),
+			);
+			const result = await evaluator.evaluate(
+				bashEvent("anything"),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(result, undefined);
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "bad-plugin-rule"@my-plugin/.test(w),
+				),
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
 	});
 });
 
