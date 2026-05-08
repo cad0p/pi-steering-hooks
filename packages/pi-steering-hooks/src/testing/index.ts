@@ -47,7 +47,6 @@ import type {
 	ExecResult,
 	Observer,
 	ObserverContext,
-	ObserverWatch,
 	PredicateContext,
 	PredicateHandler,
 	PredicateToolInput,
@@ -69,6 +68,7 @@ import {
 } from "../evaluator.ts";
 import {
 	buildObserverDispatcher,
+	matchesWatch,
 	type ObserverDispatcher,
 } from "../observer-dispatcher.ts";
 import {
@@ -874,55 +874,6 @@ function resolveToolResultEvent(
 }
 
 // ---------------------------------------------------------------------------
-// Watch-filter (local reimplementation of observer-dispatcher's matchesWatch)
-// ---------------------------------------------------------------------------
-
-/**
- * True if the observer's `watch` filter accepts this event. Missing
- * watch → matches every event. Mirrors
- * `observer-dispatcher.ts`'s internal `matchesWatch` — intentionally
- * reimplemented here so the testing module has zero imports from
- * dispatcher internals. Keep in sync with the dispatcher if the
- * filter semantics change.
- */
-function matchesWatchFilter(
-	watch: ObserverWatch | undefined,
-	event: SchemaToolResultEvent,
-): boolean {
-	if (!watch) return true;
-
-	if (watch.toolName !== undefined && watch.toolName !== event.toolName) {
-		return false;
-	}
-
-	if (watch.inputMatches !== undefined) {
-		const eventInput =
-			typeof event.input === "object" && event.input !== null
-				? (event.input as Record<string, unknown>)
-				: {};
-		for (const [key, pattern] of Object.entries(watch.inputMatches)) {
-			const value = eventInput[key];
-			if (typeof value !== "string") return false; // fail-closed on absent / non-string
-			const re = pattern instanceof RegExp ? pattern : new RegExp(pattern);
-			if (!re.test(value)) return false;
-		}
-	}
-
-	if (watch.exitCode !== undefined && watch.exitCode !== "any") {
-		const code = event.exitCode;
-		if (watch.exitCode === "success") {
-			if (code !== 0) return false;
-		} else if (watch.exitCode === "failure") {
-			if (code === undefined || code === 0) return false;
-		} else if (typeof watch.exitCode === "number") {
-			if (code !== watch.exitCode) return false;
-		}
-	}
-
-	return true;
-}
-
-// ---------------------------------------------------------------------------
 // testPredicate
 // ---------------------------------------------------------------------------
 
@@ -981,7 +932,7 @@ export async function testObserver(
 
 	const ctx = mockObserverContext(options);
 	const resolvedEvent = resolveToolResultEvent(event);
-	const watchMatched = matchesWatchFilter(observer.watch, resolvedEvent);
+	const watchMatched = matchesWatch(observer.watch, resolvedEvent);
 
 	if (watchMatched) {
 		await Promise.resolve(observer.onResult(resolvedEvent, ctx));
