@@ -28,6 +28,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	createRecordingHost,
 	expectAllows,
 	expectBlocks,
 	expectRuleFires,
@@ -35,6 +36,7 @@ import {
 	getAppendedEntries,
 	loadHarness,
 	mockContext,
+	mockExtensionContext,
 	mockObserverContext,
 	runMatrix,
 	testObserver,
@@ -848,5 +850,217 @@ describe("runMatrix / formatMatrix", () => {
 		assert.match(report, /\[case-a\].*expect:block.*actual:BLOCK/);
 		assert.match(report, /\[case-b\].*expect:allow.*actual:BLOCK.*FAIL/);
 		assert.match(report, /PASS: 1\/2/);
+	});
+});
+
+// ===========================================================================
+// createRecordingHost + mockExtensionContext
+// ===========================================================================
+
+describe("createRecordingHost", () => {
+	it("returns a host with empty entries / execCalls / appendedEntries", () => {
+		const host = createRecordingHost();
+		assert.deepEqual(host.entries, []);
+		assert.deepEqual(host.execCalls, []);
+		assert.deepEqual(host.appendedEntries, []);
+		assert.equal(typeof host.exec, "function");
+		assert.equal(typeof host.appendEntry, "function");
+	});
+
+	it("appendEntry records both raw (appendedEntries) and session-shape (entries) logs", () => {
+		const host = createRecordingHost();
+		host.appendEntry("marker", { foo: 1 });
+		host.appendEntry("marker-bare"); // bare call — pi allows no data.
+		assert.equal(host.appendedEntries.length, 2);
+		assert.deepEqual(host.appendedEntries[0], {
+			type: "marker",
+			data: { foo: 1 },
+		});
+		assert.deepEqual(host.appendedEntries[1], {
+			type: "marker-bare",
+			data: undefined,
+		});
+
+		assert.equal(host.entries.length, 2);
+		// Session-shape entries mirror what pi's sessionManager emits:
+		// type, customType, data, timestamp, id, parentId.
+		assert.equal(host.entries[0]?.type, "custom");
+		assert.equal(host.entries[0]?.customType, "marker");
+		assert.deepEqual(host.entries[0]?.data, { foo: 1 });
+		assert.equal(typeof host.entries[0]?.timestamp, "string");
+		assert.match(
+			host.entries[0]?.timestamp ?? "",
+			/^2026-01-01T00:00:/, // monotonic ISO starting at the 2026-01-01 epoch.
+		);
+		assert.equal(host.entries[0]?.parentId, null);
+		// Timestamps strictly increase so chronological asserts are stable.
+		assert.ok(
+			(host.entries[0]?.timestamp ?? "") <
+				(host.entries[1]?.timestamp ?? ""),
+			"entry timestamps should be monotonically increasing",
+		);
+	});
+
+	it("exec defaults to empty-success, records cmd/args/cwd per call", async () => {
+		const host = createRecordingHost();
+		const r = await host.exec("git", ["status"], { cwd: "/work" });
+		assert.deepEqual(r, {
+			stdout: "",
+			stderr: "",
+			code: 0,
+			killed: false,
+		});
+		assert.equal(host.execCalls.length, 1);
+		assert.deepEqual(host.execCalls[0], {
+			cmd: "git",
+			args: ["status"],
+			cwd: "/work",
+		});
+
+		// A call without explicit cwd falls back to "/".
+		await host.exec("pwd", []);
+		assert.equal(host.execCalls[1]?.cwd, "/");
+	});
+
+	it("exec override is threaded through, default still records the call", async () => {
+		const host = createRecordingHost({
+			exec: async (cmd, _args, cwd) => ({
+				stdout: `ran:${cmd}@${cwd}`,
+				stderr: "",
+				code: 0,
+				killed: false,
+			}),
+		});
+		const r = await host.exec("echo", ["hi"], { cwd: "/x" });
+		assert.equal(r.stdout, "ran:echo@/x");
+		assert.equal(host.execCalls.length, 1);
+	});
+
+	it("defensively copies args so later mutation doesn't corrupt the record", async () => {
+		const host = createRecordingHost();
+		const args = ["status"];
+		await host.exec("git", args, { cwd: "/x" });
+		args.push("--mutated");
+		assert.deepEqual(host.execCalls[0]?.args, ["status"]);
+	});
+});
+
+describe("mockExtensionContext", () => {
+	it("exposes cwd + sessionManager.getEntries", () => {
+		const entries = [
+			{
+				type: "custom" as const,
+				customType: "seen",
+				data: { n: 1 },
+				timestamp: "2026-01-01T00:00:00.000Z",
+				id: "e1",
+				parentId: null,
+			},
+		];
+		const ctx = mockExtensionContext("/repo", entries);
+		assert.equal(ctx.cwd, "/repo");
+		assert.deepEqual(ctx.sessionManager.getEntries(), entries);
+	});
+
+	it("defaults entries to an empty array when omitted", () => {
+		const ctx = mockExtensionContext("/repo");
+		assert.deepEqual(ctx.sessionManager.getEntries(), []);
+	});
+
+	it("round-trips: host.appendEntry writes visible via ctx.sessionManager.getEntries", () => {
+		// The core contract: feeding `host.entries` into the ctx lets
+		// the engine's writes flow back into its subsequent reads.
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/repo", host.entries);
+
+		assert.deepEqual(ctx.sessionManager.getEntries(), []);
+		host.appendEntry("mark", { a: 1 });
+		const read = ctx.sessionManager.getEntries();
+		assert.equal(read.length, 1);
+		const first = read[0];
+		assert.ok(first && first.type === "custom");
+		assert.equal(first.customType, "mark");
+		assert.deepEqual(first.data, { a: 1 });
+
+		host.appendEntry("mark", { a: 2 });
+		assert.equal(ctx.sessionManager.getEntries().length, 2);
+	});
+
+	it("drives harness.evaluate + harness.dispatch end-to-end with a shared entries store", async () => {
+		// Demonstrates the intended plugin-author usage pattern:
+		// harness + recording host + shared ctx lets a test assert on
+		// the cross-hook observer → evaluator handoff without any
+		// `as any` escape hatches.
+		const rule: Rule = {
+			name: "needs-mark",
+			tool: "bash",
+			field: "command",
+			pattern: /^git pu/,
+			reason: "needs mark",
+			noOverride: true,
+			when: {
+				// Default `when.happened` semantic: fires when the type has
+				// NOT been written in the scope (ADR §5).
+				happened: { type: "test-passed", in: "agent_loop" },
+			},
+		};
+		const observer: Observer = {
+			name: "test-tracker",
+			watch: { toolName: "bash", inputMatches: { command: /^npm test/ } },
+			onResult: (_evt, obsCtx) => {
+				obsCtx.appendEntry("test-passed", {});
+			},
+		};
+
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/repo", host.entries);
+		const harness = loadHarness({
+			config: { rules: [rule], observers: [observer] },
+			host,
+		});
+
+		// Without a prior test-passed entry, the guarded command blocks.
+		const blocked = await harness.evaluate(
+			{
+				type: "tool_call",
+				toolCallId: "tc1",
+				toolName: "bash",
+				input: { command: "git pu origin feat/x" },
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
+			0,
+		);
+		assert.ok(blocked && blocked.block === true);
+
+		// Dispatch an `npm test` success → observer records test-passed.
+		await harness.dispatch(
+			{
+				type: "tool_result",
+				toolCallId: "tc1",
+				toolName: "bash",
+				input: { command: "npm test" },
+				content: [],
+				details: { exitCode: 0 },
+			} as unknown as Parameters<typeof harness.dispatch>[0],
+			ctx,
+			0,
+		);
+		assert.ok(
+			host.entries.some((e) => e.customType === "test-passed"),
+			"observer should have recorded a test-passed entry",
+		);
+
+		// Subsequent guarded command in the same agent loop passes.
+		const allowed = await harness.evaluate(
+			{
+				type: "tool_call",
+				toolCallId: "tc2",
+				toolName: "bash",
+				input: { command: "git pu origin feat/x" },
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
+			0,
+		);
+		assert.equal(allowed, undefined);
 	});
 });

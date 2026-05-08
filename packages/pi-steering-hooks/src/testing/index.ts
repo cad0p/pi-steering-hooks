@@ -55,6 +55,7 @@ import type {
 	ToolResultEvent as SchemaToolResultEvent,
 } from "../schema.ts";
 import type {
+	ExecResult as PiExecResult,
 	ExtensionContext,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -438,6 +439,216 @@ export function mockObserverContext(
 
 	appendBuffers.set(ctx, buffer);
 	return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// createRecordingHost + mockExtensionContext
+// ---------------------------------------------------------------------------
+//
+// Low-level factories for tests that drive `harness.evaluate` /
+// `harness.dispatch` directly and need to inspect what the engine
+// wrote. Most plugin authors should reach for {@link loadHarness} +
+// {@link expectBlocks} / {@link expectAllows} first — those cover the
+// common rule-gating assertions without exposing the host/ctx surface.
+//
+// The factories here are the escape hatch for the 10% of tests that:
+//
+//   - Drive a multi-call sequence where earlier `appendEntry` writes
+//     must be visible to later `findEntries` reads (self-marking rules,
+//     `when.happened` gating, observer → rule handoff).
+//   - Assert the exact shape of `appendEntry` writes (audit entries,
+//     tracker state) without going through a shorthand expectation.
+//   - Compose a custom {@link EvaluatorHost} for an existing
+//     {@link loadHarness} call while still getting typed access to
+//     recorded exec / appendEntry calls.
+//
+// Use {@link createRecordingHost} with {@link loadHarness} as follows:
+//
+// ```ts
+// const host = createRecordingHost();
+// const ctx = mockExtensionContext("/tmp/test", host.entries);
+// const harness = loadHarness({ config: {...}, host });
+// await harness.evaluate(event, ctx, 1);
+// assert.ok(host.entries.some((e) => e.customType === "my-mark"));
+// ```
+//
+// Prior art: these graduate the `makeTrackedHost` + `makeCtx` helpers
+// previously private to `src/__test-helpers__.ts`. Kept as a separate
+// pair (not merged into {@link loadHarness}) so authors can wire the
+// host and ctx to their own production-runtime facsimile when the
+// default harness plumbing doesn't fit.
+
+/**
+ * Shape of a session-entry produced by {@link createRecordingHost}'s
+ * `appendEntry`, readable by an {@link ExtensionContext} built from
+ * {@link mockExtensionContext}. Mirrors the subset of pi's
+ * `CustomEntry` the engine reads — `id` and `parentId` exist on real
+ * pi entries, so we populate them too to keep type-shape drift from
+ * masking silent divergence.
+ */
+export interface RecordedSessionEntry {
+	readonly type: "custom";
+	readonly customType: string;
+	readonly data: unknown;
+	readonly timestamp: string;
+	readonly id: string;
+	readonly parentId: string | null;
+}
+
+/**
+ * Exec-call record captured by {@link createRecordingHost}. One entry
+ * per invocation, in registration order. `args` is defensively copied
+
+ * so later mutation of the caller's argv array doesn't corrupt the
+ * record.
+ */
+export interface RecordedExecCall {
+	readonly cmd: string;
+	readonly args: readonly string[];
+	readonly cwd: string;
+}
+
+/**
+ * Options for {@link createRecordingHost}.
+ */
+export interface CreateRecordingHostOptions {
+	/**
+	 * Stub for `host.exec`. Receives the normalized `cwd` (either the
+	 * caller's `opts.cwd` or `"/"`). Defaults to resolving with an
+	 * empty successful result — override when tests need to assert
+	 * behavior against a specific stdout / exit code.
+	 */
+	readonly exec?: (
+		cmd: string,
+		args: readonly string[],
+		cwd: string,
+	) => Promise<PiExecResult>;
+}
+
+/**
+ * Recording {@link EvaluatorHost}. Every `exec` and `appendEntry`
+ * call is captured into readable accumulators; `entries` mirrors the
+ * `appendEntry` writes in the shape pi's `sessionManager.getEntries()`
+ * returns, so feeding `host.entries` into {@link mockExtensionContext}
+ * makes the engine's writes visible to its subsequent reads in the
+ * same test.
+ *
+ * Note: `entries` and `execCalls` / `appendedEntries` are returned as
+ * mutable arrays so asserts can use `.some`, `.find`, etc. directly
+ * without a copy. They are owned by the host; don't splice or reassign
+ * them out from under it.
+ */
+export interface RecordingHost extends EvaluatorHost {
+	/**
+	 * Session-entry log backing {@link mockExtensionContext}. Mutated
+	 * in-place on every `appendEntry` call. Pass this array to
+	 * `mockExtensionContext(cwd, host.entries)` so the host and the
+	 * ctx share the same store.
+	 */
+	readonly entries: RecordedSessionEntry[];
+
+	/** Every `exec` invocation, in call order. */
+	readonly execCalls: RecordedExecCall[];
+
+	/**
+	 * Every `appendEntry(type, data)` invocation, in call order. The
+	 * `data` field is stored verbatim — NOT the auto-tagged shape the
+	 * engine produces (that's reflected in {@link entries} instead).
+	 * This buffer is the raw host-level log; use it for assertions that
+	 * care about exactly which calls the engine made.
+	 */
+	readonly appendedEntries: Array<{ type: string; data: unknown }>;
+}
+
+/**
+ * Build a {@link RecordingHost}. Every `exec` call is recorded, and
+ * every `appendEntry` call appends both to {@link RecordingHost.
+ * appendedEntries} (raw host-level log) and to {@link RecordingHost.
+ * entries} (session-entry shape used by {@link mockExtensionContext}).
+ *
+ * Timestamps on the session-entry log are monotonically-incrementing
+ * ISO strings starting at `2026-01-01T00:00:00Z` (+ 1s per entry) so
+ * chronological-order asserts stay stable across test runs without a
+ * live clock dependency. Override with a wrapping host if your test
+ * needs real timestamps.
+ *
+ * The default `exec` stub resolves with an empty successful result —
+ * safer than rejecting by default because most tests don't exercise
+ * exec at all and a loud reject would swamp the signal. Opt in to
+ * rejection via `options.exec` when a test must assert "exec was NOT
+ * called".
+ */
+export function createRecordingHost(
+	options: CreateRecordingHostOptions = {},
+): RecordingHost {
+	const execCalls: RecordedExecCall[] = [];
+	const appendedEntries: Array<{ type: string; data: unknown }> = [];
+	const entries: RecordedSessionEntry[] = [];
+	let idCounter = 0;
+	return {
+		execCalls,
+		appendedEntries,
+		entries,
+		exec: async (cmd, args, opts) => {
+			const cwd = opts?.cwd ?? "/";
+			execCalls.push({ cmd, args: [...args], cwd });
+			if (options.exec) {
+				return options.exec(cmd, args, cwd);
+			}
+			return { stdout: "", stderr: "", code: 0, killed: false };
+		},
+		appendEntry: (type, data) => {
+			appendedEntries.push({ type, data });
+			entries.push({
+				type: "custom",
+				customType: type,
+				data,
+				timestamp: new Date(
+					Date.UTC(2026, 0, 1, 0, 0, idCounter++),
+				).toISOString(),
+				id: `entry-${idCounter}`,
+				parentId: null,
+			});
+		},
+	};
+}
+
+/**
+ * Build a minimal {@link ExtensionContext} stub backed by a
+ * {@link RecordedSessionEntry} array. Used with {@link loadHarness}'s
+ * `harness.evaluate` / `harness.dispatch` when a test needs the engine
+ * to see entries a {@link RecordingHost} previously recorded.
+ *
+ * Only `cwd` and `sessionManager.getEntries()` are populated — the
+ * two fields the engine actually reads. Everything else on
+ * `ExtensionContext` throws on access (via an `unknown` cast) so an
+ * accidental reliance on unsupported surface surfaces as a clear
+ * `TypeError` rather than silently passing.
+ *
+ * Pass `host.entries` from {@link createRecordingHost} to share the
+ * backing store between the engine's writes and its subsequent reads.
+ *
+ * Choosing between this and {@link loadHarness} alone:
+ *
+ *   - Use {@link loadHarness} + {@link expectBlocks}/{@link expectAllows}
+ *     when the test only asserts block vs allow on a single event.
+ *   - Use {@link createRecordingHost} + `mockExtensionContext` when the
+ *     test drives a multi-call sequence, asserts on session-entry
+ *     shape, or inspects exec calls.
+ */
+export function mockExtensionContext(
+	cwd: string,
+	entries: ReadonlyArray<RecordedSessionEntry> = [],
+): ExtensionContext {
+	return {
+		cwd,
+		sessionManager: {
+			getEntries: () => entries,
+			// Other SessionManager methods are stubbed to throw via the
+			// unknown-cast below; any accidental dependency surfaces as a
+			// clear TypeError rather than silently passing.
+		} as unknown as ExtensionContext["sessionManager"],
+	} as ExtensionContext;
 }
 
 // ---------------------------------------------------------------------------
