@@ -1729,6 +1729,96 @@ describe("buildEvaluator: appendEntry auto-tags with _agentLoopIndex", () => {
 		assert.deepEqual(pred[1]!.data, { value: 7, _agentLoopIndex: 2 });
 		assert.deepEqual(pred[2]!.data, { value: "hi", _agentLoopIndex: 2 });
 	});
+
+	it("non-plain-object payloads wrap as { value, _agentLoopIndex } (F2 / G3)", async () => {
+		// The naive spread (`{ ...data, ... }`) silently corrupts arrays,
+		// Dates, Maps, Sets, Errors, and class instances. Every such
+		// input must wrap under `value` with the original reference
+		// preserved, same as a primitive.
+		const host = makeHost();
+		const date = new Date("2020-01-01T00:00:00Z");
+		const map = new Map<string, number>([["a", 1]]);
+		const set = new Set<number>([1, 2, 3]);
+		const err = new Error("boom");
+		const fn = () => 42;
+		class Box {
+			readonly n: number;
+			constructor(n: number) {
+				this.n = n;
+			}
+		}
+		const box = new Box(7);
+		const rule: Rule = {
+			name: "tag-nonplain",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "tag-nonplain",
+			when: {
+				condition: (ctx) => {
+					ctx.appendEntry("arr", [1, 2, 3]);
+					ctx.appendEntry("date", date);
+					ctx.appendEntry("map", map);
+					ctx.appendEntry("set", set);
+					ctx.appendEntry("err", err);
+					ctx.appendEntry("fn", fn);
+					ctx.appendEntry("box", box);
+					ctx.appendEntry("nil", null);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		await evaluator.evaluate(bashEvent("echo hi"), makeCtx("/r"), 5);
+		const byType = new Map(
+			host.appended
+				.filter((e) =>
+					[
+						"arr",
+						"date",
+						"map",
+						"set",
+						"err",
+						"fn",
+						"box",
+						"nil",
+					].includes(e.type),
+				)
+				.map((e) => [e.type, e.data] as const),
+		);
+		assert.deepEqual(byType.get("arr"), {
+			value: [1, 2, 3],
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("date"), {
+			value: date,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("map"), {
+			value: map,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("set"), {
+			value: set,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("err"), {
+			value: err,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("fn"), {
+			value: fn,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("box"), {
+			value: box,
+			_agentLoopIndex: 5,
+		});
+		assert.deepEqual(byType.get("nil"), {
+			value: null,
+			_agentLoopIndex: 5,
+		});
+	});
 });
 
 describe("buildEvaluator: defaults", () => {

@@ -111,11 +111,52 @@ export function createExecCache(
 export const AGENT_LOOP_INDEX_KEY = "_agentLoopIndex" as const;
 
 /**
+ * Narrow "is plain object" guard used to distinguish payloads that
+ * are safe to merge into (spread) from payloads that must be wrapped
+ * as `{ value, _agentLoopIndex }`.
+ *
+ * Anything that is NOT a plain object (arrays, Date, Map, Set, Error,
+ * class instances, functions, null, undefined, primitives) falls into
+ * the wrap branch. Direct `{...}` or `Object.create(null)` shapes fall
+ * into the merge branch.
+ *
+ * Two-stage detection:
+ *   1. `Object.prototype.toString.call(x)` returns `"[object Object]"`
+ *      only for plain objects and for class instances of user-defined
+ *      classes. It correctly excludes arrays, Date, Map, Set, Error,
+ *      etc.
+ *   2. A prototype check then rejects user-class instances: plain
+ *      objects have `Object.prototype` (or `null` for
+ *      `Object.create(null)`) as their prototype; `new Box(...)` has
+ *      `Box.prototype`, which is neither.
+ *
+ * The explicit `Array.isArray` check is belt-and-suspenders — some
+ * runtimes have historically misreported arrays via `toString`, and
+ * the array case is the one most likely to hit this wrapper (an
+ * observer appending a list of watched paths). Cheap to check twice.
+ */
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+	if (x === null || typeof x !== "object") return false;
+	if (Array.isArray(x)) return false;
+	if (Object.prototype.toString.call(x) !== "[object Object]") return false;
+	const proto = Object.getPrototypeOf(x);
+	if (proto !== null && proto !== Object.prototype) return false;
+	return true;
+}
+
+/**
  * Wrap a raw `host.appendEntry` so every write auto-injects the
- * current `agentLoopIndex` into the payload. Object payloads get the
- * field merged in; primitive / undefined payloads get wrapped as
- * `{ value, _agentLoopIndex }` so downstream consumers always see an
- * object shape.
+ * current `agentLoopIndex` into the payload. Plain-object payloads
+ * get the field merged in; everything else — primitives, arrays,
+ * `Date`, `Map`, `Set`, `Error`, class instances, functions, null,
+ * undefined — is wrapped as `{ value, _agentLoopIndex }` so
+ * downstream consumers always see a consistent object shape.
+ *
+ * The "everything else" branch exists because the naive spread
+ * (`{ ...data, ... }`) silently corrupts non-plain objects: arrays
+ * become pseudo-objects with string-indexed keys, Date / Map / Set /
+ * Error instances lose their internal state entirely, etc. Wrapping
+ * under `value` preserves the original reference unchanged.
  *
  * The returned closure matches both {@link PredicateContext.appendEntry}
  * and {@link ObserverContext.appendEntry} so the evaluator and the
@@ -126,10 +167,9 @@ export function createAppendEntry(
 	agentLoopIndex: number,
 ): PredicateContext["appendEntry"] {
 	return <T>(customType: string, data?: T) => {
-		const tagged =
-			typeof data === "object" && data !== null
-				? { ...(data as object), [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
-				: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
+		const tagged = isPlainObject(data)
+			? { ...data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
+			: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
 		host.appendEntry(customType, tagged);
 	};
 }
