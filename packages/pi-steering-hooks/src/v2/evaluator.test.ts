@@ -1185,6 +1185,140 @@ describe("buildEvaluator: override comments", () => {
 			"rule-a",
 		);
 	});
+
+	it("audit entry carries the current _agentLoopIndex (F3)", async () => {
+		// Override entries go through `shared.appendEntry` (the wrapped
+		// path) so rules using `when.happened: { type:
+		// "steering-override", in: "agent_loop" }` can see them. This
+		// test just pins the shape — the agent_loop / session behaviours
+		// follow.
+		const host = makeHost();
+		const evaluator = buildEvaluator(
+			{ defaultNoOverride: false, rules: [NO_FORCE_PUSH] },
+			resolve(),
+			host,
+		);
+		await evaluator.evaluate(
+			bashEvent(
+				"git push --force # steering-override: no-force-push \u2014 r",
+			),
+			makeCtx("/r"),
+			11,
+		);
+		assert.equal(host.appended.length, 1);
+		const data = host.appended[0]!.data as Record<string, unknown>;
+		assert.equal(data["_agentLoopIndex"], 11);
+		assert.equal(data["rule"], "no-force-push");
+	});
+
+	it('when.happened { type: "steering-override", in: "agent_loop" } filters overrides by current loop (F3)', async () => {
+		// Loop 7: override is consumed for no-force-push. A DIFFERENT rule
+		// gates on `happened: { steering-override, agent_loop }` — after the
+		// override lands in loop 7 it should observe "happened" in loop 7
+		// (predicate returns false → rule skips) but NOT in loop 8
+		// (predicate returns true → rule fires).
+		const host = makeHost();
+		const overridableRule: Rule = {
+			name: "no-force-push",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push\\s+--force",
+			reason: "no force",
+			noOverride: false,
+		};
+		// "Canary" rule fires on `echo hi` only when NO override-audit
+		// entry exists in the current agent loop.
+		const canaryRule: Rule = {
+			name: "canary",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "canary",
+			when: {
+				happened: { type: "steering-override", in: "agent_loop" },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ defaultNoOverride: false, rules: [overridableRule, canaryRule] },
+			resolve(),
+			host,
+		);
+		// Loop 7: consume the override.
+		const r1 = await evaluator.evaluate(
+			bashEvent(
+				"git push --force # steering-override: no-force-push \u2014 r",
+			),
+			makeCtx("/r", host.entries),
+			7,
+		);
+		assert.equal(r1, undefined, "override accepted, no block");
+
+		// Loop 7: canary sees the override → "happened" is true → predicate
+		// returns false → rule skips.
+		const r2 = await evaluator.evaluate(
+			bashEvent("echo hi"),
+			makeCtx("/r", host.entries),
+			7,
+		);
+		assert.equal(r2, undefined, "canary skipped in same loop as override");
+
+		// Loop 8: same entries array, but agent_loop scope filters by
+		// tag → the loop-7-tagged override is invisible → canary fires.
+		const r3 = await evaluator.evaluate(
+			bashEvent("echo hi"),
+			makeCtx("/r", host.entries),
+			8,
+		);
+		assert.ok(
+			r3 && r3.block === true,
+			"canary fires in new loop because override is tagged to loop 7",
+		);
+	});
+
+	it('when.happened { type: "steering-override", in: "session" } sees overrides across loops (F3)', async () => {
+		// Session scope ignores the `_agentLoopIndex` tag — any override
+		// ever consumed in the session suppresses the canary regardless
+		// of which loop produced it.
+		const host = makeHost();
+		const overridableRule: Rule = {
+			name: "no-force-push",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push\\s+--force",
+			reason: "no force",
+			noOverride: false,
+		};
+		const canaryRule: Rule = {
+			name: "canary",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "canary",
+			when: { happened: { type: "steering-override", in: "session" } },
+		};
+		const evaluator = buildEvaluator(
+			{ defaultNoOverride: false, rules: [overridableRule, canaryRule] },
+			resolve(),
+			host,
+		);
+		await evaluator.evaluate(
+			bashEvent(
+				"git push --force # steering-override: no-force-push \u2014 r",
+			),
+			makeCtx("/r", host.entries),
+			7,
+		);
+		const r = await evaluator.evaluate(
+			bashEvent("echo hi"),
+			makeCtx("/r", host.entries),
+			99,
+		);
+		assert.equal(
+			r,
+			undefined,
+			"session scope: override seen regardless of agent_loop",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
