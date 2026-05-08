@@ -137,6 +137,51 @@ function evaluateCwd(
 }
 
 /**
+ * Built-in `when.happened` predicate. Reads session entries of the
+ * given type from `ctx.findEntries`, filters by scope, and returns
+ * **true when NO matching entry is found** — i.e. the type has NOT
+ * happened yet in that scope.
+ *
+ * Matches ADR §5 semantics:
+ *   - `in: "agent_loop"` keeps only entries whose
+ *     `_agentLoopIndex === ctx.agentLoopIndex`.
+ *   - `in: "session"` keeps every entry.
+ *
+ * Inversion is handled by the caller via `when.not`. Authors wanting
+ * "fires when the type HAS happened" wrap this clause in `not:`.
+ */
+function evaluateHappened(
+	value: unknown,
+	ctx: PredicateContext,
+): boolean {
+	if (
+		value === null ||
+		typeof value !== "object" ||
+		!("type" in value) ||
+		!("in" in value)
+	) {
+		throw new Error(
+			`[pi-steering-hooks] when.happened expects ` +
+				`{ type: string; in: "agent_loop" | "session" }; got ${JSON.stringify(value)}`,
+		);
+	}
+	const { type, in: scope } = value as {
+		type: string;
+		in: "agent_loop" | "session";
+	};
+	const entries = ctx.findEntries<Record<string, unknown>>(type);
+	if (scope === "session") {
+		return entries.length === 0;
+	}
+	// scope === "agent_loop": filter by engine-injected tag.
+	for (const entry of entries) {
+		const tag = entry.data?.["_agentLoopIndex"];
+		if (tag === ctx.agentLoopIndex) return false;
+	}
+	return true;
+}
+
+/**
  * Normalize the union shape accepted by built-in predicates:
  *   - `Pattern`                            → { pattern, onUnknown: "block" }
  *   - `{ pattern: Pattern, onUnknown? }`   → as supplied; `onUnknown`
@@ -177,6 +222,8 @@ export interface WhenWalkerState {
  *
  * Dispatch table:
  *   - `cwd`        — built-in (walker-tied), consumes `state.cwd`.
+ *   - `happened`   — built-in (session-entry-scoped), consumes
+ *                    `ctx.findEntries` + `ctx.agentLoopIndex`.
  *   - `not`        — nested WhenClause; inversion: NONE of the nested
  *                    predicates match.
  *   - `condition`  — {@link PredicateFn}; call with ctx.
@@ -197,6 +244,12 @@ export async function evaluateWhen(
 		// Built-in: cwd
 		if (key === "cwd") {
 			if (!evaluateCwd(value, state.cwd)) return false;
+			continue;
+		}
+
+		// Built-in: happened (session-entry presence check)
+		if (key === "happened") {
+			if (!evaluateHappened(value, ctx)) return false;
 			continue;
 		}
 

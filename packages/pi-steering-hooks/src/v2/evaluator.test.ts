@@ -421,6 +421,190 @@ describe("buildEvaluator: when.cwd", () => {
 	});
 });
 
+describe("buildEvaluator: when.happened", () => {
+	// "Fires when NOT happened." — the mental model is inverted from
+	// the rule author's perspective (they say "block cr unless sync
+	// has happened"). The engine reads: no entry of the type in the
+	// given scope → predicate matches → rule fires (block).
+	const sessionEntry = (
+		customType: string,
+		data: Record<string, unknown>,
+		ts = "2026-01-01T00:00:00.000Z",
+		id = "e1",
+	) => ({
+		type: "custom" as const,
+		customType,
+		data,
+		timestamp: ts,
+		id,
+		parentId: null,
+	});
+
+	it("in: 'agent_loop' — fires when no entry for current agent loop", async () => {
+		const rule: Rule = {
+			name: "cr-needs-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+		};
+		// No entries anywhere → rule fires.
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(fires);
+	});
+
+	it("in: 'agent_loop' — skips when entry's _agentLoopIndex matches ctx", async () => {
+		const rule: Rule = {
+			name: "cr-needs-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry("ws-sync-done", { _agentLoopIndex: 5 }),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.equal(skips, undefined);
+	});
+
+	it("in: 'agent_loop' — fires when only entries from PRIOR agent loops exist", async () => {
+		const rule: Rule = {
+			name: "cr-needs-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry("ws-sync-done", { _agentLoopIndex: 3 }, undefined, "a"),
+			sessionEntry("ws-sync-done", { _agentLoopIndex: 4 }, undefined, "b"),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires);
+	});
+
+	it("in: 'session' — skips whenever ANY entry of type exists", async () => {
+		const rule: Rule = {
+			name: "once-per-session",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "once-per-session",
+			when: { happened: { type: "welcome-shown", in: "session" } },
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry("welcome-shown", { _agentLoopIndex: 0 }),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			99,
+		);
+		assert.equal(skips, undefined);
+	});
+
+	it("in: 'session' — fires when no entry of type exists", async () => {
+		const rule: Rule = {
+			name: "once-per-session",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "once-per-session",
+			when: { happened: { type: "welcome-shown", in: "session" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(fires);
+	});
+
+	it("not.happened: inverts — fires when type HAS happened in agent loop", async () => {
+		const rule: Rule = {
+			name: "no-cr-twice",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "no-cr-twice",
+			when: {
+				not: { happened: { type: "cr-attempted", in: "agent_loop" } },
+			},
+		};
+		// Entry tagged with the current agent loop → happened predicate
+		// says NOT-happened=false (so happened did happen) → nested clause
+		// is false → not flips to true → rule fires.
+		const ctx = makeCtx("/r", [
+			sessionEntry("cr-attempted", { _agentLoopIndex: 5 }),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires);
+	});
+
+	it("not.happened: skips — when type has NOT happened in agent loop", async () => {
+		const rule: Rule = {
+			name: "no-cr-twice",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "no-cr-twice",
+			when: {
+				not: { happened: { type: "cr-attempted", in: "agent_loop" } },
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(skips, undefined);
+	});
+
+	it("throws on malformed value", async () => {
+		const rule: Rule = {
+			name: "bad",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "bad",
+			// @ts-expect-error — deliberately malformed for runtime check
+			when: { happened: "not-an-object" },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await assert.rejects(
+			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
+			/when\.happened expects/,
+		);
+	});
+});
+
 describe("buildEvaluator: when.not + when.condition", () => {
 	it("when.not inverts the nested clause", async () => {
 		const rule: Rule = {

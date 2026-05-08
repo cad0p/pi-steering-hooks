@@ -124,6 +124,26 @@ export interface WhenClause {
 	cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
 
 	/**
+	 * Rule fires when an entry of the given `type` has NOT happened in
+	 * the given scope. Typical usage: "block `cr` unless sync has
+	 * happened" —
+	 * `happened: { type: "rds-ws-sync-done", in: "agent_loop" }`.
+	 *
+	 * Scopes:
+	 *   - `"agent_loop"` — filter session entries by
+	 *     `entry.data._agentLoopIndex === ctx.agentLoopIndex`. The engine
+	 *     auto-injects that tag on every `appendEntry` write, so plugin
+	 *     authors don't have to remember to tag manually.
+	 *   - `"session"`    — no scope filter. Any entry of `type` present
+	 *     in the session JSONL satisfies.
+	 *
+	 * Inversion: place inside `not` to flip —
+	 * `not: { happened: { type, in } }` fires when the type HAS
+	 * happened. See ADR §5.
+	 */
+	happened?: { type: string; in: "agent_loop" | "session" };
+
+	/**
 	 * Boolean NOT: the rule fires only when every nested predicate
 	 * fails. Useful for "mostly block, but allow the safe variant":
 	 * `when: { not: { upstream: /origin\/main/ } }` — block unless the
