@@ -121,6 +121,9 @@ export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
 export type {
 	ExecOpts,
 	ExecResult,
+	BaseRule,
+	BashRule,
+	EditRule,
 	Observer,
 	ObserverContext,
 	ObserverWatch,
@@ -134,6 +137,7 @@ export type {
 	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
+	WriteRule,
 } from "./schema.ts";
 
 // Walker types re-exported for plugin authors. Forward-compatible with
