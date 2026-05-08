@@ -286,14 +286,30 @@ export interface Rule<
 	 *
 	 * **Compile-time effect (via {@link defineConfig}):** the union of
 	 * all `writes` literals declared across plugin rules, plugin
-	 * observers, user rules, and user observers (from
-	 * `const satisfies` or `as const satisfies`-annotated literals —
-	 * bare `: Plugin` annotations widen away the inference) constrains
-	 * the `type` field of every {@link WhenClause.happened} inside the
-	 * same config. Declaring a write here makes it referenceable from
+	 * observers, user rules, and user observers constrains the `type`
+	 * field of every {@link WhenClause.happened} inside the same config.
+	 * Declaring a write here makes it referenceable from
 	 * `when.happened.type` anywhere in that config; omitting it leaves
 	 * the string out of the union and downstream references to it are
 	 * rejected as typos.
+	 *
+	 * **Authoring pattern.** Enforcement depends on TypeScript preserving
+	 * the literal types of your `writes` arrays. Use one of:
+	 *   - `as const satisfies Rule` on a rule object literal, OR
+	 *   - `const satisfies Rule` on an object literal, OR
+	 *   - declaring the rule INSIDE the `defineConfig({ rules: [...] })`
+	 *     call so inference flows directly through the `const P`, `const R`
+	 *     generics.
+	 *
+	 * **Footgun: bare `: Rule` / `: Observer` / `: Plugin` annotations
+	 * widen the literal `writes` array to `readonly string[]`. The engine
+	 * can no longer project string-literal members, so `AllWrites`
+	 * collapses to `never` — meaning EVERY `when.happened.type`
+	 * reference in the config is rejected as a typo, not silently
+	 * accepted. The wider warning — "name" / "plugin" literals
+	 * widening to `string` — causes the opposite failure: typos in
+	 * `disable` / `disablePlugins` start compiling silently. Always use
+	 * `as const satisfies` for reusable constants.
 	 *
 	 * **Runtime effect:** none. `writes` is purely documentation +
 	 * type-level plumbing — the engine does NOT verify that `onFire`
@@ -436,14 +452,19 @@ export interface Observer {
 	 *
 	 * **Compile-time effect (via {@link defineConfig}):** the union of
 	 * all `writes` literals declared across plugin rules, plugin
-	 * observers, user rules, and user observers (from
-	 * `const satisfies` or `as const satisfies`-annotated literals —
-	 * bare `: Observer` annotations widen away the inference)
-	 * constrains the `type` field of every {@link WhenClause.happened}
-	 * inside the same config. Declaring a write here makes it
-	 * referenceable from `when.happened.type` anywhere in that config;
-	 * omitting it leaves the string out of the union and downstream
-	 * references to it are rejected as typos.
+	 * observers, user rules, and user observers constrains the `type`
+	 * field of every {@link WhenClause.happened} inside the same config.
+	 * Declaring a write here makes it referenceable from
+	 * `when.happened.type` anywhere in that config; omitting it leaves
+	 * the string out of the union and downstream references to it are
+	 * rejected as typos.
+	 *
+	 * **Authoring pattern.** See {@link Rule.writes} for the full
+	 * footgun note — TL;DR: use `as const satisfies Observer` on
+	 * reusable observer constants, or declare them inline inside
+	 * `defineConfig({ observers: [...] })`. Bare `: Observer` annotations
+	 * widen `writes` to `readonly string[]` and collapse `AllWrites` to
+	 * `never`, rejecting every `when.happened.type` reference.
 	 *
 	 * **Runtime effect:** none. `writes` is purely documentation +
 	 * type-level plumbing — the engine does NOT verify that `onResult`
