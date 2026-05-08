@@ -50,7 +50,7 @@ function configModule(body: string): string {
 // Unit bits
 // ---------------------------------------------------------------------------
 
-describe("v2/loader: configCandidates", () => {
+describe("loader: configCandidates", () => {
 	it("returns index.ts before steering.ts", () => {
 		const [a, b] = configCandidates("/tmp/x");
 		assert.equal(a, "/tmp/x/.pi/steering/index.ts");
@@ -58,7 +58,7 @@ describe("v2/loader: configCandidates", () => {
 	});
 });
 
-describe("v2/loader: ancestorChain", () => {
+describe("loader: ancestorChain", () => {
 	it("returns innermost first", () => {
 		const prior = process.env["HOME"];
 		process.env["HOME"] = "/home/user";
@@ -121,7 +121,7 @@ describe("v2/loader: ancestorChain", () => {
 // findConfigFile
 // ---------------------------------------------------------------------------
 
-describe("v2/loader: findConfigFile", () => {
+describe("loader: findConfigFile", () => {
 	let tmp: string;
 	beforeEach(() => {
 		tmp = mkdtempSync(join(tmpdir(), "pi-steering-v2-loader-"));
@@ -156,7 +156,7 @@ describe("v2/loader: findConfigFile", () => {
 // loadConfigs — walk-up, stray-file warning, bad layer handling
 // ---------------------------------------------------------------------------
 
-describe("v2/loader: loadConfigs", () => {
+describe("loader: loadConfigs", () => {
 	let tmp: string;
 	let priorHome: string | undefined;
 	let warnings: string[];
@@ -410,7 +410,7 @@ describe("v2/loader: loadConfigs", () => {
 // buildConfig — merge semantics
 // ---------------------------------------------------------------------------
 
-describe("v2/loader: buildConfig", () => {
+describe("loader: buildConfig", () => {
 	let warnings: string[];
 	let origWarn: typeof console.warn;
 
@@ -708,7 +708,7 @@ describe("v2/loader: buildConfig", () => {
 // loadSteeringConfig — end-to-end
 // ---------------------------------------------------------------------------
 
-describe("v2/loader: loadSteeringConfig", () => {
+describe("loader: loadSteeringConfig", () => {
 	let tmp: string;
 	let priorHome: string | undefined;
 	let origWarn: typeof console.warn;

@@ -18,19 +18,19 @@
  * without freezing the helper as public API.
  */
 
-import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../v2/defaults.ts";
+import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../defaults.ts";
 import {
 	buildEvaluator,
 	type EvaluatorRuntime,
 	type EvaluatorHost,
-} from "../v2/evaluator.ts";
-import { buildConfig, loadConfigs } from "../v2/loader.ts";
+} from "../evaluator.ts";
+import { buildConfig, loadConfigs } from "../loader.ts";
 import {
 	buildObserverDispatcher,
 	type ObserverDispatcher,
-} from "../v2/observer-dispatcher.ts";
-import { resolvePlugins } from "../v2/plugin-merger.ts";
-import type { SteeringConfig } from "../v2/schema.ts";
+} from "../observer-dispatcher.ts";
+import { resolvePlugins } from "../plugin-merger.ts";
+import type { SteeringConfig } from "../schema.ts";
 
 /**
  * Build the per-session evaluator + observer dispatcher from the walk-

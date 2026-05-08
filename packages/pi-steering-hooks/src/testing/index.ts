@@ -53,27 +53,27 @@ import type {
 	PredicateToolInput,
 	SteeringConfig,
 	ToolResultEvent as SchemaToolResultEvent,
-} from "../v2/schema.ts";
+} from "../schema.ts";
 import type {
 	ExtensionContext,
 	ToolCallEvent,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../v2/defaults.ts";
-import { createAppendEntry } from "../v2/evaluator-internals/context.ts";
+import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../defaults.ts";
+import { createAppendEntry } from "../evaluator-internals/context.ts";
 import {
 	buildEvaluator,
 	type EvaluatorHost,
 	type EvaluatorRuntime,
-} from "../v2/evaluator.ts";
+} from "../evaluator.ts";
 import {
 	buildObserverDispatcher,
 	type ObserverDispatcher,
-} from "../v2/observer-dispatcher.ts";
+} from "../observer-dispatcher.ts";
 import {
 	resolvePlugins,
 	type ResolvedPluginState,
-} from "../v2/plugin-merger.ts";
+} from "../plugin-merger.ts";
 
 // ---------------------------------------------------------------------------
 // Capture tracking

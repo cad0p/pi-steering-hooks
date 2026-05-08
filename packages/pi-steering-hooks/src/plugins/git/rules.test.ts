@@ -23,9 +23,9 @@ import type {
 import {
 	makeCtx,
 	makeTrackedHost,
-} from "../../v2/__test-helpers__.ts";
-import { buildEvaluator } from "../../v2/evaluator.ts";
-import { resolvePlugins } from "../../v2/plugin-merger.ts";
+} from "../../__test-helpers__.ts";
+import { buildEvaluator } from "../../evaluator.ts";
+import { resolvePlugins } from "../../plugin-merger.ts";
 import gitPlugin from "./index.ts";
 
 // ---------------------------------------------------------------------------

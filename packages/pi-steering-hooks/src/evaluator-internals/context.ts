@@ -105,8 +105,8 @@ export function createExecCache(
  * comparing this key against `ctx.agentLoopIndex`.
  *
  * Part of the on-disk session-JSONL format, exposed as a public
- * module-level constant. Re-exported from `v2/index.ts` and the
- * package root so plugin authors who manually inspect entries via
+ * module-level constant. Re-exported from the package root
+ * so plugin authors who manually inspect entries via
  * `findEntries` can import the constant by name rather than
  * hardcoding the string — a future rename would then break at
  * import time instead of silently producing un-filtered entries.

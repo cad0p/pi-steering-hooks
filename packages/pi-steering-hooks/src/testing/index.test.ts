@@ -20,7 +20,7 @@
  *
  * These are UNIT tests against the primitives — they don't exercise
  * the underlying evaluator / observer dispatcher semantics in depth
- * (those are covered in the v2/*.test.ts suites). Here we verify the
+ * (those are covered in the *.test.ts suites). Here we verify the
  * wrappers assemble the right plumbing.
  */
 
@@ -47,8 +47,8 @@ import type {
 	PredicateContext,
 	PredicateHandler,
 	Rule,
-} from "../v2/schema.ts";
-import type { EvaluatorHost } from "../v2/evaluator.ts";
+} from "../schema.ts";
+import type { EvaluatorHost } from "../evaluator.ts";
 
 // ---------------------------------------------------------------------------
 // Shared stubs

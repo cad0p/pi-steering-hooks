@@ -5,7 +5,7 @@
 // Inspired by @samfp/pi-steering-hooks (schema, override-comment,
 // defaults). AST backend + command-level effective-cwd via
 // unbash-walker. This file is the thin wiring layer between pi's
-// extension API and the v2 engine (loader + plugin-merger + evaluator
+// extension API and the engine (loader + plugin-merger + evaluator
 // + observer-dispatcher).
 
 import type {
@@ -13,11 +13,11 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { buildSessionRuntime } from "./internal/session-runtime.ts";
-import type { EvaluatorRuntime, EvaluatorHost } from "./v2/evaluator.ts";
-import type { ObserverDispatcher } from "./v2/observer-dispatcher.ts";
+import type { EvaluatorRuntime, EvaluatorHost } from "./evaluator.ts";
+import type { ObserverDispatcher } from "./observer-dispatcher.ts";
 
 /**
- * Pi extension factory. Wires the v2 steering engine onto pi's
+ * Pi extension factory. Wires the steering engine onto pi's
  * lifecycle events:
  *
  *   - `agent_start`  — bump the internal `agentLoopIndex` counter so
@@ -89,26 +89,35 @@ export default function register(pi: ExtensionAPI): void {
 }
 
 // ---------------------------------------------------------------------------
-// Public surface — the v2 engine.
+// Public surface — the engine.
 //
 // Consumers embedding the engine (building their own extensions, a CLI
 // that lints commands, a test harness, …) import these from the
 // package root.
 // ---------------------------------------------------------------------------
 
-export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
+// Defaults — bundled rule and plugin starter set.
+export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./defaults.ts";
 
-export {
-	AGENT_LOOP_INDEX_KEY,
-	buildConfig,
-	defineConfig,
-	definePredicate,
-	fromJSON,
-	FromJSONError,
-	loadConfigs,
-	loadSteeringConfig,
-} from "./v2/index.ts";
+// Config helper (preferred entry point).
+export { defineConfig } from "./define-config.ts";
+export type { DefineConfigInput } from "./define-config.ts";
 
+// Predicate helper.
+export { definePredicate } from "./define-predicate.ts";
+
+// Loader — walk-up config discovery + merge.
+export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";
+
+// JSON compat — migrate v0.0.x JSON configs to v0.1+ TS configs.
+export { FromJSONError, fromJSON } from "./compat.ts";
+
+// Auto-tag key for session-entry writes. Exposed so plugin authors
+// inspecting raw session entries via `findEntries` can reference the
+// constant instead of hardcoding the string.
+export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
+
+// Schema types — the public authoring surface.
 export type {
 	ExecOpts,
 	ExecResult,
@@ -125,7 +134,7 @@ export type {
 	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
-} from "./v2/index.ts";
+} from "./schema.ts";
 
 // Walker types re-exported for plugin authors. Forward-compatible with
 // future unbash-walker extraction — imports from this package won't

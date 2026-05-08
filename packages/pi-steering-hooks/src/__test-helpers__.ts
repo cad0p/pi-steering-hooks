@@ -20,7 +20,7 @@
  * That's now a single option on the unified helper.
  *
  * Kept OUT of the public surface: `__test-helpers__` is a leading-double-
- * underscore convention indicating "test only"; nothing under `src/v2/`
+ * underscore convention indicating "test only"; nothing under `src/`
  * imports it at runtime.
  */
 

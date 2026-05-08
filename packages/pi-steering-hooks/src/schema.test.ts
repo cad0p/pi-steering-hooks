@@ -29,7 +29,7 @@ import type {
 	WhenClause,
 } from "./schema.ts";
 
-describe("v2/schema: shape smoke tests", () => {
+describe("schema: shape smoke tests", () => {
 	it("Rule accepts a minimal bash rule with a string pattern", () => {
 		const rule: Rule = {
 			name: "test",
@@ -243,9 +243,7 @@ describe("package-root exports", () => {
 		// session entries via `findEntries` import the constant instead
 		// of hardcoding the string — a future rename would then break at
 		// import time, not at runtime.
-		const rootExports = await import("../index.ts");
+		const rootExports = await import("./index.ts");
 		assert.equal(rootExports.AGENT_LOOP_INDEX_KEY, "_agentLoopIndex");
-		const v2Exports = await import("./index.ts");
-		assert.equal(v2Exports.AGENT_LOOP_INDEX_KEY, "_agentLoopIndex");
 	});
 });

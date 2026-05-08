@@ -34,11 +34,11 @@ import type {
 import {
 	makeCtx,
 	makeTrackedHost,
-} from "../../v2/__test-helpers__.ts";
-import { DEFAULT_RULES } from "../../v2/defaults.ts";
-import { buildEvaluator } from "../../v2/evaluator.ts";
-import { resolvePlugins } from "../../v2/plugin-merger.ts";
-import type { SteeringConfig } from "../../v2/schema.ts";
+} from "../../__test-helpers__.ts";
+import { DEFAULT_RULES } from "../../defaults.ts";
+import { buildEvaluator } from "../../evaluator.ts";
+import { resolvePlugins } from "../../plugin-merger.ts";
+import type { SteeringConfig } from "../../schema.ts";
 import gitPlugin from "./index.ts";
 
 // ---------------------------------------------------------------------------

@@ -19,17 +19,17 @@
  */
 
 import { readFile, writeFile } from "node:fs/promises";
-import { FromJSONError, fromJSON } from "../v2/compat.ts";
+import { FromJSONError, fromJSON } from "../compat.ts";
 import {
 	buildConfig,
 	loadConfigs,
-} from "../v2/loader.ts";
+} from "../loader.ts";
 import type {
 	Observer,
 	Rule,
 	SteeringConfig,
 	WhenClause,
-} from "../v2/schema.ts";
+} from "../schema.ts";
 
 /**
  * CLI entrypoint. Exported (not just `void main(...)` at module top)

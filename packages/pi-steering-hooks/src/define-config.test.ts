@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import shippedGitPlugin from "../plugins/git/index.ts";
+import shippedGitPlugin from "./plugins/git/index.ts";
 import { defineConfig } from "./define-config.ts";
 import type { Observer, Plugin, PredicateContext } from "./schema.ts";
 
@@ -33,7 +33,7 @@ const gitPlugin = {
 	observers: [{ name: "branch-changed", onResult: () => {} }],
 } as const satisfies Plugin;
 
-describe("v2/defineConfig: runtime behavior", () => {
+describe("defineConfig: runtime behavior", () => {
 	it("returns a SteeringConfig with the fields the caller passed", () => {
 		const cfg = defineConfig({
 			defaultNoOverride: true,
@@ -83,7 +83,7 @@ describe("v2/defineConfig: runtime behavior", () => {
 	});
 });
 
-describe("v2/defineConfig: type-level checks", () => {
+describe("defineConfig: type-level checks", () => {
 	it("allows observer name references drawn from inline observers", () => {
 		const cfg = defineConfig({
 			observers: [readObserver, syncObserver],
@@ -230,7 +230,7 @@ describe("v2/defineConfig: type-level checks", () => {
 // stops enforcing the constraint, the directive itself errors at
 // type-check and this file fails to compile.
 
-describe("v2/defineConfig: type constraints (ADR §8)", () => {
+describe("defineConfig: type constraints (ADR §8)", () => {
 	it("disable accepts registered rule names (plugin + user)", () => {
 		const plugin = {
 			name: "p",
@@ -443,7 +443,7 @@ describe("v2/defineConfig: type constraints (ADR §8)", () => {
 	});
 });
 
-describe("v2/defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", () => {
+describe("defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", () => {
 	// These tests pin the ASYMMETRIC failure modes of bare type annotations
 	// vs. `as const satisfies` so the JSDoc authoring-pattern guidance in
 	// `schema.ts` (Rule.writes / Observer.writes / Plugin.name) stays
@@ -537,7 +537,7 @@ describe("v2/defineConfig: bare-annotation footgun (ADR §8 authoring pattern)",
 	});
 });
 
-describe("v2/defineConfig: cross-module plugin typo detection (F2 regression fence)", () => {
+describe("defineConfig: cross-module plugin typo detection (F2 regression fence)", () => {
 	// The F2 finding: gitPlugin's emitted .d.ts was widening rule names
 	// to `Rule<string, string>[]`, which silently disabled typo detection
 	// on `disable: [...]` for consumers importing the shipped plugin.

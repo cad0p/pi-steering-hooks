@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { fromJSON, FromJSONError } from "./compat.ts";
 
-describe("v2/compat: fromJSON happy paths", () => {
+describe("compat: fromJSON happy paths", () => {
 	it("empty object produces empty config", () => {
 		assert.deepEqual(fromJSON({}), {});
 	});
@@ -116,7 +116,7 @@ describe("v2/compat: fromJSON happy paths", () => {
 	});
 });
 
-describe("v2/compat: fromJSON rejections", () => {
+describe("compat: fromJSON rejections", () => {
 	it("rejects non-object top-level", () => {
 		assert.throws(() => fromJSON(null), FromJSONError);
 		assert.throws(() => fromJSON(42), FromJSONError);
@@ -322,7 +322,7 @@ describe("v2/compat: fromJSON rejections", () => {
 	});
 });
 
-describe("v2/compat: FromJSONError", () => {
+describe("compat: FromJSONError", () => {
 	it("carries a path pointing at the offending location", () => {
 		try {
 			fromJSON({

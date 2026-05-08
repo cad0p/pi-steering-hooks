@@ -40,7 +40,7 @@ import {
 // Shape invariants
 // ---------------------------------------------------------------------------
 
-describe("v2/defaults: DEFAULT_RULES shape", () => {
+describe("defaults: DEFAULT_RULES shape", () => {
 	it("has the expected rule count (four)", () => {
 		// Locking the count keeps additions/removals a deliberate,
 		// reviewed edit.
@@ -102,7 +102,7 @@ describe("v2/defaults: DEFAULT_RULES shape", () => {
 	});
 });
 
-describe("v2/defaults: DEFAULT_PLUGINS shape", () => {
+describe("defaults: DEFAULT_PLUGINS shape", () => {
 	it("is empty by default (Phase 3 ships no built-in plugins)", () => {
 		// Phase 4 will add the git plugin. When that lands this test flips
 		// to assert the expected plugin list — keeping a count lock so the
@@ -115,7 +115,7 @@ describe("v2/defaults: DEFAULT_PLUGINS shape", () => {
 // Pattern spot-checks
 // ---------------------------------------------------------------------------
 
-describe("v2/defaults: DEFAULT_RULES pattern spot-checks", () => {
+describe("defaults: DEFAULT_RULES pattern spot-checks", () => {
 	function pattern(name: string): RegExp {
 		const r = DEFAULT_RULES.find((r) => r.name === name);
 		if (!r) throw new Error(`default rule not found: ${name}`);
@@ -373,7 +373,7 @@ function bashEvent(command: string): BashToolCallEvent {
 	};
 }
 
-describe("v2/defaults: end-to-end via buildEvaluator", () => {
+describe("defaults: end-to-end via buildEvaluator", () => {
 	it("blocks `git push --force`", async () => {
 		const ev = defaultsEvaluator();
 		const r = await ev.evaluate(bashEvent("git push --force"), makeCtx("/r"), 0);
