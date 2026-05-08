@@ -249,6 +249,209 @@ describe("buildObserverDispatcher: watch.inputMatches", () => {
 });
 
 // ---------------------------------------------------------------------------
+// watch.inputMatches.command — wrapper-aware matching (ADR §12)
+// ---------------------------------------------------------------------------
+//
+// `inputMatches.command` matches against the outer raw command AND
+// against walker-extracted ref texts. So `sh -c 'git commit …'` with an
+// anchored `/^git\s+commit/` pattern fires the observer — which is what
+// rule authors intuitively expect once they've seen the evaluator treat
+// the inner `git commit` as its own ref. Parse happens at most once
+// per dispatch regardless of how many observers share the filter shape.
+
+describe(
+	"buildObserverDispatcher: watch.inputMatches.command — wrapper-aware",
+	() => {
+		it("matches `git commit` inside `sh -c '…'` (WRAP-1)", async () => {
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: { command: /^git\s+commit/ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			await dispatcher.dispatch(
+				bashResult("sh -c 'git commit -m x'", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 1);
+		});
+
+		it("matches `git push` inside `sudo …` (WRAP-2)", async () => {
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: { command: /^git\s+push/ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			await dispatcher.dispatch(
+				bashResult("sudo git push", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 1);
+		});
+
+		it("raw unwrapped command still matches (no regression)", async () => {
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: { command: /^git\s+commit/ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			await dispatcher.dispatch(
+				bashResult("git commit -m x", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 1);
+		});
+
+		it("quoted text inside `echo '…'` does NOT fire (echo is not a wrapper)", async () => {
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: { command: /^git\s+commit/ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			// The walker extracts `echo` as the basename; the quoted arg is
+			// text data, not a command ref. Anchored `/^git\s+commit/`
+			// matches neither the raw `echo 'git commit'` nor the
+			// `echo git commit` ref text.
+			await dispatcher.dispatch(
+				bashResult("echo 'git commit'", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 0);
+		});
+
+		it("matches an inner ref in a `cd A && git push` chain", async () => {
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: { command: /^git\s+push/ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			// Outer raw command starts with `cd` — only the extracted
+			// `git push` ref hits the anchored pattern.
+			await dispatcher.dispatch(
+				bashResult("cd /tmp && git push", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 1);
+		});
+
+		it("inputMatches.path + inputMatches.command both enforced (AND)", async () => {
+			// When both keys are present and only one has wrapper analogue
+			// (command), make sure the other (path) still fails-closed on
+			// non-matching events.
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					toolName: "bash",
+					inputMatches: {
+						command: /^git\s+commit/,
+						path: /matches-nothing/,
+					},
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			// command matches via wrapper-aware expansion, but path is
+			// absent from bash events — AND-semantics still rejects.
+			await dispatcher.dispatch(
+				bashResult("sh -c 'git commit -m x'", 0),
+				makeCtx("/r"),
+				0,
+			);
+			assert.equal(count, 0);
+		});
+
+		it("non-bash tool with inputMatches.command skips parse (perf guard)", async () => {
+			// inputMatches.command doesn't exist on write/edit events, so
+			// the key absence fails fail-closed BEFORE any parseBash call.
+			// Pin that behaviour by asserting the observer doesn't fire.
+			let count = 0;
+			const obs: Observer = {
+				name: "o",
+				watch: {
+					inputMatches: { command: /./ },
+				},
+				onResult: () => {
+					count++;
+				},
+			};
+			const dispatcher = buildObserverDispatcher(
+				resolvePlugins([], {}),
+				[obs],
+				makeHost(),
+			);
+			await dispatcher.dispatch(writeResult("/r/a", "x"), makeCtx("/r"), 0);
+			assert.equal(count, 0);
+		});
+	},
+);
+
+// ---------------------------------------------------------------------------
 // watch.exitCode
 // ---------------------------------------------------------------------------
 

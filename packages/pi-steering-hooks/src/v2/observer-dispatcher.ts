@@ -37,6 +37,13 @@ import type {
 	ToolResultEvent as PiToolResultEvent,
 } from "@mariozechner/pi-coding-agent";
 import {
+	expandWrapperCommands,
+	extractAllCommandsFromAST,
+	getBasename,
+	getCommandArgs,
+	parse as parseBash,
+} from "unbash-walker";
+import {
 	createAppendEntry,
 	createFindEntries,
 	type EvaluatorHost,
@@ -46,6 +53,7 @@ import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
 	Observer,
 	ObserverContext,
+	Pattern,
 	ToolResultEvent as SchemaToolResultEvent,
 } from "./schema.ts";
 
@@ -144,8 +152,22 @@ async function dispatchEvent(
 	const exitCode = extractExitCode(event);
 	const schemaEvent = toSchemaEvent(event, exitCode);
 
+	// Wrapper-aware command-ref cache (ADR §12). Populated lazily on the
+	// first observer whose watch filter references `inputMatches.command`
+	// against a bash event; reused across subsequent observers on the
+	// same event so `sh -c '…'` / `sudo …` are parsed at most once per
+	// dispatch regardless of how many observers share the filter shape.
+	// `null` encodes "extraction attempted but failed (parse error or
+	// non-bash event)" so we don't retry per observer.
+	let refTextsCache: readonly string[] | null | undefined = undefined;
+	const getRefTexts = (): readonly string[] | null => {
+		if (refTextsCache !== undefined) return refTextsCache;
+		refTextsCache = extractRefTextsForBash(event);
+		return refTextsCache;
+	};
+
 	for (const observer of observers) {
-		if (!matchesWatch(observer, event, exitCode)) continue;
+		if (!matchesWatch(observer, event, exitCode, getRefTexts)) continue;
 
 		// Each observer gets its own ctx so appendEntry writes attribute
 		// cleanly. `exec` is intentionally absent — observers are recording
@@ -191,11 +213,21 @@ async function dispatchEvent(
  *     sourced from bash's `details.exitCode`; other tool results don't
  *     carry exit codes and satisfy everything except a numeric
  *     `exitCode:` (treated as "no match" — bash-specific filter).
+ *
+ * Wrapper-aware command matching (ADR §12): when `inputMatches.command`
+ * is set AND the event is a bash event, the pattern matches if EITHER
+ * the raw outer `event.input.command` OR any extracted command ref
+ * text matches. So `sh -c 'brazil ws sync'` with pattern
+ * `/^brazil\s+ws\s+sync$/` fires the observer — the outer raw command
+ * starts with `sh`, but the walker-extracted ref `brazil ws sync` does
+ * hit the anchored pattern. Parse is done once per dispatch (shared
+ * across all observers via `getRefTexts`).
  */
 function matchesWatch(
 	observer: Observer,
 	event: PiToolResultEvent,
 	exitCode: number | undefined,
+	getRefTexts: () => readonly string[] | null,
 ): boolean {
 	const watch = observer.watch;
 	if (!watch) return true;
@@ -209,10 +241,9 @@ function matchesWatch(
 		for (const [key, pat] of Object.entries(watch.inputMatches)) {
 			const value = input[key];
 			if (typeof value !== "string") return false;
-			// Share the evaluator's regex cache (module-scoped in
-			// predicates.ts) so observer inputMatches reuse the same
-			// compiled RegExp as equivalent rule patterns.
-			if (!matchesPattern(pat, value)) return false;
+			if (!matchesInputField(key, pat, value, event, getRefTexts)) {
+				return false;
+			}
 		}
 	}
 
@@ -220,6 +251,76 @@ function matchesWatch(
 		if (!matchesExitCode(exitCode, watch.exitCode)) return false;
 	}
 	return true;
+}
+
+/**
+ * Match a single `inputMatches` key/value against the event. `command`
+ * on a bash event is wrapper-aware per ADR §12 — the raw outer command
+ * OR any extracted ref text matches. All other keys (and `command` on
+ * non-bash events) keep the straight raw-string match the v0.0 engine
+ * shipped with.
+ *
+ * Share the evaluator's regex cache (module-scoped in `predicates.ts`)
+ * so observer `inputMatches` reuse the same compiled `RegExp` as
+ * equivalent rule patterns.
+ */
+function matchesInputField(
+	key: string,
+	pat: Pattern,
+	value: string,
+	event: PiToolResultEvent,
+	getRefTexts: () => readonly string[] | null,
+): boolean {
+	if (matchesPattern(pat, value)) return true;
+
+	// Wrapper-aware fallback: only for `command` on bash events. Other
+	// fields (path, content, …) don't have wrapper analogues — a
+	// file-path pattern has nothing to do with bash AST refs, so
+	// leaving them on the raw-string path is both correct and a perf
+	// guard against needless parsing on non-bash events.
+	if (key !== "command" || event.toolName !== "bash") return false;
+
+	const refTexts = getRefTexts();
+	if (refTexts === null) return false;
+	for (const text of refTexts) {
+		if (matchesPattern(pat, text)) return true;
+	}
+	return false;
+}
+
+/**
+ * Extract per-ref flattened text (basename + args joined with spaces)
+ * from a bash tool_result's outer command, mirroring the evaluator's
+ * `prepareBashState` text projection so observer watch patterns match
+ * the same strings rule patterns see for the same command.
+ *
+ * Returns `null` when the event isn't a bash tool_result, the raw
+ * command is missing/non-string, or the walker throws while parsing
+ * (hard-to-parse command — fall back to raw-only matching without
+ * blowing up dispatch). Unlike the evaluator we don't walk trackers:
+ * observers don't receive `walkerState`, so the parse+extract+expand
+ * stages suffice.
+ */
+function extractRefTextsForBash(
+	event: PiToolResultEvent,
+): readonly string[] | null {
+	if (event.toolName !== "bash") return null;
+	const input = event.input as { command?: unknown } | undefined;
+	const command = input?.command;
+	if (typeof command !== "string" || command.length === 0) return null;
+	try {
+		const script = parseBash(command);
+		const extracted = extractAllCommandsFromAST(script, command);
+		const { commands: refs } = expandWrapperCommands(extracted);
+		return refs.map((ref) =>
+			`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim(),
+		);
+	} catch {
+		// Don't let a parse error take down dispatch — a malformed
+		// command still deserves a raw-match chance. Returning null
+		// (as opposed to []) skips ref matching entirely for this event.
+		return null;
+	}
 }
 
 /**
