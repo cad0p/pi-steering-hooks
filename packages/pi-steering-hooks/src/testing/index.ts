@@ -746,15 +746,24 @@ export async function testObserver(
 
 /** Options for {@link expectBlocks}. */
 export interface ExpectBlocksOptions {
-	/** Expected rule name — matched against the `[steering:<name>]` prefix. */
+	/**
+	 * Expected rule name — matched against the `[steering:<name>@<source>]`
+	 * prefix (source-tagged format per ADR §11). The source suffix is
+	 * ignored for matching; pass the bare rule name.
+	 */
 	readonly rule?: string;
 	/** Expected reason — exact string match (string) or pattern match (RegExp). */
 	readonly reason?: string | RegExp;
 }
 
-/** Extract `[steering:<name>]` prefix from a reason string, if present. */
+/**
+ * Extract the rule name from a block reason. Reasons are source-tagged
+ * as `[steering:<rule>@<source>] …`; we return the `<rule>` portion
+ * so callers can assert by name without caring which plugin shipped
+ * the rule.
+ */
 function extractRuleName(reason: string): string | null {
-	const m = reason.match(/^\[steering:([^\]]+)\]/);
+	const m = reason.match(/^\[steering:([^@\]]+)(?:@[^\]]+)?\]/);
 	return m ? m[1]! : null;
 }
 

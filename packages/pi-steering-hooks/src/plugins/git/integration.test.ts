@@ -154,7 +154,7 @@ describe("git plugin: does not break DEFAULT_RULES", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-force-push\]/);
+		assert.match(res.reason!, /\[steering:no-force-push@[^\]]+\]/);
 	});
 });
 
@@ -177,7 +177,7 @@ describe("git plugin: no-main-commit via branch predicate", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 	});
 
 	it("allows on feature", async () => {
@@ -293,7 +293,7 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 		// Regression guard: the branch predicate MUST NOT shell out
 		// when the walker already provided a concrete branch value.
 		assert.equal(

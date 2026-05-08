@@ -115,7 +115,7 @@ describe("buildEvaluator: bash basics", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res!.reason!, /\[steering:no-force-push\]/);
+		assert.match(res!.reason!, /\[steering:no-force-push@[^\]]+\]/);
 	});
 
 	it("returns undefined on a non-matching command", async () => {
@@ -1020,7 +1020,7 @@ describe("buildEvaluator: override comments", () => {
 		// Tighter than a `doesNotMatch(/To override/)` — pins the whole
 		// reason including the `[steering:…]` prefix and lack of trailing
 		// punctuation.
-		assert.equal(res!.reason, "[steering:no-force-push] no force push");
+		assert.equal(res!.reason, "[steering:no-force-push@user] no force push");
 	});
 
 	it("defaultNoOverride=true (default) blocks even with override comment", async () => {
@@ -1088,12 +1088,12 @@ describe("buildEvaluator: override comments", () => {
 			0,
 		);
 		// Not overridable → no hint tail.
-		assert.equal(r1!.reason, "[steering:no-force-push] no force push");
+		assert.equal(r1!.reason, "[steering:no-force-push@user] no force push");
 		// Overridable → hint tail uses the `#` bash leader, em dash, and
 		// backticked comment template.
 		assert.equal(
 			r2!.reason,
-			"[steering:no-force-push] no force push To override, " +
+			"[steering:no-force-push@user] no force push To override, " +
 				"include a comment: `# steering-override: no-force-push \u2014 <reason>`.",
 		);
 	});
@@ -1134,7 +1134,7 @@ describe("buildEvaluator: override comments", () => {
 		);
 		// rule-b still blocks.
 		assert.ok(res && res.block === true);
-		assert.match(res!.reason!, /\[steering:rule-b\]/);
+		assert.match(res!.reason!, /\[steering:rule-b@[^\]]+\]/);
 		// rule-a's override was recorded as consumed; rule-b was NOT
 		// overridden (exactly one audit entry, keyed to rule-a).
 		assert.equal(host.appended.length, 1);
@@ -1175,7 +1175,7 @@ describe("buildEvaluator: write / edit", () => {
 		assert.ok(res && res.block === true);
 		assert.equal(
 			res!.reason,
-			"[steering:no-private-key] no private keys To override, " +
+			"[steering:no-private-key@user] no private keys To override, " +
 				"include a comment: `// steering-override: no-private-key \u2014 <reason>`.",
 		);
 	});
@@ -1307,7 +1307,7 @@ describe("buildEvaluator: rule ordering (config before plugin)", () => {
 			0,
 		);
 		assert.ok(res);
-		assert.match(res!.reason!, /\[steering:user-rule\]/);
+		assert.match(res!.reason!, /\[steering:user-rule@[^\]]+\]/);
 	});
 });
 
@@ -1353,7 +1353,7 @@ describe("buildEvaluator: walker reuse + exec cache", () => {
 			0,
 		);
 		assert.ok(res);
-		assert.match(res!.reason!, /\[steering:r1\]/);
+		assert.match(res!.reason!, /\[steering:r1@[^\]]+\]/);
 	});
 
 	it("memoizes exec by (cmd, args, cwd) within one tool_call", async () => {
@@ -1404,7 +1404,7 @@ describe("buildEvaluator: walker reuse + exec cache", () => {
 			0,
 		);
 		assert.ok(res);
-		assert.match(res!.reason!, /\[steering:r2\]/);
+		assert.match(res!.reason!, /\[steering:r2@[^\]]+\]/);
 		// Both rules asked for the same (cmd, args, cwd): memoized → 1 call.
 		assert.equal(callCount, 1);
 	});
@@ -1744,7 +1744,44 @@ describe("buildEvaluator: plugin-shipped rules", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res!.reason!, /\[steering:no-force-push\]/);
+		assert.match(res!.reason!, /\[steering:no-force-push@[^\]]+\]/);
+	});
+
+	it("block reason is source-tagged with the originating plugin name", async () => {
+		const plugin: Plugin = {
+			name: "git-plugin",
+			rules: [NO_FORCE_PUSH],
+		};
+		const evaluator = buildEvaluator({}, resolve([plugin]), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("git push --force"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /^\[steering:no-force-push@git-plugin\]/);
+	});
+
+	it("user rules get @user source tag", async () => {
+		const rule: Rule = {
+			name: "my-rule",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "user said so",
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /^\[steering:my-rule@user\]/);
 	});
 
 	it("honors config.disable to skip plugin rule", async () => {

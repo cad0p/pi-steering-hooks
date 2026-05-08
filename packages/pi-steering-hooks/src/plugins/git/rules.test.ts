@@ -100,7 +100,7 @@ describe("rules: no-main-commit shape", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 	});
 
 	it("allows `git commit` on a feature branch", async () => {

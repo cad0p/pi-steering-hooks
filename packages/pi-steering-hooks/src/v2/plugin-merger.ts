@@ -103,6 +103,15 @@ export interface ResolvedPluginState {
 	/** Plugin-shipped rules in registration order, deduped by name. */
 	rules: Rule[];
 
+	/**
+	 * Rule-name → plugin-name mapping for every rule surviving in
+	 * {@link rules}. Consumed by the evaluator to source-tag block
+	 * reasons as `[steering:<rule>@<plugin>] …`. User-defined rules
+	 * (`SteeringConfig.rules`) are NOT in this map — the evaluator
+	 * defaults to `@user` for anything missing.
+	 */
+	rulePluginOwners: Record<string, string>;
+
 	/** Non-fatal issues observed during merge. */
 	warnings: PluginResolveWarning[];
 }
@@ -357,6 +366,7 @@ export function resolvePlugins(
 		trackerModifiers,
 		composedTrackers,
 		rules,
+		rulePluginOwners: Object.fromEntries(ruleOwner),
 		warnings,
 	};
 }

@@ -135,6 +135,21 @@ export function buildEvaluator(
 	const pluginRules = resolved.rules;
 	const allRules: readonly Rule[] = [...userRules, ...pluginRules];
 
+	// Source tags per ADR §11: user-authored rules get `@user`, plugin-
+	// shipped rules get the originating plugin's name. The merger
+	// already tracks `rule-name → plugin-name` during resolution — we
+	// reuse that instead of threading the map through the evaluator.
+	const ruleSources = new Map<Rule, string>();
+	for (const rule of userRules) {
+		ruleSources.set(rule, "user");
+	}
+	for (const rule of pluginRules) {
+		ruleSources.set(
+			rule,
+			resolved.rulePluginOwners[rule.name] ?? "user",
+		);
+	}
+
 	// Compose the walker's tracker registry. Must always include `cwd`
 	// so the built-in `when.cwd` predicate can resolve — even if no
 	// plugin ships one. Plugins extending `cwd` with their own modifiers
@@ -171,6 +186,7 @@ export function buildEvaluator(
 				resolved.predicates,
 				host,
 				defaultNoOverride,
+				ruleSources,
 			),
 	};
 }
@@ -280,22 +296,29 @@ function effectiveNoOverride(rule: Rule, defaultNoOverride: boolean): boolean {
  * `noOverride: true` (or the fail-closed default) omit it to avoid
  * advertising a nonexistent escape hatch.
  *
- * Ported from v1's `formatBlockReason` + `overrideHint` so the message
- * shape is identical across versions.
+ * Source-tagged (per ADR §11): `[steering:<rule-name>@<source>] …`
+ * where `<source>` is the originating plugin name for plugin-shipped
+ * rules, or `user` for rules declared directly in the user's
+ * SteeringConfig.rules.
+ *
+ * Ported from v1's `formatBlockReason` + `overrideHint` so the
+ * message body is otherwise identical across versions.
  */
 function formatReason(
 	rule: Rule,
 	tool: "bash" | "write" | "edit",
 	noOverride: boolean,
+	source: string,
 ): string {
+	const tag = `[steering:${rule.name}@${source}]`;
 	if (noOverride) {
-		return `[steering:${rule.name}] ${rule.reason}`;
+		return `${tag} ${rule.reason}`;
 	}
 	const leader = tool === "bash" ? "#" : "//";
 	const hint =
 		` To override, include a comment: ` +
 		`\`${leader} steering-override: ${rule.name} — <reason>\`.`;
-	return `[steering:${rule.name}] ${rule.reason}${hint}`;
+	return `${tag} ${rule.reason}${hint}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +344,13 @@ interface SharedEvalContext {
 	readonly findEntries: PredicateContext["findEntries"];
 	readonly host: EvaluatorHost;
 	readonly defaultNoOverride: boolean;
+	/**
+	 * Rule → source-name lookup for source-tagged block reasons
+	 * (`[steering:<rule>@<source>]`). Keyed by Rule object identity so
+	 * the same rule name appearing in multiple plugins still resolves
+	 * unambiguously.
+	 */
+	readonly ruleSources: ReadonlyMap<Rule, string>;
 }
 
 /**
@@ -464,7 +494,12 @@ async function evaluateCandidate(
 
 	return {
 		block: true,
-		reason: formatReason(rule, cand.tool, noOverride),
+		reason: formatReason(
+			rule,
+			cand.tool,
+			noOverride,
+			shared.ruleSources.get(rule) ?? "user",
+		),
 	};
 }
 
@@ -477,6 +512,7 @@ async function evaluateEvent(
 	predicates: ResolvedPluginState["predicates"],
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
+	ruleSources: ReadonlyMap<Rule, string>,
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
 	// findEntries reads the current session JSONL on demand; appendEntry
@@ -494,6 +530,7 @@ async function evaluateEvent(
 		findEntries,
 		host,
 		defaultNoOverride,
+		ruleSources,
 	};
 
 	// Bash state is lazy: non-bash rules don't pay for parse / walk.

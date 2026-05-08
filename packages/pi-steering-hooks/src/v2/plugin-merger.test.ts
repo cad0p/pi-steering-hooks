@@ -86,7 +86,27 @@ describe("resolvePlugins: single plugin surface", () => {
 		// were layered on.
 		assert.equal(state.composedTrackers["t"], tracker);
 		assert.deepEqual(state.rules, [rule]);
+		assert.deepEqual(state.rulePluginOwners, { r: "p" });
 		assert.deepEqual(state.warnings, []);
+	});
+});
+
+describe("resolvePlugins: rulePluginOwners", () => {
+	it("maps each plugin rule name to its originating plugin", () => {
+		const p1: Plugin = { name: "plugin-a", rules: [mkRule("rule-a")] };
+		const p2: Plugin = { name: "plugin-b", rules: [mkRule("rule-b")] };
+		const state = resolvePlugins([p1, p2], {});
+		assert.deepEqual(state.rulePluginOwners, {
+			"rule-a": "plugin-a",
+			"rule-b": "plugin-b",
+		});
+	});
+
+	it("first-wins collision keeps the first owner", () => {
+		const p1: Plugin = { name: "first", rules: [mkRule("dup")] };
+		const p2: Plugin = { name: "second", rules: [mkRule("dup")] };
+		const state = resolvePlugins([p1, p2], {});
+		assert.deepEqual(state.rulePluginOwners, { dup: "first" });
 	});
 });
 

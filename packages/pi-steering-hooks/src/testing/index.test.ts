@@ -119,7 +119,7 @@ describe("loadHarness", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res!.reason!, /\[steering:no-force-push\]/);
+		assert.match(res!.reason!, /\[steering:no-force-push@[^\]]+\]/);
 	});
 
 	it("includeDefaults: false (default) does NOT inject defaults", async () => {
