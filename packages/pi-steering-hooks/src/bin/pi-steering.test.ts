@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for the `pi-steering` CLI (`./pi-steering.ts`).
@@ -16,7 +16,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -41,13 +41,36 @@ interface RunResult {
  * Run the CLI as a child process under `node --experimental-strip-types`.
  * Returns the exit code and captured stdout/stderr. Never throws for
  * non-zero exit codes — the caller asserts on `code`.
+ *
+ * Accepts an optional `cwd` so tests for the `list` subcommand can
+ * point the walk-up loader at a scratch directory without polluting
+ * the project.
  */
-function runCli(...args: string[]): Promise<RunResult> {
+function runCli(...args: string[]): Promise<RunResult>;
+function runCli(
+	opts: { cwd?: string },
+	...args: string[]
+): Promise<RunResult>;
+function runCli(
+	first?: string | { cwd?: string },
+	...rest: string[]
+): Promise<RunResult> {
+	let cwd: string | undefined;
+	let args: string[];
+	if (typeof first === "object" && first !== null) {
+		cwd = first.cwd;
+		args = rest;
+	} else {
+		args = first === undefined ? [...rest] : [first, ...rest];
+	}
 	return new Promise((resolvePromise, rejectPromise) => {
 		const child = spawn(
 			process.execPath,
 			["--experimental-strip-types", CLI_PATH, ...args],
-			{ stdio: ["ignore", "pipe", "pipe"] },
+			{
+				stdio: ["ignore", "pipe", "pipe"],
+				...(cwd !== undefined ? { cwd } : {}),
+			},
 		);
 		let stdout = "";
 		let stderr = "";
@@ -102,6 +125,7 @@ describe("pi-steering CLI: help + dispatch", () => {
 		assert.equal(r.code, 0);
 		assert.match(r.stdout, /pi-steering — tools for/);
 		assert.match(r.stdout, /import-json/);
+		assert.match(r.stdout, /list \[--format=/);
 		assert.equal(r.stderr.trim(), "");
 	});
 
@@ -203,13 +227,14 @@ describe("pi-steering import-json: conversion", () => {
 		assert.equal(r.stderr.trim(), "");
 		assert.match(
 			r.stdout,
-			/import \{ defineConfig \} from "@cad0p\/pi-steering-hooks"/,
+			/import \{ defineConfig \} from "pi-steering"/,
 		);
 		assert.match(r.stdout, /export default defineConfig\(/);
 		assert.match(r.stdout, /"no-amend"/);
 		assert.match(r.stdout, /"Don't rewrite history\."/);
-		// Preserve the `disable` field verbatim.
-		assert.match(r.stdout, /"disable":\s*\[\s*"no-force-push"\s*\]/);
+		// Preserve the disabled-rules list. Note the rename: v1 JSON's
+		// `disable` key becomes v2 TS `disabledRules` on output.
+		assert.match(r.stdout, /"disabledRules":\s*\[\s*"no-force-push"\s*\]/);
 	});
 
 	it("-o mode: writes file + reports path, exits 0", async () => {
@@ -256,5 +281,253 @@ describe("pi-steering import-json: conversion", () => {
 		assert.equal(r.code, 2);
 		assert.match(r.stderr, /conversion failed at <root>\.plugins/);
 		assert.equal(r.stdout, "");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// `list` subcommand
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a minimal steering config at `dir/.pi/steering/index.ts`. The
+ * module body is `export default { ... } satisfies SteeringConfig;`
+ * with a local type stub so the config doesn't need to resolve the
+ * `pi-steering` package from the scratch dir.
+ */
+function writeScratchConfig(dir: string, body: string): void {
+	const pi = join(dir, ".pi", "steering");
+	mkdirSync(pi, { recursive: true });
+	writeFileSync(join(pi, "index.ts"), body, "utf8");
+}
+
+describe("pi-steering list", () => {
+	it("prints 'no config' when no .pi/steering exists", async () => {
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		assert.match(r.stdout, /No steering config found\./);
+	});
+
+	it("--format=json with no config returns empty structure", async () => {
+		const r = await runCli({ cwd: scratch }, "list", "--format=json");
+		assert.equal(r.code, 0);
+		const parsed = JSON.parse(r.stdout) as {
+			plugins: unknown[];
+			userRules: unknown[];
+			disabled: { rules: unknown[] };
+		};
+		assert.deepEqual(parsed.plugins, []);
+		assert.deepEqual(parsed.userRules, []);
+		assert.deepEqual(parsed.disabled.rules, []);
+	});
+
+	it("text format groups plugin + user rules and lists disables", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{
+								name: "no-main-commit",
+								tool: "bash",
+								field: "command",
+								pattern: /^git\\s+commit/,
+								when: { branch: /^main$/ },
+								reason: "no",
+							},
+						],
+					},
+				],
+				rules: [
+					{
+						name: "my-rule",
+						tool: "bash",
+						field: "command",
+						pattern: /^echo/,
+						reason: "no",
+					},
+				],
+				disabledRules: ["some-disabled-rule"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		assert.match(
+			r.stdout,
+			/Resolved config: 1 plugin, 2 rules, 0 observers\./,
+		);
+		assert.match(r.stdout, /git\s+\[pi-steering\/plugins\/git\]/);
+		assert.match(r.stdout, /no-main-commit\s+bash\s+when: branch/);
+		assert.match(r.stdout, /User \(\.pi\/steering\/index\.ts\):/);
+		assert.match(r.stdout, /my-rule\s+bash/);
+		assert.match(r.stdout, /Disabled rules: some-disabled-rule/);
+	});
+
+	it("--format=json emits a parseable structure with all sections", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [{ name: "git", rules: [] }],
+				rules: [
+					{
+						name: "u1",
+						tool: "bash",
+						field: "command",
+						pattern: /^ls/,
+						reason: "no",
+					},
+				],
+				observers: [
+					{
+						name: "obs1",
+						writes: ["thing-happened"],
+						onResult: () => {},
+					},
+				],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list", "--format=json");
+		assert.equal(r.code, 0);
+		const parsed = JSON.parse(r.stdout) as {
+			plugins: Array<{ name: string; source?: string; rules: unknown[] }>;
+			userRules: Array<{ name: string; tool: string }>;
+			userObservers: Array<{ name: string; writes: string[] }>;
+			disabled: { rules: unknown[]; plugins: unknown[] };
+		};
+		assert.equal(parsed.plugins[0]?.name, "git");
+		assert.equal(parsed.plugins[0]?.source, "pi-steering/plugins/git");
+		assert.equal(parsed.userRules[0]?.name, "u1");
+		assert.equal(parsed.userObservers[0]?.name, "obs1");
+		assert.deepEqual(parsed.userObservers[0]?.writes, ["thing-happened"]);
+	});
+
+	it("rejects an unknown --format value", async () => {
+		const r = await runCli({ cwd: scratch }, "list", "--format=yaml");
+		assert.equal(r.code, 1);
+		assert.match(r.stderr, /unknown --format value "yaml"/);
+	});
+
+	it("rejects unknown flags", async () => {
+		const r = await runCli({ cwd: scratch }, "list", "--nope");
+		assert.equal(r.code, 1);
+		assert.match(r.stderr, /unknown flag "--nope"/);
+	});
+
+	it("list --help prints per-subcommand help", async () => {
+		const r = await runCli({ cwd: scratch }, "list", "--help");
+		assert.equal(r.code, 0);
+		assert.match(r.stdout, /pi-steering list — show the resolved config/);
+		assert.match(r.stdout, /--format=text\|json/);
+	});
+
+	it("summarizes happened: predicate with its type", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				rules: [
+					{
+						name: "rq",
+						tool: "bash",
+						field: "command",
+						pattern: /^git push/,
+						when: { happened: { type: "tests-passed", in: "agent_loop" } },
+						reason: "no",
+					},
+				],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		assert.match(r.stdout, /when: happened:tests-passed/);
+	});
+
+	it("marks disabled rules with '(disabled)' suffix in text output (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "active-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+							{ name: "disabled-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+				],
+				disabledRules: ["disabled-rule"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		// Active rule: no suffix.
+		assert.match(r.stdout, /active-rule\s+bash\s*$/m);
+		// Disabled rule: (disabled) suffix.
+		assert.match(r.stdout, /disabled-rule\s+bash\s+\(disabled\)/);
+		// Footer unchanged.
+		assert.match(r.stdout, /Disabled rules: disabled-rule/);
+	});
+
+	it("marks disabled plugins with '(disabled)' suffix on the header (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "some-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+				],
+				disabledPlugins: ["git"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		// Plugin header carries the (disabled) suffix.
+		assert.match(r.stdout, /git\s+\[pi-steering\/plugins\/git\]\s+\(disabled\)/);
+		assert.match(r.stdout, /Disabled plugins: git/);
+	});
+
+	it("JSON output tags disabled rules and plugins with 'disabled: true' (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "active-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+							{ name: "disabled-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+					{ name: "also-disabled" },
+				],
+				disabledRules: ["disabled-rule"],
+				disabledPlugins: ["also-disabled"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list", "--format=json");
+		assert.equal(r.code, 0);
+		const parsed = JSON.parse(r.stdout) as {
+			plugins: Array<{
+				name: string;
+				disabled?: boolean;
+				rules: Array<{ name: string; disabled?: boolean }>;
+			}>;
+		};
+		const git = parsed.plugins.find((p) => p.name === "git");
+		const also = parsed.plugins.find((p) => p.name === "also-disabled");
+		assert.ok(git);
+		assert.ok(also);
+		assert.equal(git.disabled, undefined, "git plugin is active; no disabled flag");
+		assert.equal(also.disabled, true, "also-disabled plugin carries disabled: true");
+		const active = git.rules.find((r) => r.name === "active-rule");
+		const disabled = git.rules.find((r) => r.name === "disabled-rule");
+		assert.ok(active);
+		assert.ok(disabled);
+		assert.equal(active.disabled, undefined);
+		assert.equal(disabled.disabled, true);
 	});
 });

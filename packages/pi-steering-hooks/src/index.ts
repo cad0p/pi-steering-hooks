@@ -1,38 +1,29 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 //
-// @cad0p/pi-steering-hooks — deterministic steering hooks for pi agents.
+// pi-steering — deterministic steering hooks for pi agents.
 // Inspired by @samfp/pi-steering-hooks (schema, override-comment,
 // defaults). AST backend + command-level effective-cwd via
 // unbash-walker. This file is the thin wiring layer between pi's
-// extension API and the v2 engine (loader + plugin-merger + evaluator
+// extension API and the engine (loader + plugin-merger + evaluator
 // + observer-dispatcher).
 
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
-import {
-	buildEvaluator,
-	type EvaluatorRuntime,
-	type EvaluatorHost,
-} from "./v2/evaluator.ts";
-import { buildConfig, loadConfigs } from "./v2/loader.ts";
-import {
-	buildObserverDispatcher,
-	type ObserverDispatcher,
-} from "./v2/observer-dispatcher.ts";
-import { resolvePlugins } from "./v2/plugin-merger.ts";
-import type { SteeringConfig } from "./v2/schema.ts";
+} from "@earendil-works/pi-coding-agent";
+import { buildSessionRuntime } from "./internal/session-runtime.ts";
+import type { EvaluatorRuntime, EvaluatorHost } from "./evaluator.ts";
+import type { ObserverDispatcher } from "./observer-dispatcher.ts";
 
 /**
- * Pi extension factory. Wires the v2 steering engine onto pi's
+ * Pi extension factory. Wires the steering engine onto pi's
  * lifecycle events:
  *
- *   - `turn_start`   — track the current `turnIndex` so tool_call /
- *                       tool_result handlers can forward it into the
- *                       evaluator + dispatcher.
+ *   - `agent_start`  — bump the internal `agentLoopIndex` counter so
+ *                       tool_call / tool_result handlers can forward it
+ *                       into the evaluator + dispatcher. One agent loop
+ *                       = one user prompt + all the tool calls it spawns.
  *   - `session_start` — load the walk-up config (inner-first), merge
  *                       with DEFAULT_RULES + DEFAULT_PLUGINS unless
  *                       `disableDefaults: true` is set anywhere in the
@@ -50,7 +41,7 @@ import type { SteeringConfig } from "./v2/schema.ts";
  * Exported as the default export per pi's extension convention.
  */
 export default function register(pi: ExtensionAPI): void {
-	let turnIndex = 0;
+	let agentLoopIndex = 0;
 	let evaluator: EvaluatorRuntime | null = null;
 	let dispatcher: ObserverDispatcher | null = null;
 
@@ -63,8 +54,8 @@ export default function register(pi: ExtensionAPI): void {
 		appendEntry: pi.appendEntry.bind(pi),
 	};
 
-	pi.on("turn_start", (event) => {
-		turnIndex = event.turnIndex;
+	pi.on("agent_start", () => {
+		agentLoopIndex += 1;
 	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -88,108 +79,51 @@ export default function register(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!evaluator) return;
-		return evaluator.evaluate(event, ctx, turnIndex);
+		return evaluator.evaluate(event, ctx, agentLoopIndex);
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
 		if (!dispatcher) return;
-		await dispatcher.dispatch(event, ctx, turnIndex);
+		await dispatcher.dispatch(event, ctx, agentLoopIndex);
 	});
 }
 
-/**
- * Build the per-session evaluator + observer dispatcher from the walk-
- * up config rooted at `cwd`. Two-pass merge so `disableDefaults: true`
- * in any layer is honored before defaults are injected:
- *
- *   1. `loadConfigs(cwd)` — async IO, read every layer from cwd →
- *      $HOME.
- *   2. `buildConfig(layers)` with NO defaults — lets us peek at the
- *      merged `disableDefaults` flag without DEFAULT_RULES /
- *      DEFAULT_PLUGINS polluting the result.
- *   3. Re-run `buildConfig(layers, defaults?)` with defaults
- *      conditional on `disableDefaults`, producing the effective
- *      config.
- *   4. Apply `config.disable` to the merged `rules` — the plugin
- *      merger handles this for plugin-shipped rules, but
- *      `buildConfig` leaves user/default rules in `config.rules`
- *      untouched on the assumption that the caller (this function)
- *      filters them before handing off to `buildEvaluator`.
- *
- * Factored out of `register()` so the wiring is unit-testable without
- * a pi runtime stub.
- */
-export async function buildSessionRuntime(
-	cwd: string,
-	host: EvaluatorHost,
-): Promise<{
-	evaluator: EvaluatorRuntime;
-	dispatcher: ObserverDispatcher;
-	config: SteeringConfig;
-}> {
-	const rawLayers = await loadConfigs(cwd);
-	// First merge without defaults: we only need `disableDefaults` at
-	// this point, and layering defaults in would make the check
-	// meaningless (defaults shouldn't themselves opt into
-	// `disableDefaults`).
-	const probe = buildConfig(rawLayers);
-	const defaults: SteeringConfig | undefined = probe.disableDefaults
-		? undefined
-		: { rules: DEFAULT_RULES, plugins: DEFAULT_PLUGINS };
-	const merged = buildConfig(rawLayers, defaults);
-
-	// Apply `disable` to the merged rule set. Plugin-shipped rules are
-	// filtered inside `resolvePlugins`; user / default rules go through
-	// `config.rules` on the evaluator side, so we filter them here to
-	// keep the semantic consistent across both sources.
-	const disabled = new Set(merged.disable ?? []);
-	const filteredConfig: SteeringConfig = { ...merged };
-	if (merged.rules !== undefined) {
-		const kept = merged.rules.filter((r) => !disabled.has(r.name));
-		if (kept.length > 0) filteredConfig.rules = kept;
-		else delete filteredConfig.rules;
-	}
-
-	const resolved = resolvePlugins(
-		filteredConfig.plugins ?? [],
-		filteredConfig,
-		// `cwd` is injected by the evaluator (the built-in `cwdTracker`);
-		// extensions targeting it are valid and must not be treated as
-		// orphans. Any other built-in tracker the evaluator introduces
-		// later should be added here.
-		["cwd"],
-	);
-	const evaluator = buildEvaluator(filteredConfig, resolved, host);
-	const dispatcher = buildObserverDispatcher(
-		resolved,
-		filteredConfig.observers ?? [],
-		host,
-	);
-	return { evaluator, dispatcher, config: filteredConfig };
-}
-
 // ---------------------------------------------------------------------------
-// Public surface — the v2 engine.
+// Public surface — the engine.
 //
 // Consumers embedding the engine (building their own extensions, a CLI
 // that lints commands, a test harness, …) import these from the
 // package root.
 // ---------------------------------------------------------------------------
 
-export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
+// Defaults — bundled rule and plugin starter set.
+export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./defaults.ts";
 
-export {
-	buildConfig,
-	defineConfig,
-	fromJSON,
-	FromJSONError,
-	loadConfigs,
-	loadSteeringConfig,
-} from "./v2/index.ts";
+// Config helper (preferred entry point).
+export { defineConfig } from "./define-config.ts";
+export type { DefineConfigInput } from "./define-config.ts";
 
+// Predicate helper.
+export { definePredicate } from "./define-predicate.ts";
+
+// Loader — walk-up config discovery + merge.
+export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";
+
+// JSON compat — migrate v0.0.x JSON configs to v0.1+ TS configs.
+export { FromJSONError, fromJSON } from "./compat.ts";
+
+// Auto-tag key for session-entry writes. Exposed so plugin authors
+// inspecting raw session entries via `findEntries` can reference the
+// constant instead of hardcoding the string.
+export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
+
+// Schema types — the public authoring surface.
 export type {
 	ExecOpts,
 	ExecResult,
+	BaseRule,
+	BashRule,
+	EditRule,
 	Observer,
 	ObserverContext,
 	ObserverWatch,
@@ -203,7 +137,8 @@ export type {
 	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
-} from "./v2/index.ts";
+	WriteRule,
+} from "./schema.ts";
 
 // Walker types re-exported for plugin authors. Forward-compatible with
 // future unbash-walker extraction — imports from this package won't
@@ -217,6 +152,8 @@ export type {
 	SubshellSemantics,
 	Tracker,
 	WalkResult,
+	Word,
+	WordPart,
 } from "unbash-walker";
 
 // Walker functions re-exported for plugin authors writing custom
@@ -236,11 +173,12 @@ export {
 } from "unbash-walker";
 
 // Testing primitives — re-exported at the root for discoverability.
-// The canonical import path is `@cad0p/pi-steering-hooks/testing`;
+// The canonical import path is `pi-steering/testing`;
 // this root re-export means a test file that already imports
 // `defineConfig` from the root doesn't need a second import line for
 // `loadHarness`. See `./testing/index.ts` for the API docs.
 export {
+	createRecordingHost,
 	expectAllows,
 	expectBlocks,
 	expectRuleFires,
@@ -248,6 +186,7 @@ export {
 	getAppendedEntries,
 	loadHarness,
 	mockContext,
+	mockExtensionContext,
 	mockObserverContext,
 	runMatrix,
 	testObserver,
@@ -256,6 +195,7 @@ export {
 
 export type {
 	BashShorthand,
+	CreateRecordingHostOptions,
 	EditShorthand,
 	ExpectBlocksOptions,
 	Harness,
@@ -266,6 +206,9 @@ export type {
 	MockContextOptions,
 	MockObserverContextOptions,
 	MockEntry,
+	RecordedExecCall,
+	RecordedSessionEntry,
+	RecordingHost,
 	ToolCallShorthand,
 	ToolResultShorthand,
 	WriteShorthand,

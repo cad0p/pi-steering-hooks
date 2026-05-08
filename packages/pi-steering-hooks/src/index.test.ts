@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * End-to-end exercise of the pi extension wiring in v2 `register()`.
@@ -7,7 +7,7 @@
  * Uses an in-memory mock of `ExtensionAPI` that captures `on(...)`
  * handlers and records `appendEntry(...)` + `exec(...)` calls. We then
  * drive the extension by firing lifecycle events in order
- * (`turn_start`, `session_start`, `tool_call`, `tool_result`) and
+ * (`agent_start`, `session_start`, `tool_call`, `tool_result`) and
  * assert on:
  *
  *   - the `tool_call` handler's return value (block / allow),
@@ -33,15 +33,16 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
-import register, { buildSessionRuntime } from "./index.ts";
+} from "@earendil-works/pi-coding-agent";
+import register from "./index.ts";
+import { buildSessionRuntime } from "./internal/session-runtime.ts";
 
 /* -------------------------------------------------------------------------- */
 /* Mock ExtensionAPI                                                          */
 /* -------------------------------------------------------------------------- */
 
 type EventName =
-	| "turn_start"
+	| "agent_start"
 	| "session_start"
 	| "tool_call"
 	| "tool_result";
@@ -92,10 +93,10 @@ function makeMockPi(): MockPi {
 	return { api, handlers, entries, execCalls, warnings, errors };
 }
 
-function fireTurnStart(mock: MockPi, turnIndex: number): void {
-	const h = mock.handlers.turn_start;
-	if (!h) throw new Error("turn_start handler not registered");
-	h({ type: "turn_start", turnIndex, timestamp: Date.now() }, {});
+function fireAgentStart(mock: MockPi): void {
+	const h = mock.handlers.agent_start;
+	if (!h) throw new Error("agent_start handler not registered");
+	h({ type: "agent_start" }, {});
 }
 
 /**
@@ -498,8 +499,8 @@ describe("register(): user-defined rules via .pi/steering.ts", () => {
 		assert.match(blocked?.reason ?? "", /no-echo-in-special/);
 	});
 
-	it("disable list removes a default rule", async () => {
-		writeSteeringConfig(tmpHome, '{ disable: ["no-force-push"] }');
+	it("disabledRules list removes a default rule", async () => {
+		writeSteeringConfig(tmpHome, '{ disabledRules: ["no-force-push"] }');
 
 		const mock = makeMockPi();
 		register(mock.api as never);
@@ -574,7 +575,15 @@ describe("register(): observer dispatcher wiring", () => {
 
 		const recorded = mock.entries.find((e) => e.kind === "bash-success");
 		assert.ok(recorded, "observer should have written an entry");
-		assert.deepEqual(recorded.data, { cmd: "echo hi" });
+		// The engine auto-injects `_agentLoopIndex` into every observer/
+		// predicate write so `when.happened: { in: "agent_loop" }` can
+		// filter by scope. First agent_start happens implicitly at
+		// session setup time — agentLoopIndex here is 0 because no
+		// agent_start events have fired in this test.
+		assert.deepEqual(recorded.data, {
+			cmd: "echo hi",
+			_agentLoopIndex: 0,
+		});
 	});
 
 	it("observer watch filter gates firing (failure exit code excluded)", async () => {
@@ -646,16 +655,16 @@ describe("register(): unrelated tool calls pass through", () => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* Turn index threading                                                       */
+/* Agent-loop index threading                                                 */
 /* -------------------------------------------------------------------------- */
 
-describe("register(): turn_start threads turnIndex into evaluator", () => {
+describe("register(): agent_start bumps agentLoopIndex threaded into evaluator", () => {
 	useIsolatedHome();
 
-	it("passes the current turnIndex into predicate context", async () => {
-		// Rule uses when.condition to assert turnIndex threading.
+	it("passes the current agentLoopIndex into predicate context", async () => {
+		// Rule uses when.condition to assert agentLoopIndex threading.
 		// The condition appends an audit entry the test consults to
-		// confirm the turnIndex the evaluator saw.
+		// confirm the agentLoopIndex the evaluator saw.
 		writeSteeringConfig(
 			tmpHome,
 			`{
@@ -668,7 +677,7 @@ describe("register(): turn_start threads turnIndex into evaluator", () => {
 						reason: "capture",
 						when: {
 							condition: (ctx) => {
-								ctx.appendEntry("captured", { turnIndex: ctx.turnIndex });
+								ctx.appendEntry("captured", { agentLoopIndex: ctx.agentLoopIndex });
 								return false; // never fires; only side effect matters
 							},
 						},
@@ -681,13 +690,121 @@ describe("register(): turn_start threads turnIndex into evaluator", () => {
 		register(mock.api as never);
 		await fireSessionStart(mock, tmpHome);
 
-		// Advance the turn counter THEN fire tool_call.
-		fireTurnStart(mock, 5);
+		// Each agent_start bumps the engine's internal counter by 1.
+		// Fire 5 times so the first tool_call sees agentLoopIndex === 5.
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
+		fireAgentStart(mock);
 		await fireBashToolCall(mock, "echo hi", tmpHome);
 
 		const captured = mock.entries.find((e) => e.kind === "captured");
 		assert.ok(captured);
-		assert.deepEqual(captured.data, { turnIndex: 5 });
+		assert.deepEqual(
+			(captured.data as { agentLoopIndex: number }).agentLoopIndex,
+			5,
+		);
+	});
+
+	it("tool_call fired before any agent_start sees agentLoopIndex === 0 (G6)", async () => {
+		// Pins the counter's initial value. The counter bumps from 0 to 1
+		// on the first agent_start; a tool_call that happens BEFORE any
+		// agent_start (background tool, prompt autocompletion, extension
+		// smoke test) must see a well-defined — not undefined / NaN /
+		// -1 — agentLoopIndex. A later init-bug landing on undefined
+		// would pass all other tests but fail this one.
+		writeSteeringConfig(
+			tmpHome,
+			`{
+				rules: [
+					{
+						name: "capture-pre-agent-start",
+						tool: "bash",
+						field: "command",
+						pattern: /^echo/,
+						reason: "capture",
+						when: {
+							condition: (ctx) => {
+								ctx.appendEntry("captured", { agentLoopIndex: ctx.agentLoopIndex });
+								return false;
+							},
+						},
+					},
+				],
+			}`,
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		await fireSessionStart(mock, tmpHome);
+		// Intentionally skip fireAgentStart.
+		await fireBashToolCall(mock, "echo hi", tmpHome);
+
+		const captured = mock.entries.find((e) => e.kind === "captured");
+		assert.ok(captured);
+		assert.equal(
+			(captured.data as { agentLoopIndex: number }).agentLoopIndex,
+			0,
+		);
+	});
+
+	it("tool_call + tool_result in the same loop share the same agentLoopIndex (G6)", async () => {
+		// The predicate captures the agentLoopIndex it sees; the
+		// observer's auto-tagged write records the loop index the
+		// dispatcher saw. Both must agree, end-to-end via register().
+		writeSteeringConfig(
+			tmpHome,
+			`{
+				rules: [
+					{
+						name: "capture-predicate",
+						tool: "bash",
+						field: "command",
+						pattern: /^echo/,
+						reason: "r",
+						when: {
+							condition: (ctx) => {
+								ctx.appendEntry("pred", { agentLoopIndex: ctx.agentLoopIndex });
+								return false;
+							},
+						},
+					},
+				],
+				observers: [
+					{
+						name: "capture-observer",
+						watch: { toolName: "bash", exitCode: "success" },
+						onResult: (_event, ctx) => {
+							ctx.appendEntry("obs", { ok: true });
+						},
+					},
+				],
+			}`,
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		await fireSessionStart(mock, tmpHome);
+		fireAgentStart(mock); // loop 1
+		fireAgentStart(mock); // loop 2
+		await fireBashToolCall(mock, "echo hi", tmpHome);
+		await fireBashToolResult(mock, { command: "echo hi" }, 0, tmpHome);
+
+		const pred = mock.entries.find((e) => e.kind === "pred");
+		const obs = mock.entries.find((e) => e.kind === "obs");
+		assert.ok(pred, "predicate should have captured a pred entry");
+		assert.ok(obs, "observer should have captured an obs entry");
+		const predIdx = (pred.data as { agentLoopIndex: number })
+			.agentLoopIndex;
+		const obsIdx = (obs.data as { _agentLoopIndex: number })._agentLoopIndex;
+		assert.equal(predIdx, 2);
+		assert.equal(obsIdx, 2);
+		assert.equal(
+			predIdx,
+			obsIdx,
+			"predicate and observer must observe the same agent_loop index",
+		);
 	});
 });
 
@@ -785,8 +902,8 @@ describe("buildSessionRuntime: two-pass disableDefaults merge", () => {
 		assert.ok(names.includes("no-rm-rf-slash"));
 	});
 
-	it("`disable` filters default rules out of the merged config", async () => {
-		writeSteeringConfig(tmpHome, '{ disable: ["no-force-push"] }');
+	it("`disabledRules` filters default rules out of the merged config", async () => {
+		writeSteeringConfig(tmpHome, '{ disabledRules: ["no-force-push"] }');
 		const host = {
 			exec: async () => ({
 				stdout: "",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for the git plugin's shipped rules (`./rules.ts`).
@@ -19,13 +19,13 @@ import { describe, it } from "node:test";
 import type {
 	BashToolCallEvent,
 	ExecResult as PiExecResult,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	makeCtx,
 	makeTrackedHost,
-} from "../../v2/__test-helpers__.ts";
-import { buildEvaluator } from "../../v2/evaluator.ts";
-import { resolvePlugins } from "../../v2/plugin-merger.ts";
+} from "../../__test-helpers__.ts";
+import { buildEvaluator } from "../../evaluator.ts";
+import { resolvePlugins } from "../../plugin-merger.ts";
 import gitPlugin from "./index.ts";
 
 // ---------------------------------------------------------------------------
@@ -81,11 +81,13 @@ describe("rules: no-main-commit shape", () => {
 		assert.equal(rule.tool, "bash");
 		assert.equal(rule.field, "command");
 		assert.equal(rule.noOverride, false);
-		assert.ok(
-			typeof rule.pattern === "string"
-				? rule.pattern.includes("commit")
-				: rule.pattern.source.includes("commit"),
-		);
+		// Accept both shapes: runtime value can be string | RegExp per the
+		// schema, even though the narrowed literal type is string-only after
+		// the `as const satisfies Rule` narrowing in ./rules.ts.
+		const pattern = rule.pattern as string | RegExp;
+		const patternSource =
+			typeof pattern === "string" ? pattern : pattern.source;
+		assert.ok(patternSource.includes("commit"));
 		assert.ok(
 			rule.when !== undefined &&
 				"branch" in (rule.when as Record<string, unknown>),
@@ -100,7 +102,7 @@ describe("rules: no-main-commit shape", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 	});
 
 	it("allows `git commit` on a feature branch", async () => {

@@ -1,6 +1,6 @@
-# @cad0p/pi-steering-hooks/plugins/git
+# pi-steering/plugins/git
 
-Git plugin for [@cad0p/pi-steering-hooks](../../../README.md) — branch
+Git plugin for [pi-steering](../../../README.md) — branch
 awareness, upstream checks, and git-specific cwd tracking on top of
 the core steering engine.
 
@@ -21,8 +21,8 @@ the core steering engine.
 
 ```ts
 // .pi/steering.ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
-import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+import { defineConfig } from "pi-steering";
+import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
   plugins: [gitPlugin],
@@ -45,7 +45,7 @@ export default defineConfig({
 ```ts
 export default defineConfig({
   plugins: [gitPlugin],
-  disable: ["no-main-commit"],   // Keep predicates, drop the shipped rule
+  disabledRules: ["no-main-commit"],   // Keep predicates, drop the shipped rule
 });
 ```
 
@@ -55,7 +55,7 @@ parent config registers the plugin and a project wants to opt out):
 ```ts
 export default defineConfig({
   plugins: [gitPlugin],
-  disablePlugins: ["git"],
+  disabledPlugins: ["git"],
 });
 ```
 

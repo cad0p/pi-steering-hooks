@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for the Phase 5a testing primitives (`./index.ts`).
@@ -7,7 +7,7 @@
  * Coverage axis:
  *   - `loadHarness`         — evaluator + dispatcher built from a
  *                              minimal config; includeDefaults on/off;
- *                              plugin merging; config.disable; custom
+ *                              plugin merging; config.disabledRules; custom
  *                              host override.
  *   - `mockContext`         — default shape; per-option overrides; exec
  *                              stubbing + unstubbed reject; findEntries
@@ -20,14 +20,15 @@
  *
  * These are UNIT tests against the primitives — they don't exercise
  * the underlying evaluator / observer dispatcher semantics in depth
- * (those are covered in the v2/*.test.ts suites). Here we verify the
+ * (those are covered in the *.test.ts suites). Here we verify the
  * wrappers assemble the right plumbing.
  */
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	createRecordingHost,
 	expectAllows,
 	expectBlocks,
 	expectRuleFires,
@@ -35,6 +36,7 @@ import {
 	getAppendedEntries,
 	loadHarness,
 	mockContext,
+	mockExtensionContext,
 	mockObserverContext,
 	runMatrix,
 	testObserver,
@@ -47,8 +49,8 @@ import type {
 	PredicateContext,
 	PredicateHandler,
 	Rule,
-} from "../v2/schema.ts";
-import type { EvaluatorHost } from "../v2/evaluator.ts";
+} from "../schema.ts";
+import type { EvaluatorHost } from "../evaluator.ts";
 
 // ---------------------------------------------------------------------------
 // Shared stubs
@@ -119,7 +121,7 @@ describe("loadHarness", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res!.reason!, /\[steering:no-force-push\]/);
+		assert.match(res!.reason!, /\[steering:no-force-push@[^\]]+\]/);
 	});
 
 	it("includeDefaults: false (default) does NOT inject defaults", async () => {
@@ -173,9 +175,9 @@ describe("loadHarness", () => {
 		assert.ok(res && res.block === true);
 	});
 
-	it("applies config.disable to named rules", async () => {
+	it("applies config.disabledRules to named rules", async () => {
 		const h = loadHarness({
-			config: { disable: ["no-force-push"] },
+			config: { disabledRules: ["no-force-push"] },
 			includeDefaults: true,
 		});
 		// Rule was filtered out → force-push no longer blocks.
@@ -230,7 +232,13 @@ describe("loadHarness", () => {
 		assert.equal(execCalls, 1);
 	});
 
-	it("default host's unstubbed exec rejects with a clear error", async () => {
+	it("default host's unstubbed exec surfaces as a logged warning (S1)", async () => {
+		// S1: a throwing predicate (here: the default host's `exec`
+		// throwing 'exec not stubbed') is caught by the evaluator and
+		// treated as 'rule did not fire' with a warning log. The test's
+		// original intent — 'authors who forget to stub exec see a clear
+		// error' — still holds: the warning names the rule + source, and
+		// carries the original error message.
 		const rule: Rule = {
 			name: "uses-exec",
 			tool: "bash",
@@ -245,19 +253,100 @@ describe("loadHarness", () => {
 			},
 		};
 		const h = loadHarness({ config: { rules: [rule] } });
-		await assert.rejects(
-			() =>
-				h.evaluate(
-					{
-						type: "tool_call",
-						toolCallId: "t",
-						toolName: "bash",
-						input: { command: "git status" },
-					},
-					makeExtCtx(),
-					0,
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map((a) => String(a)).join(" "));
+		};
+		try {
+			const result = await h.evaluate(
+				{
+					type: "tool_call",
+					toolCallId: "t",
+					toolName: "bash",
+					input: { command: "git status" },
+				},
+				makeExtCtx(),
+				0,
+			);
+			// Rule does NOT fire (predicate threw → S1 isolates).
+			assert.equal(result, undefined);
+			// Warning names the rule + the unstubbed-exec message.
+			assert.ok(
+				warnings.some((w) =>
+					/predicate threw for rule "uses-exec".*exec not stubbed/.test(
+						w,
+					),
 				),
-			/exec not stubbed/,
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+
+	it("exposes harness.config reflecting the effective (disable-filtered) state (T3)", () => {
+		const harness = loadHarness({
+			config: {
+				rules: [
+					{
+						name: "keep-me",
+						tool: "bash",
+						field: "command",
+						pattern: /^keep/,
+						reason: "keep",
+					},
+					{
+						name: "drop-me",
+						tool: "bash",
+						field: "command",
+						pattern: /^drop/,
+						reason: "drop",
+					},
+				],
+				disabledRules: ["drop-me"],
+			},
+		});
+		// Config mirror is post-filter: only `keep-me` survives in
+		// `config.rules`; the `disabledRules` list is preserved for
+		// introspection.
+		assert.ok(harness.config);
+		assert.equal(harness.config.rules?.length, 1);
+		assert.equal(harness.config.rules?.[0]?.name, "keep-me");
+		assert.deepEqual(harness.config.disabledRules, ["drop-me"]);
+	});
+
+	it("exposes harness.resolved with plugin-side rules after merger (T3)", () => {
+		const pluginRule = {
+			name: "plugin-rule",
+			tool: "bash" as const,
+			field: "command" as const,
+			pattern: /^keep/,
+			reason: "plugin",
+		};
+		const droppedPluginRule = {
+			name: "dropped-plugin-rule",
+			tool: "bash" as const,
+			field: "command" as const,
+			pattern: /^drop/,
+			reason: "drop",
+		};
+		const harness = loadHarness({
+			config: {
+				plugins: [
+					{ name: "demo", rules: [pluginRule, droppedPluginRule] },
+				],
+				disabledRules: ["dropped-plugin-rule"],
+			},
+		});
+		// `resolved` reflects plugin-merger output: plugin-shipped rules
+		// after disable filtering. User rules live on `harness.config`,
+		// not here.
+		const resolvedNames = harness.resolved.rules.map((r) => r.name);
+		assert.deepEqual(resolvedNames, ["plugin-rule"]);
+		assert.ok(
+			!resolvedNames.includes("dropped-plugin-rule"),
+			"disabled plugin rule must not appear in resolved state",
 		);
 	});
 });
@@ -272,23 +361,23 @@ describe("mockContext", () => {
 		assert.equal(typeof ctx.cwd, "string");
 		assert.equal(ctx.tool, "bash");
 		assert.deepEqual(ctx.input, { tool: "bash", command: "" });
-		assert.equal(ctx.turnIndex, 0);
+		assert.equal(ctx.agentLoopIndex, 0);
 		assert.equal(typeof ctx.exec, "function");
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
 		assert.deepEqual(ctx.walkerState, { cwd: "/tmp/test" });
 	});
 
-	it("applies cwd / turnIndex / tool / input / walkerState overrides", () => {
+	it("applies cwd / agentLoopIndex / tool / input / walkerState overrides", () => {
 		const ctx = mockContext({
 			cwd: "/work",
-			turnIndex: 7,
+			agentLoopIndex: 7,
 			tool: "write",
 			input: { tool: "write", path: "/a.ts", content: "x" },
 			walkerState: { cwd: "/work", branch: "main" },
 		});
 		assert.equal(ctx.cwd, "/work");
-		assert.equal(ctx.turnIndex, 7);
+		assert.equal(ctx.agentLoopIndex, 7);
 		assert.equal(ctx.tool, "write");
 		assert.deepEqual(ctx.input, {
 			tool: "write",
@@ -367,15 +456,49 @@ describe("mockContext", () => {
 	});
 
 	it("appendEntry writes are captured (visible via getAppendedEntries)", () => {
+		// Auto-tag: object payloads get `_agentLoopIndex` merged in,
+		// bare calls wrap as `{ value: undefined, _agentLoopIndex }`.
+		// Same shape the real engine writes (production parity is the
+		// whole point of routing through createAppendEntry).
 		const ctx = mockContext();
 		ctx.appendEntry("x", { a: 1 });
 		ctx.appendEntry("y"); // no data — pi allows bare customType.
 		const captured = getAppendedEntries(ctx);
 		assert.equal(captured.length, 2);
 		assert.equal(captured[0]!.customType, "x");
-		assert.deepEqual(captured[0]!.data, { a: 1 });
+		assert.deepEqual(captured[0]!.data, { a: 1, _agentLoopIndex: 0 });
 		assert.equal(captured[1]!.customType, "y");
-		assert.equal(captured[1]!.data, undefined);
+		assert.deepEqual(captured[1]!.data, {
+			value: undefined,
+			_agentLoopIndex: 0,
+		});
+	});
+
+	it("appendEntry auto-tags object payloads with agentLoopIndex (G2)", () => {
+		const ctx = mockContext({ agentLoopIndex: 5 });
+		ctx.appendEntry("marker", { foo: 1 });
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "marker", data: { foo: 1, _agentLoopIndex: 5 } },
+		]);
+	});
+
+	it("appendEntry wraps primitive payloads as { value, _agentLoopIndex } (G2)", () => {
+		const ctx = mockContext({ agentLoopIndex: 2 });
+		ctx.appendEntry("num", 42);
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "num", data: { value: 42, _agentLoopIndex: 2 } },
+		]);
+	});
+
+	it("appendEntry wraps array payloads (F2 / G2 / G3)", () => {
+		const ctx = mockContext({ agentLoopIndex: 5 });
+		ctx.appendEntry("items", [1, 2, 3]);
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "items", data: { value: [1, 2, 3], _agentLoopIndex: 5 } },
+		]);
 	});
 });
 
@@ -387,16 +510,16 @@ describe("mockObserverContext", () => {
 	it("returns a ctx with all required ObserverContext fields populated", () => {
 		const ctx = mockObserverContext();
 		assert.equal(ctx.cwd, "/tmp/test");
-		assert.equal(ctx.turnIndex, 0);
+		assert.equal(ctx.agentLoopIndex, 0);
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
 	});
 
-	it("applies cwd / turnIndex / entries overrides", () => {
+	it("applies cwd / agentLoopIndex / entries overrides", () => {
 		const iso = "2026-03-04T05:06:07.000Z";
 		const ctx = mockObserverContext({
 			cwd: "/work",
-			turnIndex: 3,
+			agentLoopIndex: 3,
 			entries: [
 				{
 					type: "custom",
@@ -407,7 +530,7 @@ describe("mockObserverContext", () => {
 			],
 		});
 		assert.equal(ctx.cwd, "/work");
-		assert.equal(ctx.turnIndex, 3);
+		assert.equal(ctx.agentLoopIndex, 3);
 		const hits = ctx.findEntries<{ n: number }>("seen");
 		assert.equal(hits.length, 1);
 		assert.deepEqual(hits[0]!.data, { n: 42 });
@@ -415,15 +538,31 @@ describe("mockObserverContext", () => {
 	});
 
 	it("appendEntry captures are independent per context", () => {
-		const a = mockObserverContext();
-		const b = mockObserverContext();
+		const a = mockObserverContext({ agentLoopIndex: 0 });
+		const b = mockObserverContext({ agentLoopIndex: 0 });
 		a.appendEntry("one", { x: 1 });
 		b.appendEntry("two", { y: 2 });
 		assert.deepEqual(getAppendedEntries(a), [
-			{ customType: "one", data: { x: 1 } },
+			{ customType: "one", data: { x: 1, _agentLoopIndex: 0 } },
 		]);
 		assert.deepEqual(getAppendedEntries(b), [
-			{ customType: "two", data: { y: 2 } },
+			{ customType: "two", data: { y: 2, _agentLoopIndex: 0 } },
+		]);
+	});
+
+	it("observer appendEntry auto-tags with agentLoopIndex (G2)", () => {
+		const ctx = mockObserverContext({ agentLoopIndex: 9 });
+		ctx.appendEntry("seen", { foo: 1 });
+		assert.deepEqual(getAppendedEntries(ctx), [
+			{ customType: "seen", data: { foo: 1, _agentLoopIndex: 9 } },
+		]);
+	});
+
+	it("observer appendEntry wraps primitive payloads (G2)", () => {
+		const ctx = mockObserverContext({ agentLoopIndex: 3 });
+		ctx.appendEntry("n", 7);
+		assert.deepEqual(getAppendedEntries(ctx), [
+			{ customType: "n", data: { value: 7, _agentLoopIndex: 3 } },
 		]);
 	});
 });
@@ -442,7 +581,9 @@ describe("getAppendedEntries", () => {
 		const ctx = mockContext();
 		ctx.appendEntry("x", { a: 1 });
 		const captured = getAppendedEntries(ctx);
-		assert.deepEqual(captured, [{ customType: "x", data: { a: 1 } }]);
+		assert.deepEqual(captured, [
+			{ customType: "x", data: { a: 1, _agentLoopIndex: 0 } },
+		]);
 	});
 
 	it("returns empty for a non-mock context (safe lookup, no throw)", () => {
@@ -452,7 +593,7 @@ describe("getAppendedEntries", () => {
 			cwd: "/",
 			tool: "bash",
 			input: { tool: "bash", command: "" },
-			turnIndex: 0,
+			agentLoopIndex: 0,
 			exec: () => Promise.resolve({ stdout: "", stderr: "", exitCode: 0 }),
 			appendEntry: () => {},
 			findEntries: () => [],
@@ -461,7 +602,7 @@ describe("getAppendedEntries", () => {
 		// Same for an ad-hoc ObserverContext.
 		const adhocObs: ObserverContext = {
 			cwd: "/",
-			turnIndex: 0,
+			agentLoopIndex: 0,
 			appendEntry: () => {},
 			findEntries: () => [],
 		};
@@ -612,6 +753,57 @@ describe("testObserver", () => {
 		}
 		assert.equal(warnings.length, 1);
 		assert.match(String(warnings[0]?.[0] ?? ""), /exec option ignored/);
+	});
+
+	it("watch.inputMatches.command is wrapper-aware on bash events (ADR §12)", async () => {
+		// Regression test for the former testing-side reimplementation
+		// of matchesWatch: it did a raw-string match only, so a watch of
+		// `command: /^git commit/` silently missed `sh -c 'git commit ...'`
+		// while production correctly fired on it. Now `testObserver`
+		// shares `matchesWatch` with the dispatcher so both paths agree.
+		const fired: string[] = [];
+		const obs: Observer = {
+			name: "commit-watcher",
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^git commit/ },
+			},
+			onResult: (evt) => {
+				fired.push(String((evt.input as { command?: unknown }).command));
+			},
+		};
+
+		// Raw match still works (outer command IS `git commit ...`).
+		const raw = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: 'git commit -m "x"' },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(raw.watchMatched, true);
+
+		// Wrapper-aware: outer is `sh -c '...'`, the inner extracted ref
+		// is `git commit -m "x"` — the pattern matches the inner ref, so
+		// the observer fires. This previously failed silently under the
+		// reimplemented filter.
+		const wrapped = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: `sh -c 'git commit -m "x"'` },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(wrapped.watchMatched, true);
+		assert.equal(fired.length, 2);
+
+		// Negative control: an unrelated outer command doesn't match,
+		// even though it's a bash event.
+		const miss = await testObserver(obs, {
+			toolName: "bash",
+			input: { command: "ls -la" },
+			output: {},
+			exitCode: 0,
+		});
+		assert.equal(miss.watchMatched, false);
 	});
 });
 
@@ -796,5 +988,217 @@ describe("runMatrix / formatMatrix", () => {
 		assert.match(report, /\[case-a\].*expect:block.*actual:BLOCK/);
 		assert.match(report, /\[case-b\].*expect:allow.*actual:BLOCK.*FAIL/);
 		assert.match(report, /PASS: 1\/2/);
+	});
+});
+
+// ===========================================================================
+// createRecordingHost + mockExtensionContext
+// ===========================================================================
+
+describe("createRecordingHost", () => {
+	it("returns a host with empty entries / execCalls / appendedEntries", () => {
+		const host = createRecordingHost();
+		assert.deepEqual(host.entries, []);
+		assert.deepEqual(host.execCalls, []);
+		assert.deepEqual(host.appendedEntries, []);
+		assert.equal(typeof host.exec, "function");
+		assert.equal(typeof host.appendEntry, "function");
+	});
+
+	it("appendEntry records both raw (appendedEntries) and session-shape (entries) logs", () => {
+		const host = createRecordingHost();
+		host.appendEntry("marker", { foo: 1 });
+		host.appendEntry("marker-bare"); // bare call — pi allows no data.
+		assert.equal(host.appendedEntries.length, 2);
+		assert.deepEqual(host.appendedEntries[0], {
+			type: "marker",
+			data: { foo: 1 },
+		});
+		assert.deepEqual(host.appendedEntries[1], {
+			type: "marker-bare",
+			data: undefined,
+		});
+
+		assert.equal(host.entries.length, 2);
+		// Session-shape entries mirror what pi's sessionManager emits:
+		// type, customType, data, timestamp, id, parentId.
+		assert.equal(host.entries[0]?.type, "custom");
+		assert.equal(host.entries[0]?.customType, "marker");
+		assert.deepEqual(host.entries[0]?.data, { foo: 1 });
+		assert.equal(typeof host.entries[0]?.timestamp, "string");
+		assert.match(
+			host.entries[0]?.timestamp ?? "",
+			/^2026-01-01T00:00:/, // monotonic ISO starting at the 2026-01-01 epoch.
+		);
+		assert.equal(host.entries[0]?.parentId, null);
+		// Timestamps strictly increase so chronological asserts are stable.
+		assert.ok(
+			(host.entries[0]?.timestamp ?? "") <
+				(host.entries[1]?.timestamp ?? ""),
+			"entry timestamps should be monotonically increasing",
+		);
+	});
+
+	it("exec defaults to empty-success, records cmd/args/cwd per call", async () => {
+		const host = createRecordingHost();
+		const r = await host.exec("git", ["status"], { cwd: "/work" });
+		assert.deepEqual(r, {
+			stdout: "",
+			stderr: "",
+			code: 0,
+			killed: false,
+		});
+		assert.equal(host.execCalls.length, 1);
+		assert.deepEqual(host.execCalls[0], {
+			cmd: "git",
+			args: ["status"],
+			cwd: "/work",
+		});
+
+		// A call without explicit cwd falls back to "/".
+		await host.exec("pwd", []);
+		assert.equal(host.execCalls[1]?.cwd, "/");
+	});
+
+	it("exec override is threaded through, default still records the call", async () => {
+		const host = createRecordingHost({
+			exec: async (cmd, _args, cwd) => ({
+				stdout: `ran:${cmd}@${cwd}`,
+				stderr: "",
+				code: 0,
+				killed: false,
+			}),
+		});
+		const r = await host.exec("echo", ["hi"], { cwd: "/x" });
+		assert.equal(r.stdout, "ran:echo@/x");
+		assert.equal(host.execCalls.length, 1);
+	});
+
+	it("defensively copies args so later mutation doesn't corrupt the record", async () => {
+		const host = createRecordingHost();
+		const args = ["status"];
+		await host.exec("git", args, { cwd: "/x" });
+		args.push("--mutated");
+		assert.deepEqual(host.execCalls[0]?.args, ["status"]);
+	});
+});
+
+describe("mockExtensionContext", () => {
+	it("exposes cwd + sessionManager.getEntries", () => {
+		const entries = [
+			{
+				type: "custom" as const,
+				customType: "seen",
+				data: { n: 1 },
+				timestamp: "2026-01-01T00:00:00.000Z",
+				id: "e1",
+				parentId: null,
+			},
+		];
+		const ctx = mockExtensionContext("/repo", entries);
+		assert.equal(ctx.cwd, "/repo");
+		assert.deepEqual(ctx.sessionManager.getEntries(), entries);
+	});
+
+	it("defaults entries to an empty array when omitted", () => {
+		const ctx = mockExtensionContext("/repo");
+		assert.deepEqual(ctx.sessionManager.getEntries(), []);
+	});
+
+	it("round-trips: host.appendEntry writes visible via ctx.sessionManager.getEntries", () => {
+		// The core contract: feeding `host.entries` into the ctx lets
+		// the engine's writes flow back into its subsequent reads.
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/repo", host.entries);
+
+		assert.deepEqual(ctx.sessionManager.getEntries(), []);
+		host.appendEntry("mark", { a: 1 });
+		const read = ctx.sessionManager.getEntries();
+		assert.equal(read.length, 1);
+		const first = read[0];
+		assert.ok(first && first.type === "custom");
+		assert.equal(first.customType, "mark");
+		assert.deepEqual(first.data, { a: 1 });
+
+		host.appendEntry("mark", { a: 2 });
+		assert.equal(ctx.sessionManager.getEntries().length, 2);
+	});
+
+	it("drives harness.evaluate + harness.dispatch end-to-end with a shared entries store", async () => {
+		// Demonstrates the intended plugin-author usage pattern:
+		// harness + recording host + shared ctx lets a test assert on
+		// the cross-hook observer → evaluator handoff without any
+		// `as any` escape hatches.
+		const rule: Rule = {
+			name: "needs-mark",
+			tool: "bash",
+			field: "command",
+			pattern: /^git pu/,
+			reason: "needs mark",
+			noOverride: true,
+			when: {
+				// Default `when.happened` semantic: fires when the type has
+				// NOT been written in the scope (ADR §5).
+				happened: { type: "test-passed", in: "agent_loop" },
+			},
+		};
+		const observer: Observer = {
+			name: "test-tracker",
+			watch: { toolName: "bash", inputMatches: { command: /^npm test/ } },
+			onResult: (_evt, obsCtx) => {
+				obsCtx.appendEntry("test-passed", {});
+			},
+		};
+
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/repo", host.entries);
+		const harness = loadHarness({
+			config: { rules: [rule], observers: [observer] },
+			host,
+		});
+
+		// Without a prior test-passed entry, the guarded command blocks.
+		const blocked = await harness.evaluate(
+			{
+				type: "tool_call",
+				toolCallId: "tc1",
+				toolName: "bash",
+				input: { command: "git pu origin feat/x" },
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
+			0,
+		);
+		assert.ok(blocked && blocked.block === true);
+
+		// Dispatch an `npm test` success → observer records test-passed.
+		await harness.dispatch(
+			{
+				type: "tool_result",
+				toolCallId: "tc1",
+				toolName: "bash",
+				input: { command: "npm test" },
+				content: [],
+				details: { exitCode: 0 },
+			} as unknown as Parameters<typeof harness.dispatch>[0],
+			ctx,
+			0,
+		);
+		assert.ok(
+			host.entries.some((e) => e.customType === "test-passed"),
+			"observer should have recorded a test-passed entry",
+		);
+
+		// Subsequent guarded command in the same agent loop passes.
+		const allowed = await harness.evaluate(
+			{
+				type: "tool_call",
+				toolCallId: "tc2",
+				toolName: "bash",
+				input: { command: "git pu origin feat/x" },
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
+			0,
+		);
+		assert.equal(allowed, undefined);
 	});
 });

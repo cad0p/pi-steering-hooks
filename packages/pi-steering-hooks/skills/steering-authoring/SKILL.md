@@ -1,17 +1,17 @@
 ---
 name: steering-authoring
-description: Author declarative steering rules for @cad0p/pi-steering-hooks. Use when the user asks to block or allow agent tool calls, write guardrails for bash/write/edit, author pi steering rules, add rule plugins, or migrate an old .pi/steering.json to the v2 TypeScript config.
+description: Author declarative steering rules for pi-steering. Use when the user asks to block or allow agent tool calls, write guardrails for bash/write/edit, author pi steering rules, add rule plugins, or migrate an old .pi/steering.json to the v2 TypeScript config.
 ---
 
 # pi-steering-hooks
 
-You have `@cad0p/pi-steering-hooks` installed. It blocks and allows agent tool calls (bash, write, edit) via declarative rules authored in TypeScript.
+You have `pi-steering` installed. It blocks and allows agent tool calls (bash, write, edit) via declarative rules authored in TypeScript.
 
 ## Where things live
 
 - Rules: `.pi/steering/index.ts` (directory form) or `.pi/steering.ts` (single-file form).
 - Local plugins: `.pi/steering/plugins/*.ts`, imported into `index.ts`.
-- Tests: `.pi/steering/*.test.ts` using `@cad0p/pi-steering-hooks/testing`.
+- Tests: `.pi/steering/*.test.ts` using `pi-steering/testing`.
 
 The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi/`. See the README for the full precedence order.
 
@@ -23,7 +23,7 @@ The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi
 | "block X only in dir Y" | Add `when: { cwd: /Y/ }` to the rule. |
 | "block X unless on branch Z" | `when: { not: { branch: /Z/ } }` — requires the git plugin. |
 | "block X unless `--flag`" | `unless: /--flag\b/`. |
-| "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.condition` reads `findEntries` and checks `turnIndex < ctx.turnIndex`. |
+| "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.happened` gates on it (`{ type, in: "agent_loop" }`). Prefer this to hand-rolled `findEntries` + `agentLoopIndex` comparisons — same semantics, less code. |
 | "add a custom check" | Write a plugin in `.pi/steering/plugins/`, import it into `index.ts`, register it in `plugins: [...]`. |
 | "test this rule" | Create `steering.test.ts` using `expectBlocks` / `expectAllows` / `loadHarness`. |
 | "migrate my old JSON config" | Run `pi-steering import-json .pi/steering.json -o .pi/steering.ts`. |
@@ -31,7 +31,7 @@ The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi
 ## Minimal config
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
+import { defineConfig } from "pi-steering";
 
 export default defineConfig({
   rules: [
@@ -46,13 +46,13 @@ export default defineConfig({
 });
 ```
 
-`DEFAULT_PLUGINS` and `DEFAULT_RULES` (e.g. `no-force-push`, `no-rm-rf-slash`) are included automatically. Disable specific defaults via `disable: ["name"]` or opt out entirely with `disableDefaults: true`.
+`DEFAULT_PLUGINS` and `DEFAULT_RULES` (e.g. `no-force-push`, `no-rm-rf-slash`) are included automatically. Disable specific defaults via `disabledRules: ["name"]` or opt out entirely with `disableDefaults: true`.
 
 ## Git plugin (branch / upstream / commits-ahead predicates)
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
-import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+import { defineConfig } from "pi-steering";
+import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
   plugins: [gitPlugin],
@@ -74,7 +74,7 @@ export default defineConfig({
 ```ts
 // .pi/steering/steering.test.ts
 import { describe, it } from "node:test";
-import { expectAllows, expectBlocks, loadHarness } from "@cad0p/pi-steering-hooks/testing";
+import { expectAllows, expectBlocks, loadHarness } from "pi-steering/testing";
 import config from "./index.ts";
 
 describe("my steering config", () => {

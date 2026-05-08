@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
-// Part of cad0p/pi-steering-hooks.
+// Part of pi-steering.
 //
-// Isolated smoke test for the @cad0p/pi-steering-hooks extension.
+// Isolated smoke test for the pi-steering extension.
 //
 // Loads the built extension entry via its published shape (dynamic import of
 // the dist/index.js default export), mocks the pi ExtensionAPI surface the

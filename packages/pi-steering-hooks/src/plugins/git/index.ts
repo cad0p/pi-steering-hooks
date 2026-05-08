@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
- * Git plugin for `@cad0p/pi-steering-hooks`.
+ * Git plugin for `pi-steering`.
  *
- * Subpath import: `@cad0p/pi-steering-hooks/plugins/git`.
+ * Subpath import: `pi-steering/plugins/git`.
  *
  * Registers (in the terms of `Plugin`):
  *
@@ -13,9 +13,9 @@
  *                             See `./predicates.ts` for the arg
  *                             shapes each handler accepts.
  *   - `rules`              - `no-main-commit` (overridable). Users
- *                             disable via `disable: ["no-main-commit"]`
+ *                             disable via `disabledRules: ["no-main-commit"]`
  *                             or opt out of the whole plugin with
- *                             `disablePlugins: ["git"]`.
+ *                             `disabledPlugins: ["git"]`.
  *   - `trackers.branch`    - sequential `git checkout` / `git switch`
  *                             branch tracker. See `./branch-tracker.ts`.
  *   - `trackerExtensions.cwd.git`
@@ -26,8 +26,8 @@
  * Not registered by default. Users opt in:
  *
  *   ```ts
- *   import { defineConfig } from "@cad0p/pi-steering-hooks";
- *   import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+ *   import { defineConfig } from "pi-steering";
+ *   import gitPlugin from "pi-steering/plugins/git";
  *
  *   export default defineConfig({
  *     plugins: [gitPlugin],
@@ -55,18 +55,18 @@ import { rules } from "./rules.ts";
 
 /**
  * The git plugin. Default export so `import gitPlugin from
- * "@cad0p/pi-steering-hooks/plugins/git"` gives you the whole thing.
+ * "pi-steering/plugins/git"` gives you the whole thing.
  *
  * `as const satisfies Plugin` (rather than `: Plugin`) preserves the
  * literal `name: "git"` in the inferred type. That literal is the
  * input to any future `AllPluginNames<P>`-style inference in
  * `defineConfig`, which needs `name: "git"`, not `name: string`, to
- * offer string-literal completion for e.g. `disablePlugins`.
+ * offer string-literal completion for e.g. `disabledPlugins`.
  */
 const gitPlugin = {
 	name: "git",
 	predicates,
-	rules: [...rules],
+	rules,
 	trackers: {
 		// `Plugin.trackers` is typed `Record<string, Tracker<unknown>>`
 		// because the schema can't commit to a specific T per tracker.

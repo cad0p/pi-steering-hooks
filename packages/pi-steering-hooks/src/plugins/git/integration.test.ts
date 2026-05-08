@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * End-to-end integration tests for the git plugin.
@@ -30,15 +30,15 @@ import { describe, it } from "node:test";
 import type {
 	BashToolCallEvent,
 	ExecResult as PiExecResult,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	makeCtx,
 	makeTrackedHost,
-} from "../../v2/__test-helpers__.ts";
-import { DEFAULT_RULES } from "../../v2/defaults.ts";
-import { buildEvaluator } from "../../v2/evaluator.ts";
-import { resolvePlugins } from "../../v2/plugin-merger.ts";
-import type { SteeringConfig } from "../../v2/schema.ts";
+} from "../../__test-helpers__.ts";
+import { DEFAULT_RULES } from "../../defaults.ts";
+import { buildEvaluator } from "../../evaluator.ts";
+import { resolvePlugins } from "../../plugin-merger.ts";
+import type { SteeringConfig } from "../../schema.ts";
 import gitPlugin from "./index.ts";
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ describe("git plugin: does not break DEFAULT_RULES", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-force-push\]/);
+		assert.match(res.reason!, /\[steering:no-force-push@[^\]]+\]/);
 	});
 });
 
@@ -177,7 +177,7 @@ describe("git plugin: no-main-commit via branch predicate", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 	});
 
 	it("allows on feature", async () => {
@@ -293,7 +293,7 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 			0,
 		);
 		assert.ok(res && res.block === true);
-		assert.match(res.reason!, /\[steering:no-main-commit\]/);
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
 		// Regression guard: the branch predicate MUST NOT shell out
 		// when the walker already provided a concrete branch value.
 		assert.equal(

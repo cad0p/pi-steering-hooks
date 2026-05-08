@@ -57,4 +57,4 @@ export type { CommandRef } from "./types.ts";
 
 // Re-export for convenience; consumers can still `import { parse } from "unbash"`.
 export { parse } from "unbash";
-export type { Command, Node, Script } from "unbash";
+export type { Command, Node, Script, Word, WordPart } from "unbash";

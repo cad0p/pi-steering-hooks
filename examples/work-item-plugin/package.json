@@ -1,0 +1,19 @@
+{
+	"name": "@examples/work-item-plugin",
+	"version": "0.0.0-example",
+	"private": true,
+	"description": "Canonical example plugin for pi-steering (ADR §15).",
+	"type": "module",
+	"peerDependencies": {
+		"pi-steering": "workspace:*"
+	},
+	"devDependencies": {
+		"pi-steering": "workspace:*",
+		"unbash-walker": "workspace:*"
+	},
+	"scripts": {
+		"pretest": "pnpm --filter pi-steering run clean && pnpm --filter pi-steering run build",
+		"test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+		"typecheck": "tsc --noEmit"
+	}
+}

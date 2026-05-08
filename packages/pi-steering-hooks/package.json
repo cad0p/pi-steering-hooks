@@ -1,5 +1,5 @@
 {
-  "name": "@cad0p/pi-steering-hooks",
+  "name": "pi-steering",
   "version": "0.0.0-poc.0",
   "private": true,
   "description": "AST-backed steering hooks for pi — deterministic tool-call guardrails with command-level effective-cwd scoping.",
@@ -50,9 +50,10 @@
     ]
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
+    "clean": "rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
@@ -62,7 +63,7 @@
     "unbash-walker": "workspace:*"
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "typescript": "^5.4.5"
