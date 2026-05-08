@@ -441,3 +441,97 @@ describe("v2/defineConfig: type constraints (ADR §8)", () => {
 		assert.equal(plugin.name, "p");
 	});
 });
+
+describe("v2/defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", () => {
+	// These tests pin the ASYMMETRIC failure modes of bare type annotations
+	// vs. `as const satisfies` so the JSDoc authoring-pattern guidance in
+	// `schema.ts` (Rule.writes / Observer.writes / Plugin.name) stays
+	// truthful. If TS's literal-inference behavior changes under us, or a
+	// refactor narrows/widens one of the helper types, these tests will
+	// surface the change loud enough to update the docs.
+	//
+	// The two failure modes:
+	//   - NAME fields (plugin.name, rule.name): bare annotation widens to
+	//     `string`, which makes `AllPluginNames` / `AllRuleNames` = `string`.
+	//     Typos in `disable` / `disablePlugins` then compile silently.
+	//     This is the "no typo detection" footgun.
+	//   - `writes` arrays: bare annotation widens `readonly ["x"]` to
+	//     `readonly string[]`, which can't project string literals, so
+	//     `AllWrites` collapses to `never`. EVERY `when.happened.type`
+	//     reference is rejected. This is the "can't use writes at all"
+	//     failure — louder, but still a footgun if you don't know why.
+
+	it("bare `: Plugin` annotation widens `name` — typos in disablePlugins compile silently", () => {
+		const widePlugin: Plugin = { name: "known-plugin" };
+		// No @ts-expect-error: this COMPILES cleanly because `widePlugin.name`
+		// has type `string`, so `AllPluginNames` = `string`, so any string
+		// satisfies `disablePlugins`. If TS future-fixes literal inference
+		// on bare annotations OR a refactor narrows `AllPluginNames`, this
+		// line starts erroring — signal to update the JSDoc footgun note.
+		const cfg = defineConfig({
+			plugins: [widePlugin],
+			disablePlugins: ["typo-name"],
+		});
+		assert.equal(cfg.disablePlugins?.[0], "typo-name");
+	});
+
+	it("`as const satisfies Plugin` preserves `name` — typos caught at type-check", () => {
+		const narrowPlugin = { name: "known-plugin" } as const satisfies Plugin;
+		const cfg = defineConfig({
+			plugins: [narrowPlugin],
+			// @ts-expect-error — "typo-name" not in AllPluginNames union
+			// (which is the literal "known-plugin" thanks to `as const`).
+			disablePlugins: ["typo-name"],
+		});
+		assert.equal(cfg.disablePlugins?.length, 1);
+	});
+
+	it("bare `: Observer` annotation widens `writes` — collapses AllWrites to never", () => {
+		const wideObserver: Observer = {
+			name: "obs",
+			writes: ["sync-done"],
+			onResult: () => {},
+		};
+		const cfg = defineConfig({
+			observers: [wideObserver],
+			rules: [
+				{
+					name: "r",
+					tool: "bash",
+					field: "command",
+					pattern: /./,
+					reason: "r",
+					// @ts-expect-error — bare-annotated observer widens
+					// `writes` to `readonly string[]`, which collapses
+					// `AllWrites` to `never`. "sync-done" is rejected even
+					// though it IS in the runtime value — type info was lost
+					// at annotation time.
+					when: { happened: { type: "sync-done", in: "agent_loop" } },
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+
+	it("`as const satisfies Observer` preserves `writes` — type is referenceable", () => {
+		const narrowObserver = {
+			name: "obs",
+			writes: ["sync-done"],
+			onResult: () => {},
+		} as const satisfies Observer;
+		const cfg = defineConfig({
+			observers: [narrowObserver],
+			rules: [
+				{
+					name: "r",
+					tool: "bash",
+					field: "command",
+					pattern: /./,
+					reason: "r",
+					when: { happened: { type: "sync-done", in: "agent_loop" } },
+				},
+			],
+		});
+		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "sync-done");
+	});
+});
