@@ -160,6 +160,22 @@ function convertRule(raw: unknown, path: string): Rule {
 			`${path}.field`,
 		);
 	}
+	// Validate the (tool, field) combination per the discriminated
+	// Rule union: bash rules test against `command`; write / edit
+	// rules test against `path` or `content`.
+	if (tool === "bash" && field !== "command") {
+		throw new FromJSONError(
+			`bash rules must use \`field: "command"\` (got "${field}")`,
+			`${path}.field`,
+		);
+	}
+	if ((tool === "write" || tool === "edit") && field === "command") {
+		throw new FromJSONError(
+			`${tool} rules must use \`field: "path"\` or \`field: "content"\` ` +
+				`(got "command")`,
+			`${path}.field`,
+		);
+	}
 	const pattern = raw["pattern"];
 	if (typeof pattern !== "string") {
 		throw new FromJSONError(
@@ -175,13 +191,17 @@ function convertRule(raw: unknown, path: string): Rule {
 		);
 	}
 
-	const rule: Rule = {
-		name,
-		tool,
-		field,
-		pattern,
-		reason,
-	};
+	const rule: Rule =
+		tool === "bash"
+			? { name, tool, field: "command", pattern, reason }
+			: {
+					name,
+					tool,
+					// Narrowed by the (tool, field) check above.
+					field: field as "path" | "content",
+					pattern,
+					reason,
+				};
 
 	// Optional: requires / unless (string patterns only).
 	if ("requires" in raw) {

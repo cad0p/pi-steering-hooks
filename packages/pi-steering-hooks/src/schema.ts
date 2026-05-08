@@ -183,18 +183,19 @@ export interface WhenClause<Writes extends string = string> {
 }
 
 // ---------------------------------------------------------------------------
-// Rule
+// Rule (discriminated union by `tool`)
 // ---------------------------------------------------------------------------
 
 /**
- * A single steering rule.
+ * Fields common to every tool-specific rule variant.
  *
- * Shape refinements vs. v1:
- *   - `pattern` accepts `RegExp` in addition to `string`.
- *   - `requires` / `unless` accept `Pattern | PredicateFn`.
- *   - `when` is a recursive {@link WhenClause}.
- *   - `observer` references an {@link Observer} by name (string) or
- *     inline definition.
+ * `BaseRule` is the shared slice — everything except the `tool`
+ * discriminant and the tool-specific {@link BashRule.field} /
+ * {@link WriteRule.field} / {@link EditRule.field} sub-unions. The
+ * exported user-facing type is {@link Rule}, the discriminated union
+ * over the three tool variants; authors should reach for `Rule`
+ * unless they're writing generic rule-handling code that already
+ * knows the tool at its call site.
  *
  * Generic parameter `ObsName` constrains the string form of the
  * {@link observer} field. {@link defineConfig} threads through the union
@@ -205,7 +206,7 @@ export interface WhenClause<Writes extends string = string> {
  *
  * See ADR "Design → Rule schema".
  */
-export interface Rule<
+export interface BaseRule<
 	ObsName extends string = string,
 	Writes extends string = string,
 > {
@@ -213,25 +214,8 @@ export interface Rule<
 	name: string;
 
 	/**
-	 * Which pi tool to intercept.
-	 *
-	 * Reserved: more tool names (`read`, `todo`, etc.) may land as pi
-	 * grows its tool surface. This schema only models tools the
-	 * evaluator knows how to gate.
-	 */
-	tool: "bash" | "write" | "edit";
-
-	/**
-	 * Which field of the tool input the {@link pattern} tests against.
-	 * Included for forward compatibility — the evaluator derives the
-	 * test target from {@link tool}, but the explicit declaration
-	 * documents author intent and gives room for richer rules later.
-	 */
-	field: "command" | "path" | "content";
-
-	/**
 	 * Main match predicate. See {@link Pattern}. The rule fires only
-	 * if this matches the chosen {@link field} value (for bash, the
+	 * if this matches the chosen `field` value (for bash, the
 	 * AST-extracted command string per ref).
 	 */
 	pattern: Pattern;
@@ -306,8 +290,8 @@ export interface Rule<
 	 * can no longer project string-literal members, so `AllWrites`
 	 * collapses to `never` — meaning EVERY `when.happened.type`
 	 * reference in the config is rejected as a typo, not silently
-	 * accepted. The wider warning — "name" / "plugin" literals
-	 * widening to `string` — causes the opposite failure: typos in
+	 * accepted.
+	 *
 	 * **Runtime effect:** none. `writes` is purely documentation +
 	 * type-level plumbing — the engine does NOT verify that `onFire`
 	 * only calls `ctx.appendEntry` with declared types.
@@ -359,6 +343,90 @@ export interface Rule<
 	 */
 	onFire?: (ctx: PredicateContext) => void | Promise<void>;
 }
+
+/**
+ * Bash rule: gates pi's `bash` tool.
+ *
+ * `field` is constrained to `"command"` — the evaluator always runs
+ * bash rules against the extracted command string per ref (see
+ * `evaluator.ts` bash branch). There is no useful "test a bash rule
+ * against a path" mode: bash has no path. `field: "path"` /
+ * `field: "content"` on a bash rule silently misbehaved in the
+ * previous (non-discriminated) schema; the union here makes the
+ * mistake a compile error.
+ *
+ * Inside a rule's predicates / `onFire`, the context exposes the
+ * extracted command plus `args` (quote-aware `Word[]`) and
+ * `basename` — those are populated per-ref by the evaluator, not by
+ * the rule author.
+ */
+export interface BashRule<
+	ObsName extends string = string,
+	Writes extends string = string,
+> extends BaseRule<ObsName, Writes> {
+	tool: "bash";
+	field: "command";
+}
+
+/**
+ * Write rule: gates pi's `write` tool (whole-file writes).
+ *
+ * `field` picks the input slot the {@link pattern} tests against:
+ *   - `"path"`    — the target path (regex-gate paths a file may be
+ *                  written to).
+ *   - `"content"` — the full file contents the agent is writing.
+ */
+export interface WriteRule<
+	ObsName extends string = string,
+	Writes extends string = string,
+> extends BaseRule<ObsName, Writes> {
+	tool: "write";
+	field: "path" | "content";
+}
+
+/**
+ * Edit rule: gates pi's `edit` tool (targeted oldText/newText patches).
+ *
+ * `field` picks the input slot the {@link pattern} tests against:
+ *   - `"path"`    — the target path.
+ *   - `"content"` — the concatenated `newText` of every edit in the
+ *                  tool call (evaluator joins with `\n`). This mirrors
+ *                  `write.content` so authors can use one rule class
+ *                  for both file surfaces.
+ */
+export interface EditRule<
+	ObsName extends string = string,
+	Writes extends string = string,
+> extends BaseRule<ObsName, Writes> {
+	tool: "edit";
+	field: "path" | "content";
+}
+
+/**
+ * A single steering rule — discriminated union over the three
+ * gatable tools. The `tool` discriminant determines which `field`
+ * values are legal: bash rules test against `"command"`, write / edit
+ * rules test against `"path"` or `"content"`. Invalid combinations
+ * (`{ tool: "bash", field: "path" }`, `{ tool: "write", field:
+ * "command" }`, …) are TS errors.
+ *
+ * Shape refinements vs. v1:
+ *   - `pattern` accepts `RegExp` in addition to `string`.
+ *   - `requires` / `unless` accept `Pattern | PredicateFn`.
+ *   - `when` is a recursive {@link WhenClause}.
+ *   - `observer` references an {@link Observer} by name (string) or
+ *     inline definition.
+ *   - `Rule` is a discriminated union by `tool`.
+ *
+ * See ADR "Design → Rule schema".
+ */
+export type Rule<
+	ObsName extends string = string,
+	Writes extends string = string,
+> =
+	| BashRule<ObsName, Writes>
+	| WriteRule<ObsName, Writes>
+	| EditRule<ObsName, Writes>;
 
 // ---------------------------------------------------------------------------
 // Observer

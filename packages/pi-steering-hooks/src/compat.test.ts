@@ -195,6 +195,73 @@ describe("compat: fromJSON rejections", () => {
 		);
 	});
 
+	it("rejects invalid (tool, field) combinations per the Rule union", () => {
+		// bash rules must use `field: "command"`; `path` / `content` are
+		// silently-wrong combos the discriminated TS Rule union now
+		// rejects. compat.ts mirrors the check at JSON parse time.
+		assert.throws(
+			() =>
+				fromJSON({
+					rules: [
+						{
+							name: "n",
+							tool: "bash",
+							field: "path",
+							pattern: "p",
+							reason: "r",
+						},
+					],
+				}),
+			FromJSONError,
+		);
+		assert.throws(
+			() =>
+				fromJSON({
+					rules: [
+						{
+							name: "n",
+							tool: "bash",
+							field: "content",
+							pattern: "p",
+							reason: "r",
+						},
+					],
+				}),
+			FromJSONError,
+		);
+		// write / edit rules test `path` or `content`, never `command`.
+		assert.throws(
+			() =>
+				fromJSON({
+					rules: [
+						{
+							name: "n",
+							tool: "write",
+							field: "command",
+							pattern: "p",
+							reason: "r",
+						},
+					],
+				}),
+			FromJSONError,
+		);
+		assert.throws(
+			() =>
+				fromJSON({
+					rules: [
+						{
+							name: "n",
+							tool: "edit",
+							field: "command",
+							pattern: "p",
+							reason: "r",
+						},
+					],
+				}),
+			FromJSONError,
+		);
+	});
+
 	it("rejects non-string `pattern`", () => {
 		assert.throws(
 			() =>

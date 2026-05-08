@@ -586,3 +586,144 @@ describe("defineConfig: cross-module plugin typo detection (F2 regression fence)
 		assert.equal(cfg.disabledPlugins?.length, 1);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Rule discriminated union — `tool` gates the legal `field` values (R4).
+//
+// These tests pin the (tool, field) combinations that TS accepts and the
+// ones it rejects. The discriminated Rule union (BashRule | WriteRule |
+// EditRule) replaced a flat `Rule` that accepted any `field` value
+// regardless of `tool` — an author could write
+// `{ tool: "bash", field: "path", ... }` and the evaluator would
+// silently run the rule against the command text (bash always uses the
+// extracted command). The union surfaces those typos at compile time.
+// ---------------------------------------------------------------------------
+
+describe("Rule discriminated union: tool gates field", () => {
+	it("bash + command typechecks", () => {
+		const cfg = defineConfig({
+			rules: [
+				{
+					name: "bash-ok",
+					tool: "bash",
+					field: "command",
+					pattern: /^rm\b/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+
+	it("write + path / content typecheck", () => {
+		const cfg = defineConfig({
+			rules: [
+				{
+					name: "write-path",
+					tool: "write",
+					field: "path",
+					pattern: /^\/etc\//,
+					reason: "r",
+				},
+				{
+					name: "write-content",
+					tool: "write",
+					field: "content",
+					pattern: /SECRET/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 2);
+	});
+
+	it("edit + path / content typecheck", () => {
+		const cfg = defineConfig({
+			rules: [
+				{
+					name: "edit-path",
+					tool: "edit",
+					field: "path",
+					pattern: /^\/etc\//,
+					reason: "r",
+				},
+				{
+					name: "edit-content",
+					tool: "edit",
+					field: "content",
+					pattern: /SECRET/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 2);
+	});
+
+	it("bash rules reject `field: \"path\"` (type error)", () => {
+		const cfg = defineConfig({
+			rules: [
+				// @ts-expect-error — bash rules must use `field: "command"`.
+				// Previously silently misbehaved (evaluator always tested
+				// the extracted command regardless of `field`).
+				{
+					name: "bash-path-bad",
+					tool: "bash",
+					field: "path",
+					pattern: /^x/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+
+	it("bash rules reject `field: \"content\"` (type error)", () => {
+		const cfg = defineConfig({
+			rules: [
+				// @ts-expect-error — bash rules must use `field: "command"`.
+				{
+					name: "bash-content-bad",
+					tool: "bash",
+					field: "content",
+					pattern: /^x/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+
+	it("write rules reject `field: \"command\"` (type error)", () => {
+		const cfg = defineConfig({
+			rules: [
+				// @ts-expect-error — write rules test `path` / `content`,
+				// never `command` (write has no command).
+				{
+					name: "write-command-bad",
+					tool: "write",
+					field: "command",
+					pattern: /^x/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+
+	it("edit rules reject `field: \"command\"` (type error)", () => {
+		const cfg = defineConfig({
+			rules: [
+				// @ts-expect-error — edit rules test `path` / `content`,
+				// never `command`.
+				{
+					name: "edit-command-bad",
+					tool: "edit",
+					field: "command",
+					pattern: /^x/,
+					reason: "r",
+				},
+			],
+		});
+		assert.equal(cfg.rules?.length, 1);
+	});
+});
