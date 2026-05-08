@@ -15,6 +15,15 @@ importers:
         specifier: ^5.4.5
         version: 5.9.3
 
+  examples/work-item-plugin:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../../packages/pi-steering-hooks
+      unbash-walker:
+        specifier: workspace:*
+        version: link:../../packages/unbash-walker
+
   packages/pi-steering-hooks:
     dependencies:
       '@earendil-works/pi-coding-agent':
