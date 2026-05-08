@@ -11,7 +11,12 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { expectAllows, loadHarness } from "pi-steering/testing";
+import {
+	createRecordingHost,
+	expectAllows,
+	loadHarness,
+	mockExtensionContext,
+} from "pi-steering/testing";
 import {
 	commitDescriptionCheck,
 	DESCRIPTION_REVIEWED_TYPE,
@@ -19,36 +24,18 @@ import {
 
 describe("commit-description-check", () => {
 	it("blocks the first commit per loop, allows the second (self-mark)", async () => {
-		const sessionEntries: Array<{
-			type: "custom";
-			customType: string;
-			data: unknown;
-			timestamp: string;
-		}> = [];
-
-		const host = {
-			exec: () =>
-				Promise.reject(new Error("exec not stubbed in this test")),
-			appendEntry: (type: string, data?: unknown) => {
-				sessionEntries.push({
-					type: "custom",
-					customType: type,
-					data,
-					timestamp: new Date().toISOString(),
-				});
-			},
-		};
+		// Recording host + shared ExtensionContext: writes via
+		// host.appendEntry flow back into ctx.sessionManager.getEntries
+		// so later evaluate() calls see the self-mark the previous call
+		// wrote. Same plumbing the real pi runtime wires, minus the
+		// child-process bits.
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/tmp/test", host.entries);
 
 		const harness = loadHarness({
 			config: { rules: [commitDescriptionCheck] },
 			host,
 		});
-
-		const ctx = {
-			cwd: "/tmp/test",
-			sessionManager: { getEntries: () => sessionEntries },
-			// biome-ignore lint/suspicious/noExplicitAny: test-shape
-		} as any;
 
 		// First commit in loop 1 — blocks AND self-marks.
 		const first = await harness.evaluate(
@@ -57,8 +44,7 @@ describe("commit-description-check", () => {
 				toolCallId: "tc1",
 				toolName: "bash",
 				input: { command: 'git commit -m "first"' },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
 			ctx,
 			1,
 		);
@@ -69,7 +55,7 @@ describe("commit-description-check", () => {
 
 		// `onFire` wrote the reminder entry.
 		assert.ok(
-			sessionEntries.some(
+			host.entries.some(
 				(e) => e.customType === DESCRIPTION_REVIEWED_TYPE,
 			),
 			"onFire did not self-mark the DESCRIPTION_REVIEWED_TYPE entry",
@@ -84,8 +70,7 @@ describe("commit-description-check", () => {
 				toolCallId: "tc2",
 				toolName: "bash",
 				input: { command: 'git commit -m "second"' },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
 			ctx,
 			1,
 		);
@@ -105,8 +90,7 @@ describe("commit-description-check", () => {
 				toolCallId: "tc3",
 				toolName: "bash",
 				input: { command: 'git commit -m "new loop"' },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
 			ctx,
 			2,
 		);

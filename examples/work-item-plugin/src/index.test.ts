@@ -14,9 +14,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+	createRecordingHost,
 	expectAllows,
 	expectBlocks,
 	loadHarness,
+	mockExtensionContext,
 } from "pi-steering/testing";
 import workItemPlugin, {
 	TEST_PASSED_TYPE,
@@ -67,33 +69,12 @@ describe("work-item-plugin (end-to-end)", () => {
 		// This test is intentionally the FULL happy-path: block on
 		// first commit (description-check fires), self-mark, then
 		// allow the second commit that carries a [PROJ-N] tag.
-		const sessionEntries: Array<{
-			type: "custom";
-			customType: string;
-			data: unknown;
-			timestamp: string;
-		}> = [];
-		const host = {
-			exec: () =>
-				Promise.reject(new Error("exec not stubbed")),
-			appendEntry: (type: string, data?: unknown) => {
-				sessionEntries.push({
-					type: "custom",
-					customType: type,
-					data,
-					timestamp: new Date().toISOString(),
-				});
-			},
-		};
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/tmp/test", host.entries);
 		const harness = loadHarness({
 			config: { plugins: [workItemPlugin] },
 			host,
 		});
-		const ctx = {
-			cwd: "/tmp/test",
-			sessionManager: { getEntries: () => sessionEntries },
-			// biome-ignore lint/suspicious/noExplicitAny: test-shape
-		} as any;
 
 		// First: commit-description-check fires and self-marks.
 		const first = await harness.evaluate(
@@ -102,8 +83,7 @@ describe("work-item-plugin (end-to-end)", () => {
 				toolCallId: "tc1",
 				toolName: "bash",
 				input: { command: 'git commit -m "feat: [PROJ-1] work"' },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
 			ctx,
 			1,
 		);
@@ -112,7 +92,7 @@ describe("work-item-plugin (end-to-end)", () => {
 			"first commit should block on the reminder",
 		);
 		assert.ok(
-			sessionEntries.some(
+			host.entries.some(
 				(e) => e.customType === DESCRIPTION_REVIEWED_TYPE,
 			),
 			"DESCRIPTION_REVIEWED_TYPE should be present after onFire",
@@ -126,8 +106,7 @@ describe("work-item-plugin (end-to-end)", () => {
 				toolCallId: "tc2",
 				toolName: "bash",
 				input: { command: 'git commit -m "feat: [PROJ-1] work"' },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
 			ctx,
 			1,
 		);
@@ -139,31 +118,15 @@ describe("work-item-plugin (end-to-end)", () => {
 	});
 
 	it("dispatch → evaluate: npm test success unblocks git push in the same loop", async () => {
-		const sessionEntries: Array<{
-			type: "custom";
-			customType: string;
-			data: unknown;
-			timestamp: string;
-		}> = [];
-		const host = {
-			exec: () =>
-				Promise.reject(new Error("exec not stubbed")),
-			appendEntry: (type: string, data?: unknown) => {
-				sessionEntries.push({
-					type: "custom",
-					customType: type,
-					data,
-					timestamp: new Date().toISOString(),
-				});
-			},
-		};
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/tmp/test", host.entries);
 		const harness = loadHarness({
 			config: { plugins: [workItemPlugin] },
 			host,
 		});
 
 		// Fire npm test success through the dispatcher — observer
-		// writes TEST_PASSED_TYPE into sessionEntries.
+		// writes TEST_PASSED_TYPE into the shared entries store.
 		await harness.dispatch(
 			{
 				type: "tool_result",
@@ -172,18 +135,12 @@ describe("work-item-plugin (end-to-end)", () => {
 				input: { command: "npm test" },
 				content: [],
 				details: { exitCode: 0 },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
-			// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			{
-				cwd: "/tmp/test",
-				sessionManager: { getEntries: () => sessionEntries },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.dispatch>[0],
+			ctx,
 			7,
 		);
 		assert.ok(
-			sessionEntries.some((e) => e.customType === TEST_PASSED_TYPE),
+			host.entries.some((e) => e.customType === TEST_PASSED_TYPE),
 			"observer should have written TEST_PASSED_TYPE",
 		);
 
@@ -194,14 +151,8 @@ describe("work-item-plugin (end-to-end)", () => {
 				toolCallId: "tc2",
 				toolName: "bash",
 				input: { command: "git push" },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
-			// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			{
-				cwd: "/tmp/test",
-				sessionManager: { getEntries: () => sessionEntries },
-				// biome-ignore lint/suspicious/noExplicitAny: test-shape
-			} as any,
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
 			7,
 		);
 		assert.equal(
