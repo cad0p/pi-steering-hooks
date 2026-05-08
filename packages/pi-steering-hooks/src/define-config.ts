@@ -41,6 +41,62 @@ import type {
 	SteeringConfig,
 } from "./schema.ts";
 
+// ---------------------------------------------------------------------------
+// Type-level plumbing: project `name` / `writes` literals off tuples of
+// rules, observers, or plugins.
+// ---------------------------------------------------------------------------
+
+/**
+ * Pull a single projection off every element of an array type.
+ *
+ *   - `K = "name"`   — value is the element's `name` literal
+ *                       (`{ name: N }` → `N`).
+ *   - `K = "writes"` — value is each element of the element's
+ *                       `writes` tuple (`{ writes: readonly [..., S] }`
+ *                       → `S`).
+ *
+ * Elements missing the field (optional `writes`, widened `name`)
+ * contribute `never`. Non-tuple `T` inputs short-circuit to `never`.
+ */
+type ProjectField<T, K extends "name" | "writes"> =
+	T extends readonly (infer E)[]
+		? E extends Record<K, infer V>
+			? K extends "writes"
+				? V extends readonly (infer S extends string)[]
+					? S
+					: never
+				: V extends string
+					? V
+					: never
+			: never
+		: never;
+
+/**
+ * Walk a tuple of plugins and union a {@link ProjectField} projection
+ * across every plugin's `Source` array (`"rules"` or `"observers"`).
+ *
+ * Replaces four near-identical recursive walkers that differed only in
+ * `(Source, K)` pair — see git blame for the pre-R2 shape.
+ */
+type FromPluginField<
+	P extends readonly Plugin[],
+	Source extends "rules" | "observers",
+	K extends "name" | "writes",
+> = P extends readonly [infer First, ...infer Rest]
+	? (
+			First extends Plugin
+				? First[Source] extends infer X
+					? X extends readonly (Rule | Observer)[]
+						? ProjectField<X, K>
+						: never
+					: never
+				: never
+		)
+			| (Rest extends readonly Plugin[]
+					? FromPluginField<Rest, Source, K>
+					: never)
+	: never;
+
 /**
  * Extract the union of observer names registered across:
  *   - every plugin's `observers: Observer[]` array, AND
@@ -57,35 +113,8 @@ export type AllObserverNames<
 	P extends readonly Plugin[],
 	Inline extends readonly Observer[],
 > =
-	| ObserversFromPlugins<P>
-	| ObserversFromInline<Inline>;
-
-/**
- * Distribute over the tuple of plugins to union each plugin's
- * observer names. `Plugin.observers` is optional — a plugin that
- * doesn't declare any contributes `never`.
- */
-type ObserversFromPlugins<P extends readonly Plugin[]> =
-	P extends readonly [infer First, ...infer Rest]
-		? First extends Plugin
-			? (First["observers"] extends infer O
-					? O extends readonly Observer[]
-						? ObserversFromInline<O>
-						: never
-					: never)
-					| (Rest extends readonly Plugin[]
-						? ObserversFromPlugins<Rest>
-						: never)
-			: never
-		: never;
-
-/** Project an Observer[] tuple to the union of its `name` literals. */
-type ObserversFromInline<O extends readonly Observer[]> =
-	O extends readonly (infer Element)[]
-		? Element extends { name: infer N extends string }
-			? N
-			: never
-		: never;
+	| FromPluginField<P, "observers", "name">
+	| ProjectField<Inline, "name">;
 
 // ---------------------------------------------------------------------------
 // AllPluginNames — union of plugin `.name` literals across loaded plugins.
@@ -127,29 +156,8 @@ export type AllRuleNames<
 	P extends readonly Plugin[],
 	R extends readonly Rule[],
 > =
-	| RuleNamesFromPlugins<P>
-	| RuleNamesFromInline<R>;
-
-type RuleNamesFromPlugins<P extends readonly Plugin[]> =
-	P extends readonly [infer First, ...infer Rest]
-		? First extends Plugin
-			? (First["rules"] extends infer Rs
-					? Rs extends readonly Rule[]
-						? RuleNamesFromInline<Rs>
-						: never
-					: never)
-					| (Rest extends readonly Plugin[]
-						? RuleNamesFromPlugins<Rest>
-						: never)
-			: never
-		: never;
-
-type RuleNamesFromInline<R extends readonly Rule[]> =
-	R extends readonly (infer Element)[]
-		? Element extends { name: infer N extends string }
-			? N
-			: never
-		: never;
+	| FromPluginField<P, "rules", "name">
+	| ProjectField<R, "name">;
 
 // ---------------------------------------------------------------------------
 // AllWrites — union of `writes[]` literals across rules + observers.
@@ -177,60 +185,10 @@ export type AllWrites<
 	R extends readonly Rule[],
 	Inline extends readonly Observer[] = readonly [],
 > =
-	| WritesFromPluginRules<P>
-	| WritesFromPluginObservers<P>
-	| WritesFromRules<R>
-	| WritesFromObservers<Inline>;
-
-type WritesFromRules<R extends readonly Rule[]> =
-	R extends readonly (infer Element)[]
-		? Element extends { writes: infer W }
-			? W extends readonly (infer S)[]
-				? S extends string
-					? S
-					: never
-				: never
-			: never
-		: never;
-
-type WritesFromObservers<O extends readonly Observer[]> =
-	O extends readonly (infer Element)[]
-		? Element extends { writes: infer W }
-			? W extends readonly (infer S)[]
-				? S extends string
-					? S
-					: never
-				: never
-			: never
-		: never;
-
-type WritesFromPluginRules<P extends readonly Plugin[]> =
-	P extends readonly [infer First, ...infer Rest]
-		? First extends Plugin
-			? (First["rules"] extends infer Rs
-					? Rs extends readonly Rule[]
-						? WritesFromRules<Rs>
-						: never
-					: never)
-					| (Rest extends readonly Plugin[]
-						? WritesFromPluginRules<Rest>
-						: never)
-			: never
-		: never;
-
-type WritesFromPluginObservers<P extends readonly Plugin[]> =
-	P extends readonly [infer First, ...infer Rest]
-		? First extends Plugin
-			? (First["observers"] extends infer Os
-					? Os extends readonly Observer[]
-						? WritesFromObservers<Os>
-						: never
-					: never)
-					| (Rest extends readonly Plugin[]
-						? WritesFromPluginObservers<Rest>
-						: never)
-			: never
-		: never;
+	| FromPluginField<P, "rules", "writes">
+	| FromPluginField<P, "observers", "writes">
+	| ProjectField<R, "writes">
+	| ProjectField<Inline, "writes">;
 
 // ---------------------------------------------------------------------------
 // DefineConfigInput
