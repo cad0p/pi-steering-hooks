@@ -99,6 +99,7 @@ export default function register(pi: ExtensionAPI): void {
 export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
 
 export {
+	AGENT_LOOP_INDEX_KEY,
 	buildConfig,
 	defineConfig,
 	definePredicate,

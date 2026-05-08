@@ -32,6 +32,7 @@ import type {
 	PredicateHandler,
 	WhenClause,
 } from "../schema.ts";
+import { AGENT_LOOP_INDEX_KEY } from "./context.ts";
 
 // ---------------------------------------------------------------------------
 // Pattern / PredicateFn resolution
@@ -199,7 +200,7 @@ function evaluateHappened(
 	}
 	// scope === "agent_loop": filter by engine-injected tag.
 	for (const entry of entries) {
-		const tag = entry.data?.["_agentLoopIndex"];
+		const tag = entry.data?.[AGENT_LOOP_INDEX_KEY];
 		if (tag === ctx.agentLoopIndex) return false;
 	}
 	return true;

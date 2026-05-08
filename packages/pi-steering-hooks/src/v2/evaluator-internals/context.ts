@@ -104,9 +104,12 @@ export function createExecCache(
  * `when.happened: { in: "agent_loop" }` filter session entries by
  * comparing this key against `ctx.agentLoopIndex`.
  *
- * Exposed as a module-level constant so predicates / observers that
- * need to manually inspect the tag can reference it by name rather
- * than hardcoding the string.
+ * Part of the on-disk session-JSONL format, exposed as a public
+ * module-level constant. Re-exported from `v2/index.ts` and the
+ * package root so plugin authors who manually inspect entries via
+ * `findEntries` can import the constant by name rather than
+ * hardcoding the string — a future rename would then break at
+ * import time instead of silently producing un-filtered entries.
  */
 export const AGENT_LOOP_INDEX_KEY = "_agentLoopIndex" as const;
 

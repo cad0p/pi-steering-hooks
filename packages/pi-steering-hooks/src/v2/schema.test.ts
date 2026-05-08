@@ -236,3 +236,16 @@ describe("v2/schema: shape smoke tests", () => {
 		assert.equal(fake.cwd, "/");
 	});
 });
+
+describe("package-root exports", () => {
+	it("AGENT_LOOP_INDEX_KEY resolves to the on-disk JSONL tag string (C3)", async () => {
+		// Pins the public export path. Plugin authors inspecting raw
+		// session entries via `findEntries` import the constant instead
+		// of hardcoding the string — a future rename would then break at
+		// import time, not at runtime.
+		const rootExports = await import("../index.ts");
+		assert.equal(rootExports.AGENT_LOOP_INDEX_KEY, "_agentLoopIndex");
+		const v2Exports = await import("./index.ts");
+		assert.equal(v2Exports.AGENT_LOOP_INDEX_KEY, "_agentLoopIndex");
+	});
+});

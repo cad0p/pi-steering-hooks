@@ -51,3 +51,8 @@ export {
 
 // JSON compat
 export { FromJSONError, fromJSON } from "./compat.ts";
+
+// Auto-tag key for session-entry writes. Exposed so plugin authors
+// inspecting raw session entries via `findEntries` can reference the
+// constant instead of hardcoding the string.
+export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
