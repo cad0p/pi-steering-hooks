@@ -1,11 +1,11 @@
-# @cad0p/pi-steering-hooks
+# pi-steering
 
 Declarative tool-call guardrails for [pi](https://github.com/earendil-works/pi-coding-agent), authored in TypeScript.
 
 Three things that make this package distinct:
 
 - **AST-backed bash inspection.** The evaluator parses every command with [`unbash-walker`](../unbash-walker/) and runs rules against the extracted command structure — not the raw string. `sh -c 'git push --force'`, `cd /repo && git push --force`, and `git push "--force"` are all caught by the same `^git\s+push.*--force` pattern. `echo 'git push --force'` is correctly not flagged. See the [24-case adversarial matrix](../unbash-walker/src/adversarial-matrix.test.ts) for the full pinned behaviour.
-- **TypeScript-first config.** Rules, plugins, observers, and trackers all live in `.pi/steering/index.ts`. Plugins are distribution units — `import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git"` gives you `when.branch`, `when.upstream`, `when.commitsAhead`, a walker-threaded branch tracker, and a `no-main-commit` rule you can `disable: [...]` if you don't want it. Everything is unit-testable with the same primitives the engine itself uses.
+- **TypeScript-first config.** Rules, plugins, observers, and trackers all live in `.pi/steering/index.ts`. Plugins are distribution units — `import gitPlugin from "pi-steering/plugins/git"` gives you `when.branch`, `when.upstream`, `when.commitsAhead`, a walker-threaded branch tracker, and a `no-main-commit` rule you can `disable: [...]` if you don't want it. Everything is unit-testable with the same primitives the engine itself uses.
 - **Pi-native turn state.** Observers fire on `tool_result` and write typed entries via `pi.appendEntry`. Predicates read them back via `findEntries` and gate on `entry.turnIndex < ctx.turnIndex` — "must have happened in a prior turn". Rules like "must run `sync` before `cr`" or "must read the CR description before submitting" become 10-line definitions, not custom pi extensions.
 
 Inspired by [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks) (schema DNA, override-comment syntax, default-rule set). See [Relationship to related packages](#relationship-to-related-packages) for how the two have diverged.
@@ -13,7 +13,7 @@ Inspired by [samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hoo
 ## Install
 
 ```bash
-pi install @cad0p/pi-steering-hooks
+pi install pi-steering
 ```
 
 Requires **Node ≥ 22** — the loader reads `.pi/steering.ts` via native type-stripping (no `tsx` / `ts-node` runtime). On older Node the loader throws with an upgrade message at session start.
@@ -27,7 +27,7 @@ git clone https://github.com/cad0p/pi-steering-hooks.git
 cd pi-steering-hooks
 
 pnpm install
-pnpm --filter @cad0p/pi-steering-hooks build   # dist/ is gitignored — build first
+pnpm --filter pi-steering build   # dist/ is gitignored — build first
 
 pi install ./packages/pi-steering-hooks
 ```
@@ -37,7 +37,7 @@ Then restart pi.
 **After code changes.** Rebuild, then restart pi:
 
 ```bash
-pnpm --filter @cad0p/pi-steering-hooks build
+pnpm --filter pi-steering build
 ```
 
 Why both steps matter:
@@ -49,7 +49,7 @@ Why both steps matter:
 For tight iteration, run the build in watch mode in a separate terminal and only restart pi when you want to pick up the latest compiled output:
 
 ```bash
-pnpm --filter @cad0p/pi-steering-hooks build -- --watch
+pnpm --filter pi-steering build -- --watch
 ```
 
 ## Quick start
@@ -58,7 +58,7 @@ Create `.pi/steering.ts` at your project root:
 
 ```ts
 // .pi/steering.ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
+import { defineConfig } from "pi-steering";
 
 export default defineConfig({
   rules: [
@@ -140,7 +140,7 @@ interface Rule {
 Example:
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
+import { defineConfig } from "pi-steering";
 
 export default defineConfig({
   rules: [
@@ -212,7 +212,7 @@ Observers fire on `tool_result` events after the tool runs. Their typical job is
 Example:
 
 ```ts
-import type { Observer } from "@cad0p/pi-steering-hooks";
+import type { Observer } from "pi-steering";
 
 const syncDone: Observer = {
   name: "sync-done",
@@ -278,8 +278,8 @@ interface SteeringConfig {
 Full example:
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
-import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+import { defineConfig } from "pi-steering";
+import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
   plugins: [gitPlugin],
@@ -329,8 +329,8 @@ export default defineConfig({
 Opt-in — not loaded by default. Import and register:
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
-import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+import { defineConfig } from "pi-steering";
+import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
   plugins: [gitPlugin],
@@ -420,7 +420,7 @@ Skeleton:
 
 ```ts
 // plugins/my-plugin/index.ts
-import type { Plugin, PredicateHandler } from "@cad0p/pi-steering-hooks";
+import type { Plugin, PredicateHandler } from "pi-steering";
 
 const myPredicate: PredicateHandler<{ threshold: number }> = async (args, ctx) => {
   // args is whatever the user put under `when.myPredicate`
@@ -483,8 +483,8 @@ The **strict less-than** is what makes these rules bypass-proof. If the agent ru
 Example — require `ws sync` to have run successfully in a prior turn before `cr` can submit:
 
 ```ts
-import { defineConfig } from "@cad0p/pi-steering-hooks";
-import type { Observer } from "@cad0p/pi-steering-hooks";
+import { defineConfig } from "pi-steering";
+import type { Observer } from "pi-steering";
 
 const syncDone: Observer = {
   name: "sync-done",
@@ -588,7 +588,7 @@ Default fail-closed is the safer posture: a rule that can't statically prove the
 
 ## Testing
 
-The `@cad0p/pi-steering-hooks/testing` subpath is the stable API for rule and plugin authors. It exposes the same primitives the engine uses internally.
+The `pi-steering/testing` subpath is the stable API for rule and plugin authors. It exposes the same primitives the engine uses internally.
 
 ### Rule-level tests — `loadHarness` + `expectBlocks` / `expectAllows`
 
@@ -599,7 +599,7 @@ import {
   expectAllows,
   expectBlocks,
   loadHarness,
-} from "@cad0p/pi-steering-hooks/testing";
+} from "pi-steering/testing";
 import config from "./index.ts";
 
 describe("my steering config", () => {
@@ -632,7 +632,7 @@ For plugin authors unit-testing a single predicate handler:
 ```ts
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { testPredicate } from "@cad0p/pi-steering-hooks/testing";
+import { testPredicate } from "pi-steering/testing";
 import { branch } from "./predicates.ts";
 
 describe("branch predicate", () => {
@@ -659,7 +659,7 @@ describe("branch predicate", () => {
 ```ts
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { testObserver } from "@cad0p/pi-steering-hooks/testing";
+import { testObserver } from "pi-steering/testing";
 import { syncDone } from "./observers.ts";
 
 describe("sync-done observer", () => {
@@ -690,7 +690,7 @@ describe("sync-done observer", () => {
 For pinning a set of bypass attempts in one table:
 
 ```ts
-import { runMatrix, formatMatrix, loadHarness } from "@cad0p/pi-steering-hooks/testing";
+import { runMatrix, formatMatrix, loadHarness } from "pi-steering/testing";
 import config from "./index.ts";
 
 const harness = loadHarness({ config, includeDefaults: true });
@@ -726,7 +726,7 @@ Or as a library call — handy for JSON configs assembled at build time:
 
 ```ts
 // .pi/steering.ts
-import { fromJSON } from "@cad0p/pi-steering-hooks";
+import { fromJSON } from "pi-steering";
 import raw from "./steering.json" with { type: "json" };
 
 export default fromJSON(raw);
@@ -760,7 +760,7 @@ Performance isn't the differentiator — correctness on real agent inputs is. Th
 Three choices in the space, with different tradeoffs:
 
 - **[samfoy/pi-steering-hooks](https://github.com/samfoy/pi-steering-hooks)** — JSON-only, session-level cwd, zero runtime dependencies. The lightweight choice when your agent doesn't emit `cd` chains or wrapper commands, and you're comfortable with session-level `when.cwd` scoping.
-- **@cad0p/pi-steering-hooks** (this) — TypeScript-first, AST-backed bash inspection, plugin model, stateful turn-scoped rules. The choice when you want correctness against real agent emissions and composable rules that gate on branch, upstream, prior-turn state, and the like.
+- **pi-steering** (this) — TypeScript-first, AST-backed bash inspection, plugin model, stateful turn-scoped rules. The choice when you want correctness against real agent emissions and composable rules that gate on branch, upstream, prior-turn state, and the like.
 - **[pi-guard](https://github.com/jdiamond/pi-guard)** — permission prompts, human-in-the-loop UI (allowlists/denylists, prompt-before-run). Operates at a different point of the lifecycle. Steering decides whether the agent *should* run a command given project context; pi-guard decides whether the operator *allows* it. The two compose.
 
 This package shares `unbash-walker` AST infrastructure with pi-guard; once the extraction proposal on pi-guard is resolved, it moves to its own package that both depend on. The schema originated as a fork of samfoy's — basic `pattern` / `requires` / `unless` / `reason` / `noOverride` / `when.cwd` rules migrate between the two, but anything plugin-backed (branch, upstream, observers, turn state) is v2-only.
@@ -771,7 +771,7 @@ Open source, MIT. Standard GitHub PR flow. Coding conventions:
 
 - **SSH-signed commits** — `git config commit.gpgsign true` with an SSH signing key configured.
 - **Conventional Commits** — `feat(pi-steering-hooks): …`, `fix(...): …`, `docs(...): …`, `test(...): …`. One commit per logical change.
-- **Tests required** — new rules, predicates, observers, and plugins all need unit tests. Use the `@cad0p/pi-steering-hooks/testing` primitives.
+- **Tests required** — new rules, predicates, observers, and plugins all need unit tests. Use the `pi-steering/testing` primitives.
 
 See the [monorepo README](../../README.md) for the broader plan and roadmap, and [`PUBLISHING.md`](./PUBLISHING.md) for release gate criteria.
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Internal module \u2014 not part of the package's public API.
@@ -8,7 +8,7 @@
  * spin up an evaluator + observer dispatcher from a walk-up steering
  * config. It is intentionally NOT re-exported from `index.ts` or any
  * other public entry point; consumers building their own extensions
- * should go through `loadHarness` (subpath `@cad0p/pi-steering-hooks/testing`)
+ * should go through `loadHarness` (subpath `pi-steering/testing`)
  * or call `buildEvaluator` / `buildObserverDispatcher` directly.
  *
  * The sole reason this lives outside `register()` is so the two-pass

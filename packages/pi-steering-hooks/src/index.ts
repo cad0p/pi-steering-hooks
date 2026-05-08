@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 //
-// @cad0p/pi-steering-hooks — deterministic steering hooks for pi agents.
+// pi-steering — deterministic steering hooks for pi agents.
 // Inspired by @samfp/pi-steering-hooks (schema, override-comment,
 // defaults). AST backend + command-level effective-cwd via
 // unbash-walker. This file is the thin wiring layer between pi's
@@ -160,7 +160,7 @@ export {
 } from "unbash-walker";
 
 // Testing primitives — re-exported at the root for discoverability.
-// The canonical import path is `@cad0p/pi-steering-hooks/testing`;
+// The canonical import path is `pi-steering/testing`;
 // this root re-export means a test file that already imports
 // `defineConfig` from the root doesn't need a second import line for
 // `loadHarness`. See `./testing/index.ts` for the API docs.

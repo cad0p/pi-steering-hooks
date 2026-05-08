@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for {@link fromJSON} — v1 JSON → v2 {@link SteeringConfig}

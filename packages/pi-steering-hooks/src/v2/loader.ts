@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * TS-only config loader — walk-up discovery + merge.
@@ -73,7 +73,7 @@ function assertNodeVersion(): void {
 	const major = Number.parseInt(raw.split(".")[0] ?? "0", 10);
 	if (Number.isNaN(major) || major < MIN_NODE_MAJOR) {
 		throw new Error(
-			`@cad0p/pi-steering-hooks requires Node >= ${MIN_NODE_MAJOR} ` +
+			`pi-steering requires Node >= ${MIN_NODE_MAJOR} ` +
 				`for native .ts loading (found ${raw}). ` +
 				`Upgrade Node, or stay on v1 JSON configs (\`.pi/steering.json\`).`,
 		);

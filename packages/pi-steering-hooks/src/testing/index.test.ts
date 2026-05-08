@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for the Phase 5a testing primitives (`./index.ts`).

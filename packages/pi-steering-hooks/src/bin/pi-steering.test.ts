@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Tests for the `pi-steering` CLI (`./pi-steering.ts`).
@@ -203,7 +203,7 @@ describe("pi-steering import-json: conversion", () => {
 		assert.equal(r.stderr.trim(), "");
 		assert.match(
 			r.stdout,
-			/import \{ defineConfig \} from "@cad0p\/pi-steering-hooks"/,
+			/import \{ defineConfig \} from "pi-steering"/,
 		);
 		assert.match(r.stdout, /export default defineConfig\(/);
 		assert.match(r.stdout, /"no-amend"/);

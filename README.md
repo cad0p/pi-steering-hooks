@@ -2,14 +2,14 @@
 
 PoC workspace for two related packages:
 
-- **[`packages/pi-steering-hooks/`](packages/pi-steering-hooks/)** — AST-backed steering engine for [pi](https://github.com/earendil-works/pi-coding-agent). Deterministic tool-call guardrails with command-level effective-cwd scoping. Eventual npm package: `@cad0p/pi-steering-hooks`.
+- **[`packages/pi-steering-hooks/`](packages/pi-steering-hooks/)** — AST-backed steering engine for [pi](https://github.com/earendil-works/pi-coding-agent). Deterministic tool-call guardrails with command-level effective-cwd scoping. Eventual npm package: `pi-steering`.
 - **[`packages/unbash-walker/`](packages/unbash-walker/)** — utility for walking [unbash](https://github.com/webpro-nl/unbash) ASTs. Planned to be extracted into its own repo once the PoC proves the value.
 
 Both packages are currently `private: true`. Publishing is gated on PoC completion and upstream-coordination decisions (see "Status" below).
 
 ## Why a monorepo?
 
-`unbash-walker` is general-purpose infrastructure — it's useful to any agent or tool that inspects bash commands (permission systems, steering engines, shell linters). `@cad0p/pi-steering-hooks` is one of several consumers we expect.
+`unbash-walker` is general-purpose infrastructure — it's useful to any agent or tool that inspects bash commands (permission systems, steering engines, shell linters). `pi-steering` is one of several consumers we expect.
 
 During the PoC, keeping both in one repo lets us:
 
@@ -37,8 +37,7 @@ Once the PoC ships and the extraction path is clear, `unbash-walker` moves out.
                      ▲
                      │
 ┌──────────────────────────────────────────────┐
-│  @cad0p/pi-steering-hooks  (this repo,       │
-│                             Phase 2)          │
+│  pi-steering  (this repo, Phase 2)           │
 │    rule schema (pattern / requires /         │
 │      unless / when.cwd / reason)             │
 │    walk-up + merge + session_start loader    │

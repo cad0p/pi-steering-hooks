@@ -1,6 +1,6 @@
 # Publishing plan (deferred)
 
-Both packages (`unbash-walker` and `@cad0p/pi-steering-hooks`) are currently `private: true` in their `package.json`. This is intentional.
+Both packages (`unbash-walker` and `pi-steering`) are currently `private: true` in their `package.json`. This is intentional.
 
 ## Gate criteria
 

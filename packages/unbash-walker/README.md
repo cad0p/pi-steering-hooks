@@ -88,7 +88,7 @@ The command-extraction and wrapper-expansion logic was originally authored by [J
 
 PoC phase. The package is `private: true` inside the [`pi-steering-hooks` monorepo](../../README.md) until two things line up:
 
-1. The end-to-end PoC (the `@cad0p/pi-steering-hooks` steering engine consuming this package) demonstrates the value.
+1. The end-to-end PoC (the `pi-steering` steering engine consuming this package) demonstrates the value.
 2. The extraction proposal on [jdiamond/pi-guard](https://github.com/jdiamond/pi-guard) has been resolved — either `unbash-walker` is adopted upstream and moves to its own repo, or we publish it under the `cad0p` scope.
 
 ## License

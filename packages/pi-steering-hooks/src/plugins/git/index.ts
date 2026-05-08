@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
- * Git plugin for `@cad0p/pi-steering-hooks`.
+ * Git plugin for `pi-steering`.
  *
- * Subpath import: `@cad0p/pi-steering-hooks/plugins/git`.
+ * Subpath import: `pi-steering/plugins/git`.
  *
  * Registers (in the terms of `Plugin`):
  *
@@ -26,8 +26,8 @@
  * Not registered by default. Users opt in:
  *
  *   ```ts
- *   import { defineConfig } from "@cad0p/pi-steering-hooks";
- *   import gitPlugin from "@cad0p/pi-steering-hooks/plugins/git";
+ *   import { defineConfig } from "pi-steering";
+ *   import gitPlugin from "pi-steering/plugins/git";
  *
  *   export default defineConfig({
  *     plugins: [gitPlugin],
@@ -55,7 +55,7 @@ import { rules } from "./rules.ts";
 
 /**
  * The git plugin. Default export so `import gitPlugin from
- * "@cad0p/pi-steering-hooks/plugins/git"` gives you the whole thing.
+ * "pi-steering/plugins/git"` gives you the whole thing.
  *
  * `as const satisfies Plugin` (rather than `: Plugin`) preserves the
  * literal `name: "git"` in the inferred type. That literal is the

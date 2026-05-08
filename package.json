@@ -2,7 +2,7 @@
   "name": "pi-steering-hooks-monorepo",
   "version": "0.0.0-poc.0",
   "private": true,
-  "description": "PoC monorepo for @cad0p/pi-steering-hooks (steering engine) and unbash-walker (AST utility).",
+  "description": "PoC monorepo for pi-steering (steering engine) and unbash-walker (AST utility).",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {

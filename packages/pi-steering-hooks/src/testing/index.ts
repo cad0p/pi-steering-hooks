@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Testing primitives for rule and plugin authors.
  *
- * Subpath export: `@cad0p/pi-steering-hooks/testing`. Also re-exported
+ * Subpath export: `pi-steering/testing`. Also re-exported
  * at the package root for discoverability.
  *
  * Phase 5a ships four low-level primitives that wrap the engine's

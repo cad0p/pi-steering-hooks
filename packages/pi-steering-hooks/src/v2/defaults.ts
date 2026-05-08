@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Part of @cad0p/pi-steering-hooks.
+// Part of pi-steering.
 
 /**
  * Built-in default rules + default plugins for the v2 engine.
@@ -108,7 +108,7 @@ export const DEFAULT_RULES: Rule[] = [
 
 /**
  * Default plugins shipped by the package. Currently empty — Phase 4
- * adds `@cad0p/pi-steering-hooks/plugins/git` which contributes
+ * adds `pi-steering/plugins/git` which contributes
  * predicates (branch, upstream, commitsAhead), trackers (branch), and
  * tracker extensions (cwd with --git-dir / --work-tree). For Phase 3
  * the default set stays minimal to keep the engine domain-agnostic.
