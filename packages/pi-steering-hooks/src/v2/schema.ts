@@ -284,16 +284,26 @@ export interface Rule<
 	/**
 	 * Session-entry custom types this rule's {@link onFire} may write.
 	 *
-	 * Declarative-only in v0.1.0 — documents which custom types this
-	 * rule may write via `onFire`. The engine does NOT verify writes
-	 * match, and TypeScript does NOT constrain `when.happened.type`
-	 * based on this field in this release.
+	 * **Compile-time effect (via {@link defineConfig}):** the union of
+	 * all `writes` literals declared across plugin rules, plugin
+	 * observers, user rules, and user observers (from
+	 * `const satisfies` or `as const satisfies`-annotated literals —
+	 * bare `: Plugin` annotations widen away the inference) constrains
+	 * the `type` field of every {@link WhenClause.happened} inside the
+	 * same config. Declaring a write here makes it referenceable from
+	 * `when.happened.type` anywhere in that config; omitting it leaves
+	 * the string out of the union and downstream references to it are
+	 * rejected as typos.
 	 *
-	 * Reserved for future `defineConfig` type inference: the union of
-	 * all `writes` across loaded plugins + user rules + observers will
-	 * eventually constrain `when.happened.type` so typos become compile
-	 * errors. Author against this field today and the compile-time
-	 * check lights up automatically when that generic lands.
+	 * **Runtime effect:** none. `writes` is purely documentation +
+	 * type-level plumbing — the engine does NOT verify that `onFire`
+	 * only calls `ctx.appendEntry` with declared types.
+	 *
+	 * **Opt-out:** authors who build their config via
+	 * `satisfies SteeringConfig` instead of `defineConfig` lose the
+	 * compile-time check — the `SteeringConfig` shape defaults the
+	 * {@link Rule} generics to `string`, so `when.happened.type` is
+	 * unconstrained. `defineConfig` is the entry point that enforces.
 	 */
 	writes?: readonly string[];
 
@@ -424,15 +434,25 @@ export interface Observer {
 	 * Session-entry custom types this observer's {@link onResult} may
 	 * write.
 	 *
-	 * Declarative-only in v0.1.0 — documents which custom types this
-	 * observer may write via `onResult`. The engine does NOT verify
-	 * writes match, and TypeScript does NOT constrain
-	 * `when.happened.type` based on this field in this release.
+	 * **Compile-time effect (via {@link defineConfig}):** the union of
+	 * all `writes` literals declared across plugin rules, plugin
+	 * observers, user rules, and user observers (from
+	 * `const satisfies` or `as const satisfies`-annotated literals —
+	 * bare `: Observer` annotations widen away the inference)
+	 * constrains the `type` field of every {@link WhenClause.happened}
+	 * inside the same config. Declaring a write here makes it
+	 * referenceable from `when.happened.type` anywhere in that config;
+	 * omitting it leaves the string out of the union and downstream
+	 * references to it are rejected as typos.
 	 *
-	 * Reserved for future `defineConfig` type inference, symmetric
-	 * with {@link Rule.writes}: the union of all `writes` across
-	 * loaded plugins + user rules + observers will eventually
-	 * constrain `when.happened.type` so typos become compile errors.
+	 * **Runtime effect:** none. `writes` is purely documentation +
+	 * type-level plumbing — the engine does NOT verify that `onResult`
+	 * only calls `ctx.appendEntry` with declared types.
+	 *
+	 * **Opt-out:** authors who build their config via
+	 * `satisfies SteeringConfig` instead of `defineConfig` lose the
+	 * compile-time check. `defineConfig` is the entry point that
+	 * enforces.
 	 */
 	writes?: readonly string[];
 
