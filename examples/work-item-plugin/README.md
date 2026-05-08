@@ -59,6 +59,11 @@ pnpm install
 pnpm --filter @examples/work-item-plugin test
 ```
 
+The `pretest` script builds `pi-steering` first, so the example resolves
+the package through its emitted `dist/` exports. On a fresh clone this
+adds a few seconds on the first run; subsequent runs skip the rebuild if
+nothing changed.
+
 Or `pnpm -r test` runs all packages' suites including this one.
 
 ## Consuming this plugin from your own config

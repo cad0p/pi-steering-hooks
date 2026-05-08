@@ -53,6 +53,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "clean": "rm -rf dist tsconfig.build.tsbuildinfo",
     "build": "tsc -p tsconfig.build.json",
     "test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
     "typecheck": "tsc --noEmit"

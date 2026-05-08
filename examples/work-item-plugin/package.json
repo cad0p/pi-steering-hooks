@@ -12,6 +12,7 @@
 		"unbash-walker": "workspace:*"
 	},
 	"scripts": {
+		"pretest": "pnpm --filter pi-steering run clean && pnpm --filter pi-steering run build",
 		"test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
 		"typecheck": "tsc --noEmit"
 	}
