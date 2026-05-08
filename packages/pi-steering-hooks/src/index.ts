@@ -182,6 +182,7 @@ export { DEFAULT_PLUGINS, DEFAULT_RULES } from "./v2/defaults.ts";
 export {
 	buildConfig,
 	defineConfig,
+	definePredicate,
 	fromJSON,
 	FromJSONError,
 	loadConfigs,

@@ -36,6 +36,9 @@ export type {
 export type { AllObserverNames, DefineConfigInput } from "./define-config.ts";
 export { defineConfig } from "./define-config.ts";
 
+// Predicate helper
+export { definePredicate } from "./define-predicate.ts";
+
 // Loader
 export {
 	ancestorChain,
