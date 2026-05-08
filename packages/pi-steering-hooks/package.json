@@ -50,7 +50,7 @@
     ]
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "clean": "rm -rf dist tsconfig.build.tsbuildinfo",
