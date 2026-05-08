@@ -153,6 +153,7 @@ function evaluateCwd(
 function evaluateHappened(
 	value: unknown,
 	ctx: PredicateContext,
+	ruleName: string,
 ): boolean {
 	if (
 		value === null ||
@@ -161,14 +162,37 @@ function evaluateHappened(
 		!("in" in value)
 	) {
 		throw new Error(
-			`[pi-steering-hooks] when.happened expects ` +
-				`{ type: string; in: "agent_loop" | "session" }; got ${JSON.stringify(value)}`,
+			`[pi-steering-hooks] Rule "${ruleName}": when.happened ` +
+				`expected { type: string; in: "agent_loop" | "session" }; ` +
+				`got ${JSON.stringify(value)}`,
 		);
 	}
 	const { type, in: scope } = value as {
 		type: string;
-		in: "agent_loop" | "session";
+		in: unknown;
 	};
+	// Validate the scope string. The type system says
+	// `"agent_loop" | "session"`, but a user migrating from v0.0.0-poc
+	// configs where the scope was called `"turn"` — or anyone with a
+	// typo like `"agentLoop"` — slips through TypeScript when the value
+	// arrives from a JSON source (import-json CLI, hand-written config,
+	// etc.). Surface those as loud runtime errors rather than silent
+	// fallthrough to the else-branch (the agent_loop filter path).
+	if (scope === "turn") {
+		throw new Error(
+			`[pi-steering-hooks] Rule "${ruleName}": ` +
+				`when.happened.in: "turn" is no longer supported in ` +
+				`pi-steering v0.1.0. Use "agent_loop" instead ` +
+				`(see the v0.1.0 migration notes).`,
+		);
+	}
+	if (scope !== "agent_loop" && scope !== "session") {
+		throw new Error(
+			`[pi-steering-hooks] Rule "${ruleName}": ` +
+				`when.happened.in must be "agent_loop" or "session"; ` +
+				`got ${JSON.stringify(scope)}`,
+		);
+	}
 	const entries = ctx.findEntries<Record<string, unknown>>(type);
 	if (scope === "session") {
 		return entries.length === 0;
@@ -235,6 +259,7 @@ export async function evaluateWhen(
 	state: WhenWalkerState,
 	ctx: PredicateContext,
 	predicates: Record<string, PredicateHandler>,
+	ruleName: string,
 ): Promise<boolean> {
 	if (!when) return true;
 
@@ -249,7 +274,7 @@ export async function evaluateWhen(
 
 		// Built-in: happened (session-entry presence check)
 		if (key === "happened") {
-			if (!evaluateHappened(value, ctx)) return false;
+			if (!evaluateHappened(value, ctx, ruleName)) return false;
 			continue;
 		}
 
@@ -261,6 +286,7 @@ export async function evaluateWhen(
 				state,
 				ctx,
 				predicates,
+				ruleName,
 			);
 			if (nestedMatches) return false;
 			continue;

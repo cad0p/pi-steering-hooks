@@ -462,6 +462,7 @@ async function evaluateCandidate(
 		{ cwd: cand.cwd },
 		ctx,
 		shared.predicates,
+		rule.name,
 	);
 	if (!whenOk) return "no-fire";
 

@@ -600,7 +600,48 @@ describe("buildEvaluator: when.happened", () => {
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
 		await assert.rejects(
 			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
-			/when\.happened expects/,
+			(err: Error) =>
+				/Rule "bad".*when\.happened expected/.test(err.message),
+		);
+	});
+
+	it('throws migration hint when in: "turn" (v0.0.0-poc name)', async () => {
+		const rule: Rule = {
+			name: "legacy-turn",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "legacy",
+			// @ts-expect-error — "turn" is the removed v0.0.0-poc scope name
+			when: { happened: { type: "ws-sync-done", in: "turn" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await assert.rejects(
+			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
+			(err: Error) =>
+				/Rule "legacy-turn".*"turn" is no longer supported/.test(
+					err.message,
+				),
+		);
+	});
+
+	it('throws on typo scope like "agentLoop" (camelCase)', async () => {
+		const rule: Rule = {
+			name: "typo",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "typo",
+			// @ts-expect-error — camelCase is not a valid scope
+			when: { happened: { type: "ws-sync-done", in: "agentLoop" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await assert.rejects(
+			evaluator.evaluate(bashEvent("cr"), makeCtx("/r"), 0),
+			(err: Error) =>
+				/Rule "typo".*when\.happened\.in must be.*"agent_loop" or "session"/.test(
+					err.message,
+				),
 		);
 	});
 });
