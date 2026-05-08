@@ -302,18 +302,21 @@ const KNOWN_PLUGIN_SOURCES: Record<string, string> = {
  *   }
  */
 function renderListJSON(config: SteeringConfig): unknown {
+	const disabledSet = new Set(config.disable ?? []);
+	const disabledPluginsSet = new Set(config.disablePlugins ?? []);
 	const plugins = (config.plugins ?? []).map((p) => ({
 		name: p.name,
 		...(KNOWN_PLUGIN_SOURCES[p.name] !== undefined
 			? { source: KNOWN_PLUGIN_SOURCES[p.name] }
 			: {}),
-		rules: (p.rules ?? []).map((r) => ruleJSON(r)),
+		...(disabledPluginsSet.has(p.name) ? { disabled: true } : {}),
+		rules: (p.rules ?? []).map((r) => ruleJSON(r, disabledSet)),
 		observers: (p.observers ?? []).map((o) => observerJSON(o)),
 	}));
 
 	return {
 		plugins,
-		userRules: (config.rules ?? []).map((r) => ruleJSON(r)),
+		userRules: (config.rules ?? []).map((r) => ruleJSON(r, disabledSet)),
 		userObservers: (config.observers ?? []).map((o) => observerJSON(o)),
 		disabled: {
 			rules: config.disable ?? [],
@@ -335,11 +338,12 @@ function emptyListJSON(): unknown {
 	};
 }
 
-function ruleJSON(r: Rule): unknown {
+function ruleJSON(r: Rule, disabledSet?: ReadonlySet<string>): unknown {
 	return {
 		name: r.name,
 		tool: r.tool,
 		...(r.when !== undefined ? { when: whenSummaryKeys(r.when) } : {}),
+		...(disabledSet?.has(r.name) ? { disabled: true } : {}),
 	};
 }
 
@@ -372,6 +376,8 @@ function renderListText(config: SteeringConfig): string {
 	const userObservers = config.observers ?? [];
 	const disabled = config.disable ?? [];
 	const disabledPlugins = config.disablePlugins ?? [];
+	const disabledSet = new Set(disabled);
+	const disabledPluginsSet = new Set(disabledPlugins);
 
 	const totalRules =
 		plugins.reduce((n, p) => n + (p.rules?.length ?? 0), 0) +
@@ -389,9 +395,13 @@ function renderListText(config: SteeringConfig): string {
 	// Per-plugin block.
 	for (const plugin of plugins) {
 		const source = KNOWN_PLUGIN_SOURCES[plugin.name];
-		const header = source ? `${plugin.name}  [${source}]` : plugin.name;
+		const pluginDisabled = disabledPluginsSet.has(plugin.name);
+		const suffix = pluginDisabled ? "  (disabled)" : "";
+		const header = source
+			? `${plugin.name}  [${source}]${suffix}`
+			: `${plugin.name}${suffix}`;
 		lines.push(header);
-		renderRuleLines(plugin.rules ?? [], lines);
+		renderRuleLines(plugin.rules ?? [], lines, disabledSet);
 		renderObserverLines(plugin.observers ?? [], lines);
 		lines.push("");
 	}
@@ -401,7 +411,7 @@ function renderListText(config: SteeringConfig): string {
 	if (userRules.length === 0 && userObservers.length === 0) {
 		lines.push("  (none)");
 	} else {
-		renderRuleLines(userRules, lines);
+		renderRuleLines(userRules, lines, disabledSet);
 		renderObserverLines(userObservers, lines);
 	}
 	lines.push("");
@@ -422,7 +432,11 @@ function renderListText(config: SteeringConfig): string {
 	return lines.join("\n");
 }
 
-function renderRuleLines(rules: readonly Rule[], lines: string[]): void {
+function renderRuleLines(
+	rules: readonly Rule[],
+	lines: string[],
+	disabledSet?: ReadonlySet<string>,
+): void {
 	if (rules.length === 0) return;
 	const nameWidth = Math.max(...rules.map((r) => r.name.length), 20);
 	for (const r of rules) {
@@ -430,7 +444,10 @@ function renderRuleLines(rules: readonly Rule[], lines: string[]): void {
 		const whenSummary = r.when
 			? `  when: ${whenSummaryKeys(r.when)}`
 			: "";
-		lines.push(`  ${r.name.padEnd(nameWidth)} ${tools}${whenSummary}`);
+		const disabledSuffix = disabledSet?.has(r.name) ? "  (disabled)" : "";
+		lines.push(
+			`  ${r.name.padEnd(nameWidth)} ${tools}${whenSummary}${disabledSuffix}`,
+		);
 	}
 }
 

@@ -440,4 +440,93 @@ describe("pi-steering list", () => {
 		assert.equal(r.code, 0);
 		assert.match(r.stdout, /when: happened:tests-passed/);
 	});
+
+	it("marks disabled rules with '(disabled)' suffix in text output (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "active-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+							{ name: "disabled-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+				],
+				disable: ["disabled-rule"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		// Active rule: no suffix.
+		assert.match(r.stdout, /active-rule\s+bash\s*$/m);
+		// Disabled rule: (disabled) suffix.
+		assert.match(r.stdout, /disabled-rule\s+bash\s+\(disabled\)/);
+		// Footer unchanged.
+		assert.match(r.stdout, /Disabled rules: disabled-rule/);
+	});
+
+	it("marks disabled plugins with '(disabled)' suffix on the header (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "some-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+				],
+				disablePlugins: ["git"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list");
+		assert.equal(r.code, 0);
+		// Plugin header carries the (disabled) suffix.
+		assert.match(r.stdout, /git\s+\[pi-steering\/plugins\/git\]\s+\(disabled\)/);
+		assert.match(r.stdout, /Disabled plugins: git/);
+	});
+
+	it("JSON output tags disabled rules and plugins with 'disabled: true' (F4)", async () => {
+		writeScratchConfig(
+			scratch,
+			`export default {
+				plugins: [
+					{
+						name: "git",
+						rules: [
+							{ name: "active-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+							{ name: "disabled-rule", tool: "bash", field: "command", pattern: /./, reason: "r" },
+						],
+					},
+					{ name: "also-disabled" },
+				],
+				disable: ["disabled-rule"],
+				disablePlugins: ["also-disabled"],
+			};`,
+		);
+		const r = await runCli({ cwd: scratch }, "list", "--format=json");
+		assert.equal(r.code, 0);
+		const parsed = JSON.parse(r.stdout) as {
+			plugins: Array<{
+				name: string;
+				disabled?: boolean;
+				rules: Array<{ name: string; disabled?: boolean }>;
+			}>;
+		};
+		const git = parsed.plugins.find((p) => p.name === "git");
+		const also = parsed.plugins.find((p) => p.name === "also-disabled");
+		assert.ok(git);
+		assert.ok(also);
+		assert.equal(git.disabled, undefined, "git plugin is active; no disabled flag");
+		assert.equal(also.disabled, true, "also-disabled plugin carries disabled: true");
+		const active = git.rules.find((r) => r.name === "active-rule");
+		const disabled = git.rules.find((r) => r.name === "disabled-rule");
+		assert.ok(active);
+		assert.ok(disabled);
+		assert.equal(active.disabled, undefined);
+		assert.equal(disabled.disabled, true);
+	});
 });
