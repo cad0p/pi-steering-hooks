@@ -499,8 +499,8 @@ describe("register(): user-defined rules via .pi/steering.ts", () => {
 		assert.match(blocked?.reason ?? "", /no-echo-in-special/);
 	});
 
-	it("disable list removes a default rule", async () => {
-		writeSteeringConfig(tmpHome, '{ disable: ["no-force-push"] }');
+	it("disabledRules list removes a default rule", async () => {
+		writeSteeringConfig(tmpHome, '{ disabledRules: ["no-force-push"] }');
 
 		const mock = makeMockPi();
 		register(mock.api as never);
@@ -902,8 +902,8 @@ describe("buildSessionRuntime: two-pass disableDefaults merge", () => {
 		assert.ok(names.includes("no-rm-rf-slash"));
 	});
 
-	it("`disable` filters default rules out of the merged config", async () => {
-		writeSteeringConfig(tmpHome, '{ disable: ["no-force-push"] }');
+	it("`disabledRules` filters default rules out of the merged config", async () => {
+		writeSteeringConfig(tmpHome, '{ disabledRules: ["no-force-push"] }');
 		const host = {
 			exec: async () => ({
 				stdout: "",

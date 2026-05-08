@@ -79,6 +79,8 @@ export function fromJSON(json: unknown): SteeringConfig {
 		"plugins",
 		"observers",
 		"disablePlugins",
+		"disabledPlugins",
+		"disabledRules",
 		"disableDefaults",
 	] as const) {
 		if (forbidden in json) {
@@ -100,7 +102,10 @@ export function fromJSON(json: unknown): SteeringConfig {
 				"<root>.disable",
 			);
 		}
-		out.disable = [...disable];
+		// v1 JSON's `disable` → v2 TS `disabledRules`. The JSON key is
+		// preserved for legacy on-disk configs; the TS shape uses the
+		// past-participle form.
+		out.disabledRules = [...disable];
 	}
 
 	if ("defaultNoOverride" in json) {

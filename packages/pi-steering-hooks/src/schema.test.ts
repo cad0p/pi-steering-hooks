@@ -212,8 +212,8 @@ describe("schema: shape smoke tests", () => {
 	it("SteeringConfig accepts every top-level field", () => {
 		const cfg: SteeringConfig = {
 			defaultNoOverride: true,
-			disable: ["no-force-push"],
-			disablePlugins: ["git"],
+			disabledRules: ["no-force-push"],
+			disabledPlugins: ["git"],
 			disableDefaults: false,
 			plugins: [],
 			rules: [],

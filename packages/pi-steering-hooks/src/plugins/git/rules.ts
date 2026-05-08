@@ -15,7 +15,7 @@
  *   ```ts
  *   defineConfig({
  *     plugins: [gitPlugin],
- *     disable: ["no-main-commit"],
+ *     disabledRules: ["no-main-commit"],
  *   });
  *   ```
  *

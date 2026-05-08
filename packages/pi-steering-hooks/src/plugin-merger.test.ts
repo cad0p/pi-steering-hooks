@@ -7,7 +7,7 @@
  * Covers the collision semantics the ADR pins down: first-wins on soft
  * collisions (predicate / observer / rule), hard error on tracker name
  * collision, proper layering of trackerExtensions on top of registered
- * trackers, and the config-level `disable` / `disablePlugins` filters.
+ * trackers, and the config-level `disabledRules` / `disabledPlugins` filters.
  */
 
 import assert from "node:assert/strict";
@@ -316,21 +316,21 @@ describe("resolvePlugins: tracker extensions", () => {
 });
 
 describe("resolvePlugins: config filters", () => {
-	it("applies config.disable to plugin-shipped rules", () => {
+	it("applies config.disabledRules to plugin-shipped rules", () => {
 		const kept = mkRule("keep-me");
 		const dropped = mkRule("drop-me");
 		const plugin: Plugin = {
 			name: "p",
 			rules: [kept, dropped],
 		};
-		const state = resolvePlugins([plugin], { disable: ["drop-me"] });
+		const state = resolvePlugins([plugin], { disabledRules: ["drop-me"] });
 		assert.equal(state.rules.length, 1);
 		assert.equal(state.rules[0]?.name, "keep-me");
 		const warn = state.warnings.find((w) => w.kind === "rule-disabled");
 		assert.ok(warn, "expected rule-disabled warning");
 	});
 
-	it("applies config.disablePlugins to skip an entire plugin", () => {
+	it("applies config.disabledPlugins to skip an entire plugin", () => {
 		const p1: Plugin = {
 			name: "git",
 			predicates: { branch: () => true },
@@ -341,7 +341,7 @@ describe("resolvePlugins: config filters", () => {
 			name: "kept",
 			predicates: { other: () => true },
 		};
-		const state = resolvePlugins([p1, p2], { disablePlugins: ["git"] });
+		const state = resolvePlugins([p1, p2], { disabledPlugins: ["git"] });
 
 		assert.deepEqual(state.observers, []);
 		assert.deepEqual(state.rules, []);

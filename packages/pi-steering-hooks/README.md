@@ -72,7 +72,7 @@ export default defineConfig({
   ],
   // Compile-time safety: typo in a rule name below is a TS error.
   // Try changing "no-main-commit" to "no-main-commito" — tsc will reject it.
-  disable: ["no-main-commit"],
+  disabledRules: ["no-main-commit"],
 });
 ```
 
@@ -87,7 +87,7 @@ With this config:
 
 ```ts
 // @ts-expect-error — "wrong-name" is not a registered rule
-disable: ["wrong-name"],
+disabledRules: ["wrong-name"],
 ```
 
 This fails at `tsc --noEmit` time — rule / plugin / observer names are threaded through `defineConfig`'s generics and cross-validated.
@@ -279,8 +279,8 @@ export default defineConfig({
       reason: "Read the release notes before publishing.",
     },
   ],
-  disable: ["no-main-commit"],                    // ← typo-checked against rule names
-  disablePlugins: ["git"],                        // ← typo-checked against plugin names
+  disabledRules: ["no-main-commit"],                // ← typo-checked against rule names
+  disabledPlugins: ["git"],                         // ← typo-checked against plugin names
 });
 ```
 
@@ -570,7 +570,28 @@ The auto-tag wrapper merges into plain objects, but **wraps non-plain-object pay
 
 Migration tip: if you care about backwards-compat, switch to writing a plain object: `ctx.appendEntry("my-list", { items: [1, 2, 3] })` — that merges cleanly.
 
-### 8. Nothing-new-to-do (additive)
+### 8. `disable` / `disablePlugins` renamed
+
+The two selective opt-out lists on `SteeringConfig` were renamed to
+past-participle form for shape-at-a-glance readability — lists read
+as "these things are disabled" (predicates on state), while the
+boolean `disableDefaults` flag keeps its imperative action form:
+
+```diff
+  defineConfig({
+-   disable: ["no-main-commit"],
++   disabledRules: ["no-main-commit"],
+-   disablePlugins: ["git"],
++   disabledPlugins: ["git"],
+    disableDefaults: true,   // unchanged — imperative flag stays imperative
+  });
+```
+
+The TypeScript compiler will point you at every site that needs
+updating. `.pi/steering.json` (v1 JSON) continues to use the old
+`disable` key; only the TypeScript surface changed.
+
+### 9. Nothing-new-to-do (additive)
 
 These are new in v0.1.0 but don't require migration:
 

@@ -45,7 +45,7 @@ import type { SteeringConfig } from "../schema.ts";
  *   3. Re-run `buildConfig(layers, defaults?)` with defaults
  *      conditional on `disableDefaults`, producing the effective
  *      config.
- *   4. Apply `config.disable` to the merged `rules` \u2014 the plugin
+ *   4. Apply `config.disabledRules` to the merged `rules` \u2014 the plugin
  *      merger handles this for plugin-shipped rules, but
  *      `buildConfig` leaves user/default rules in `config.rules`
  *      untouched on the assumption that the caller (this function)
@@ -73,11 +73,11 @@ export async function buildSessionRuntime(
 		: { rules: DEFAULT_RULES, plugins: DEFAULT_PLUGINS };
 	const merged = buildConfig(rawLayers, defaults);
 
-	// Apply `disable` to the merged rule set. Plugin-shipped rules are
-	// filtered inside `resolvePlugins`; user / default rules go through
-	// `config.rules` on the evaluator side, so we filter them here to
-	// keep the semantic consistent across both sources.
-	const disabled = new Set(merged.disable ?? []);
+	// Apply `disabledRules` to the merged rule set. Plugin-shipped rules
+	// are filtered inside `resolvePlugins`; user / default rules go
+	// through `config.rules` on the evaluator side, so we filter them
+	// here to keep the semantic consistent across both sources.
+	const disabled = new Set(merged.disabledRules ?? []);
 	const filteredConfig: SteeringConfig = { ...merged };
 	if (merged.rules !== undefined) {
 		const kept = merged.rules.filter((r) => !disabled.has(r.name));

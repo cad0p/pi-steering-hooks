@@ -23,9 +23,9 @@ describe("compat: fromJSON happy paths", () => {
 		assert.deepEqual(fromJSON({}), {});
 	});
 
-	it("preserves `disable`", () => {
+	it("preserves `disable` list (renames to `disabledRules` in v2)", () => {
 		const out = fromJSON({ disable: ["rule-a", "rule-b"] });
-		assert.deepEqual(out.disable, ["rule-a", "rule-b"]);
+		assert.deepEqual(out.disabledRules, ["rule-a", "rule-b"]);
 	});
 
 	it("preserves `defaultNoOverride`", () => {
@@ -108,7 +108,7 @@ describe("compat: fromJSON happy paths", () => {
 			],
 		};
 		const out = fromJSON(fixture);
-		assert.deepEqual(out.disable, ["noisy-rule"]);
+		assert.deepEqual(out.disabledRules, ["noisy-rule"]);
 		assert.equal(out.defaultNoOverride, true);
 		assert.equal(out.rules?.length, 2);
 		assert.equal(out.rules?.[0]?.noOverride, true);
@@ -125,7 +125,14 @@ describe("compat: fromJSON rejections", () => {
 	});
 
 	it("rejects v2-only top-level keys with a clear error", () => {
-		for (const key of ["plugins", "observers", "disablePlugins", "disableDefaults"]) {
+		for (const key of [
+			"plugins",
+			"observers",
+			"disablePlugins",
+			"disabledPlugins",
+			"disabledRules",
+			"disableDefaults",
+		]) {
 			let caught: unknown;
 			try {
 				fromJSON({ [key]: [] });

@@ -46,7 +46,7 @@ export default defineConfig({
 });
 ```
 
-`DEFAULT_PLUGINS` and `DEFAULT_RULES` (e.g. `no-force-push`, `no-rm-rf-slash`) are included automatically. Disable specific defaults via `disable: ["name"]` or opt out entirely with `disableDefaults: true`.
+`DEFAULT_PLUGINS` and `DEFAULT_RULES` (e.g. `no-force-push`, `no-rm-rf-slash`) are included automatically. Disable specific defaults via `disabledRules: ["name"]` or opt out entirely with `disableDefaults: true`.
 
 ## Git plugin (branch / upstream / commits-ahead predicates)
 

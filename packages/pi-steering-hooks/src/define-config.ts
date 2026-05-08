@@ -24,8 +24,8 @@
  * Generics threaded through (ADR §8):
  *   - `AllObserverNames<P, Inline>` — for `Rule.observer` string refs.
  *   - `AllWrites<P, R, Inline>`     — for `Rule.when.happened.type`.
- *   - `AllRuleNames<P, R>`          — for `config.disable`.
- *   - `AllPluginNames<P>`           — for `config.disablePlugins`.
+ *   - `AllRuleNames<P, R>`          — for `config.disabledRules`.
+ *   - `AllPluginNames<P>`           — for `config.disabledPlugins`.
  *
  * All four helpers are exported from this module but NOT re-exported
  * from the package root; they're internal plumbing, not user-facing
@@ -94,11 +94,11 @@ type ObserversFromInline<O extends readonly Observer[]> =
 /**
  * Extract the union of plugin names registered in the `plugins` tuple.
  *
- * Used to constrain {@link SteeringConfig.disablePlugins} so typos
+ * Used to constrain {@link SteeringConfig.disabledPlugins} so typos
  * surface as compile errors.
  *
  * Falls back to `never` when no plugins are registered — typing
- * `disablePlugins` against an empty registry rejects every string (a
+ * `disabledPlugins` against an empty registry rejects every string (a
  * deliberate fail-closed choice: the only valid value is the empty
  * tuple, matching the user's stated intent).
  */
@@ -120,7 +120,7 @@ export type AllPluginNames<P extends readonly Plugin[]> =
  *   - every plugin's `rules: Rule[]` array, AND
  *   - the top-level inline `rules: Rule[]` array.
  *
- * Used to constrain {@link SteeringConfig.disable} so typos surface as
+ * Used to constrain {@link SteeringConfig.disabledRules} so typos surface as
  * compile errors. Falls back to `never` when no rules are registered.
  */
 export type AllRuleNames<
@@ -243,7 +243,7 @@ type WritesFromPluginObservers<P extends readonly Plugin[]> =
  * through the call and drive name inference.
  *
  * Generic constraints:
- *   - `disable` / `disablePlugins` typed against the rule / plugin
+ *   - `disabledRules` / `disabledPlugins` typed against the rule / plugin
  *     name unions — typos rejected at compile time.
  *   - `rules[].when.happened.type` typed against `AllWrites` — typos
  *     rejected at compile time.
@@ -257,8 +257,8 @@ export interface DefineConfigInput<
 	>[],
 > {
 	defaultNoOverride?: boolean;
-	disable?: readonly AllRuleNames<P, R>[];
-	disablePlugins?: readonly AllPluginNames<P>[];
+	disabledRules?: readonly AllRuleNames<P, R>[];
+	disabledPlugins?: readonly AllPluginNames<P>[];
 	disableDefaults?: boolean;
 	plugins?: P;
 	rules?: R;
@@ -272,7 +272,7 @@ export interface DefineConfigInput<
  * union of observer names gathered from `plugins[*].observers` AND the
  * top-level `observers` array — a typo produces a compile error.
  *
- * The `disable` / `disablePlugins` arrays are typed against the unions
+ * The `disabledRules` / `disabledPlugins` arrays are typed against the unions
  * of registered rule / plugin names — typos rejected.
  *
  * `rules[].when.happened.type` is typed against the union of all
@@ -341,9 +341,11 @@ export function defineConfig<
 	if (config.defaultNoOverride !== undefined) {
 		out.defaultNoOverride = config.defaultNoOverride;
 	}
-	if (config.disable !== undefined) out.disable = [...config.disable];
-	if (config.disablePlugins !== undefined) {
-		out.disablePlugins = [...config.disablePlugins];
+	if (config.disabledRules !== undefined) {
+		out.disabledRules = [...config.disabledRules];
+	}
+	if (config.disabledPlugins !== undefined) {
+		out.disabledPlugins = [...config.disabledPlugins];
 	}
 	if (config.disableDefaults !== undefined) {
 		out.disableDefaults = config.disableDefaults;

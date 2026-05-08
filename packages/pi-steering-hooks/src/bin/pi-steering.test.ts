@@ -232,8 +232,9 @@ describe("pi-steering import-json: conversion", () => {
 		assert.match(r.stdout, /export default defineConfig\(/);
 		assert.match(r.stdout, /"no-amend"/);
 		assert.match(r.stdout, /"Don't rewrite history\."/);
-		// Preserve the `disable` field verbatim.
-		assert.match(r.stdout, /"disable":\s*\[\s*"no-force-push"\s*\]/);
+		// Preserve the disabled-rules list. Note the rename: v1 JSON's
+		// `disable` key becomes v2 TS `disabledRules` on output.
+		assert.match(r.stdout, /"disabledRules":\s*\[\s*"no-force-push"\s*\]/);
 	});
 
 	it("-o mode: writes file + reports path, exits 0", async () => {
@@ -347,7 +348,7 @@ describe("pi-steering list", () => {
 						reason: "no",
 					},
 				],
-				disable: ["some-disabled-rule"],
+				disabledRules: ["some-disabled-rule"],
 			};`,
 		);
 		const r = await runCli({ cwd: scratch }, "list");
@@ -454,7 +455,7 @@ describe("pi-steering list", () => {
 						],
 					},
 				],
-				disable: ["disabled-rule"],
+				disabledRules: ["disabled-rule"],
 			};`,
 		);
 		const r = await runCli({ cwd: scratch }, "list");
@@ -479,7 +480,7 @@ describe("pi-steering list", () => {
 						],
 					},
 				],
-				disablePlugins: ["git"],
+				disabledPlugins: ["git"],
 			};`,
 		);
 		const r = await runCli({ cwd: scratch }, "list");
@@ -503,8 +504,8 @@ describe("pi-steering list", () => {
 					},
 					{ name: "also-disabled" },
 				],
-				disable: ["disabled-rule"],
-				disablePlugins: ["also-disabled"],
+				disabledRules: ["disabled-rule"],
+				disabledPlugins: ["also-disabled"],
 			};`,
 		);
 		const r = await runCli({ cwd: scratch }, "list", "--format=json");

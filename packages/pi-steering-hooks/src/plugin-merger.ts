@@ -18,8 +18,9 @@
  *     entries under the same slot are preserved in registration order.
  *     Extensions targeting an unregistered tracker are warned about and
  *     ignored.
- *   - config.disable / config.disablePlugins — filter rules and whole
- *     plugins by name. `config.disableDefaults` is the caller's problem:
+ *   - config.disabledRules / config.disabledPlugins — filter rules and
+ *     whole plugins by name. `config.disableDefaults` is the caller's
+ *     problem:
  *     the caller chooses whether to include DEFAULT_PLUGINS in the input
  *     list (handled upstream by the extension runtime).
  *
@@ -48,10 +49,10 @@ export interface PluginResolveWarning {
 	 *   - `"predicate-collision"`  — two plugins register `when.<same-key>`.
 	 *   - `"observer-collision"`   — two observers share the same name.
 	 *   - `"rule-collision"`       — two plugin-shipped rules share a name.
-	 *   - `"plugin-disabled"`      — a plugin was skipped via `disablePlugins`.
+	 *   - `"plugin-disabled"`      — a plugin was skipped via `disabledPlugins`.
 	 *   - `"extension-orphan"`     — trackerExtension targets a tracker no
 	 *                                plugin registers.
-	 *   - `"rule-disabled"`        — a rule was removed via `config.disable`.
+	 *   - `"rule-disabled"`        — a rule was removed via `config.disabledRules`.
 	 */
 	kind:
 		| "predicate-collision"
@@ -170,8 +171,8 @@ function composeTracker(
 }
 
 /**
- * Merge a list of plugins together, applying the config's `disable` /
- * `disablePlugins` filters along the way.
+ * Merge a list of plugins together, applying the config's `disabledRules` /
+ * `disabledPlugins` filters along the way.
  *
  * The caller is responsible for composing the plugin list — including
  * whether to prepend DEFAULT_PLUGINS. This function does not consult
@@ -199,10 +200,10 @@ export function resolvePlugins(
 	knownBuiltinTrackers: readonly string[] = [],
 ): ResolvedPluginState {
 	const warnings: PluginResolveWarning[] = [];
-	const disabledPlugins = new Set(config.disablePlugins ?? []);
-	const disabledRules = new Set(config.disable ?? []);
+	const disabledPlugins = new Set(config.disabledPlugins ?? []);
+	const disabledRules = new Set(config.disabledRules ?? []);
 
-	// Filter plugins honoring `disablePlugins`. Record disabled ones so
+	// Filter plugins honoring `disabledPlugins`. Record disabled ones so
 	// callers see them in the warning log (handy for debugging a rule
 	// that inexplicably stopped firing).
 	const activePlugins: Plugin[] = [];
@@ -210,7 +211,7 @@ export function resolvePlugins(
 		if (disabledPlugins.has(plugin.name)) {
 			warnings.push({
 				kind: "plugin-disabled",
-				message: `plugin "${plugin.name}" disabled via config.disablePlugins`,
+				message: `plugin "${plugin.name}" disabled via config.disabledPlugins`,
 			});
 			continue;
 		}
@@ -329,7 +330,7 @@ export function resolvePlugins(
 
 	// --- rules -------------------------------------------------------------
 	// Plugin-shipped rules; config.rules stay in their own slot on the
-	// caller side. `config.disable` filters BOTH plugin rules and config
+	// caller side. `config.disabledRules` filters BOTH plugin rules and config
 	// rules, so we apply it here for plugin rules and the runtime applies
 	// it again on the config side.
 	const rules: Rule[] = [];
@@ -340,7 +341,7 @@ export function resolvePlugins(
 			if (disabledRules.has(rule.name)) {
 				warnings.push({
 					kind: "rule-disabled",
-					message: `rule "${rule.name}" (from plugin "${plugin.name}") disabled via config.disable`,
+					message: `rule "${rule.name}" (from plugin "${plugin.name}") disabled via config.disabledRules`,
 				});
 				continue;
 			}

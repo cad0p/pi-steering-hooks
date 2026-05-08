@@ -302,8 +302,8 @@ const KNOWN_PLUGIN_SOURCES: Record<string, string> = {
  *   }
  */
 function renderListJSON(config: SteeringConfig): unknown {
-	const disabledSet = new Set(config.disable ?? []);
-	const disabledPluginsSet = new Set(config.disablePlugins ?? []);
+	const disabledSet = new Set(config.disabledRules ?? []);
+	const disabledPluginsSet = new Set(config.disabledPlugins ?? []);
 	const plugins = (config.plugins ?? []).map((p) => ({
 		name: p.name,
 		...(KNOWN_PLUGIN_SOURCES[p.name] !== undefined
@@ -319,8 +319,8 @@ function renderListJSON(config: SteeringConfig): unknown {
 		userRules: (config.rules ?? []).map((r) => ruleJSON(r, disabledSet)),
 		userObservers: (config.observers ?? []).map((o) => observerJSON(o)),
 		disabled: {
-			rules: config.disable ?? [],
-			plugins: config.disablePlugins ?? [],
+			rules: config.disabledRules ?? [],
+			plugins: config.disabledPlugins ?? [],
 		},
 		defaultNoOverride: config.defaultNoOverride ?? null,
 		disableDefaults: config.disableDefaults ?? null,
@@ -374,8 +374,8 @@ function renderListText(config: SteeringConfig): string {
 	const plugins = config.plugins ?? [];
 	const userRules = config.rules ?? [];
 	const userObservers = config.observers ?? [];
-	const disabled = config.disable ?? [];
-	const disabledPlugins = config.disablePlugins ?? [];
+	const disabled = config.disabledRules ?? [];
+	const disabledPlugins = config.disabledPlugins ?? [];
 	const disabledSet = new Set(disabled);
 	const disabledPluginsSet = new Set(disabledPlugins);
 

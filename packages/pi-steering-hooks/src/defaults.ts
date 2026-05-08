@@ -27,7 +27,7 @@
  *     Users who want it can add it via their own `.pi/steering.ts` or
  *     install a plugin.
  *
- * Users disable specific defaults via `config.disable: ["<rule-name>"]`
+ * Users disable specific defaults via `config.disabledRules: ["<rule-name>"]`
  * or opt out of all defaults + default plugins via
  * `config.disableDefaults: true`.
  */

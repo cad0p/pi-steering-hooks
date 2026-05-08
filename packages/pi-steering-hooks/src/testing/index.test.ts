@@ -7,7 +7,7 @@
  * Coverage axis:
  *   - `loadHarness`         — evaluator + dispatcher built from a
  *                              minimal config; includeDefaults on/off;
- *                              plugin merging; config.disable; custom
+ *                              plugin merging; config.disabledRules; custom
  *                              host override.
  *   - `mockContext`         — default shape; per-option overrides; exec
  *                              stubbing + unstubbed reject; findEntries
@@ -173,9 +173,9 @@ describe("loadHarness", () => {
 		assert.ok(res && res.block === true);
 	});
 
-	it("applies config.disable to named rules", async () => {
+	it("applies config.disabledRules to named rules", async () => {
 		const h = loadHarness({
-			config: { disable: ["no-force-push"] },
+			config: { disabledRules: ["no-force-push"] },
 			includeDefaults: true,
 		});
 		// Rule was filtered out → force-push no longer blocks.

@@ -193,15 +193,15 @@ describe("loader: loadConfigs", () => {
 		mkdirSync(inner, { recursive: true });
 		writeConfig(
 			join(outer, ".pi", "steering.ts"),
-			configModule("{ disable: ['outer-only'] }"),
+			configModule("{ disabledRules: ['outer-only'] }"),
 		);
 		writeConfig(
 			join(inner, ".pi", "steering.ts"),
-			configModule("{ disable: ['inner-only'] }"),
+			configModule("{ disabledRules: ['inner-only'] }"),
 		);
 		const layers = await loadConfigs(inner);
 		// Inner (b) → outer (a) order.
-		assert.deepEqual(layers.map((l) => l.disable?.[0]), [
+		assert.deepEqual(layers.map((l) => l.disabledRules?.[0]), [
 			"inner-only",
 			"outer-only",
 		]);
@@ -212,15 +212,15 @@ describe("loader: loadConfigs", () => {
 		mkdirSync(cwd, { recursive: true });
 		writeConfig(
 			join(cwd, ".pi", "steering.ts"),
-			configModule("{ disable: ['flat-file'] }"),
+			configModule("{ disabledRules: ['flat-file'] }"),
 		);
 		writeConfig(
 			join(cwd, ".pi", "steering", "index.ts"),
-			configModule("{ disable: ['directory'] }"),
+			configModule("{ disabledRules: ['directory'] }"),
 		);
 		const layers = await loadConfigs(cwd);
 		assert.equal(layers.length, 1);
-		assert.deepEqual(layers[0]?.disable, ["directory"]);
+		assert.deepEqual(layers[0]?.disabledRules, ["directory"]);
 	});
 
 	it("warns when BOTH steering.ts and steering/index.ts coexist, uses directory form", async () => {
@@ -228,16 +228,16 @@ describe("loader: loadConfigs", () => {
 		mkdirSync(cwd, { recursive: true });
 		writeConfig(
 			join(cwd, ".pi", "steering.ts"),
-			configModule("{ disable: ['flat-form'] }"),
+			configModule("{ disabledRules: ['flat-form'] }"),
 		);
 		writeConfig(
 			join(cwd, ".pi", "steering", "index.ts"),
-			configModule("{ disable: ['dir-form'] }"),
+			configModule("{ disabledRules: ['dir-form'] }"),
 		);
 		const layers = await loadConfigs(cwd);
 		assert.equal(layers.length, 1);
 		assert.deepEqual(
-			layers[0]?.disable,
+			layers[0]?.disabledRules,
 			["dir-form"],
 			"directory form should win on ambiguous coexistence",
 		);
@@ -391,15 +391,15 @@ describe("loader: loadConfigs", () => {
 		mkdirSync(inner, { recursive: true });
 		writeConfig(
 			join(inner, ".pi", "steering.ts"),
-			configModule("{ disable: ['inner-flat'] }"),
+			configModule("{ disabledRules: ['inner-flat'] }"),
 		);
 		writeConfig(
 			join(outer, ".pi", "steering", "index.ts"),
-			configModule("{ disable: ['outer-dir'] }"),
+			configModule("{ disabledRules: ['outer-dir'] }"),
 		);
 		const layers = await loadConfigs(inner);
 		assert.deepEqual(
-			layers.map((l) => l.disable?.[0]),
+			layers.map((l) => l.disabledRules?.[0]),
 			["inner-flat", "outer-dir"],
 			"expected inner-first ordering regardless of per-layer form",
 		);
@@ -521,18 +521,18 @@ describe("loader: buildConfig", () => {
 		);
 	});
 
-	it("unions disable / disablePlugins across layers", () => {
+	it("unions disabledRules / disabledPlugins across layers", () => {
 		const inner: SteeringConfig = {
-			disable: ["a"],
-			disablePlugins: ["pA"],
+			disabledRules: ["a"],
+			disabledPlugins: ["pA"],
 		};
 		const outer: SteeringConfig = {
-			disable: ["b", "a"], // dup with inner — should coalesce
-			disablePlugins: ["pB"],
+			disabledRules: ["b", "a"], // dup with inner — should coalesce
+			disabledPlugins: ["pB"],
 		};
 		const merged = buildConfig([inner, outer]);
-		assert.deepEqual(merged.disable?.sort(), ["a", "b"]);
-		assert.deepEqual(merged.disablePlugins?.sort(), ["pA", "pB"]);
+		assert.deepEqual(merged.disabledRules?.sort(), ["a", "b"]);
+		assert.deepEqual(merged.disabledPlugins?.sort(), ["pA", "pB"]);
 	});
 
 	it("inner `defaultNoOverride` wins; missing layer leaves outer in place", () => {

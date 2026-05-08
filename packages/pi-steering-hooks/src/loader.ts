@@ -23,8 +23,8 @@
  *   - `rules`:            concat; inner layer's rule name overrides outer's.
  *   - `plugins`:          concat in declaration order; inner layers first.
  *   - `observers`:        concat; inner name overrides outer.
- *   - `disable`,
- *     `disablePlugins`:   union across layers.
+ *   - `disabledRules`,
+ *     `disabledPlugins`:  union across layers.
  *   - `defaultNoOverride`,
  *     `disableDefaults`:  inner wins if set.
  *
@@ -362,13 +362,13 @@ function mergeObservers(layers: readonly SteeringConfig[]): Observer[] {
 }
 
 /**
- * Merge simple string-list fields (`disable`, `disablePlugins`) as a
- * union across layers. Preserves first-seen order for deterministic
+ * Merge simple string-list fields (`disabledRules`, `disabledPlugins`)
+ * as a union across layers. Preserves first-seen order for deterministic
  * output in tests.
  */
 function mergeStringUnion(
 	layers: readonly SteeringConfig[],
-	key: "disable" | "disablePlugins",
+	key: "disabledRules" | "disabledPlugins",
 ): string[] | undefined {
 	const seen = new Set<string>();
 	let any = false;
@@ -501,10 +501,10 @@ export function buildConfig(
 	if (rules.length > 0) out.rules = rules;
 	if (observers.length > 0) out.observers = observers;
 
-	const disable = mergeStringUnion(effective, "disable");
-	if (disable !== undefined) out.disable = disable;
-	const disablePlugins = mergeStringUnion(effective, "disablePlugins");
-	if (disablePlugins !== undefined) out.disablePlugins = disablePlugins;
+	const disabledRules = mergeStringUnion(effective, "disabledRules");
+	if (disabledRules !== undefined) out.disabledRules = disabledRules;
+	const disabledPlugins = mergeStringUnion(effective, "disabledPlugins");
+	if (disabledPlugins !== undefined) out.disabledPlugins = disabledPlugins;
 
 	const defaultNoOverride = mergeBool(effective, "defaultNoOverride");
 	if (defaultNoOverride !== undefined) {

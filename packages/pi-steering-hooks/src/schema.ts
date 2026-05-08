@@ -308,9 +308,6 @@ export interface Rule<
 	 * reference in the config is rejected as a typo, not silently
 	 * accepted. The wider warning — "name" / "plugin" literals
 	 * widening to `string` — causes the opposite failure: typos in
-	 * `disable` / `disablePlugins` start compiling silently. Always use
-	 * `as const satisfies` for reusable constants.
-	 *
 	 * **Runtime effect:** none. `writes` is purely documentation +
 	 * type-level plumbing — the engine does NOT verify that `onFire`
 	 * only calls `ctx.appendEntry` with declared types.
@@ -320,6 +317,11 @@ export interface Rule<
 	 * compile-time check — the `SteeringConfig` shape defaults the
 	 * {@link Rule} generics to `string`, so `when.happened.type` is
 	 * unconstrained. `defineConfig` is the entry point that enforces.
+	 *
+	 * The wider warning — "name" / "plugin" literals widening to
+	 * `string` — causes the opposite failure: typos in `disabledRules`
+	 * / `disabledPlugins` start compiling silently. Always use
+	 * `as const satisfies` for reusable constants.
 	 */
 	writes?: readonly string[];
 
@@ -695,7 +697,7 @@ export interface PredicateContext {
  * same state dimension is always a bug.
  */
 export interface Plugin {
-	/** Unique plugin identifier. Used for `disablePlugins` + warning messages. */
+	/** Unique plugin identifier. Used for `disabledPlugins` + warning messages. */
 	name: string;
 
 	/**
@@ -704,7 +706,7 @@ export interface Plugin {
 	 */
 	predicates?: Record<string, PredicateHandler>;
 
-	/** Rules the plugin suggests. Users can opt out via `disable: [...]`. */
+	/** Rules the plugin suggests. Users can opt out via `disabledRules: [...]`. */
 	rules?: readonly Rule[];
 
 	/** Observers the plugin ships. Referenced by name from rules. */
@@ -780,20 +782,29 @@ export interface SteeringConfig {
 	defaultNoOverride?: boolean;
 
 	/**
-	 * Disable specific rules by name. Additive union across layers.
+	 * Rules to disable by name. Additive union across layers.
+	 *
+	 * Past-participle form (`disabledRules`) reads as a predicate on
+	 * state — "these are the rules that are disabled." Distinct from
+	 * the imperative flag {@link disableDefaults} (action: disable
+	 * the default plugins + rules).
 	 */
-	disable?: string[];
+	disabledRules?: string[];
 
 	/**
-	 * Disable entire plugins by name. Additive union across layers.
+	 * Plugins to disable by name. Additive union across layers.
 	 * A disabled plugin contributes NOTHING — no rules, no observers,
 	 * no predicates, no trackers.
 	 */
-	disablePlugins?: string[];
+	disabledPlugins?: string[];
 
 	/**
 	 * Skip the package's built-in default plugins + default rules.
 	 * Handy for isolated test harnesses or strict minimal configs.
+	 *
+	 * Kept in imperative form (action flag: "disable the defaults")
+	 * to distinguish shape at a glance from the past-participle
+	 * {@link disabledRules} / {@link disabledPlugins} lists.
 	 *
 	 * Walk-up merge: inner layer wins when specified.
 	 */

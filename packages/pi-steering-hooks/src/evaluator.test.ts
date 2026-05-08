@@ -2225,13 +2225,13 @@ describe("buildEvaluator: plugin-shipped rules", () => {
 		assert.match(res!.reason!, /^\[steering:my-rule@user\]/);
 	});
 
-	it("honors config.disable to skip plugin rule", async () => {
+	it("honors config.disabledRules to skip plugin rule", async () => {
 		const plugin: Plugin = {
 			name: "p",
 			rules: [NO_FORCE_PUSH],
 		};
-		const cfg: SteeringConfig = { disable: ["no-force-push"] };
-		// `resolvePlugins` applies `disable` to plugin rules at merge time.
+		const cfg: SteeringConfig = { disabledRules: ["no-force-push"] };
+		// `resolvePlugins` applies `disabledRules` to plugin rules at merge time.
 		const evaluator = buildEvaluator(
 			cfg,
 			resolvePlugins([plugin], cfg),
@@ -2303,11 +2303,11 @@ describe("buildEvaluator: plugin-shipped rules", () => {
 		const plugin: Plugin = { name: "p", rules: [pluginRule] };
 		const cfg: SteeringConfig = {
 			rules: [userRule],
-			disable: ["same"],
+			disabledRules: ["same"],
 		};
-		// resolvePlugins honors config.disable for plugin rules. User
-		// rules come through `config.rules` directly — buildEvaluator
-		// does NOT filter them on `disable`, so the user rule survives.
+		// resolvePlugins honors config.disabledRules for plugin rules.
+		// User rules come through `config.rules` directly — buildEvaluator
+		// does NOT filter them on `disabledRules`, so the user rule survives.
 		const evaluator = buildEvaluator(
 			cfg,
 			resolvePlugins([plugin], cfg),

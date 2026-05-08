@@ -204,10 +204,10 @@ export function loadHarness(options: LoadHarnessOptions): Harness {
 		];
 	}
 
-	// Apply `config.disable` to user + default rules. Plugin-shipped
+	// Apply `config.disabledRules` to user + default rules. Plugin-shipped
 	// rules are filtered inside `resolvePlugins`. Mirrors
 	// `buildSessionRuntime` in src/index.ts.
-	const disabled = new Set(mergedConfig.disable ?? []);
+	const disabled = new Set(mergedConfig.disabledRules ?? []);
 	const filteredConfig: SteeringConfig = { ...mergedConfig };
 	if (mergedConfig.rules !== undefined) {
 		const kept = mergedConfig.rules.filter((r) => !disabled.has(r.name));

@@ -45,7 +45,7 @@ export default defineConfig({
 ```ts
 export default defineConfig({
   plugins: [gitPlugin],
-  disable: ["no-main-commit"],   // Keep predicates, drop the shipped rule
+  disabledRules: ["no-main-commit"],   // Keep predicates, drop the shipped rule
 });
 ```
 
@@ -55,7 +55,7 @@ parent config registers the plugin and a project wants to opt out):
 ```ts
 export default defineConfig({
   plugins: [gitPlugin],
-  disablePlugins: ["git"],
+  disabledPlugins: ["git"],
 });
 ```
 

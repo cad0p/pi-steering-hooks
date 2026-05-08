@@ -13,9 +13,9 @@
  *                             See `./predicates.ts` for the arg
  *                             shapes each handler accepts.
  *   - `rules`              - `no-main-commit` (overridable). Users
- *                             disable via `disable: ["no-main-commit"]`
+ *                             disable via `disabledRules: ["no-main-commit"]`
  *                             or opt out of the whole plugin with
- *                             `disablePlugins: ["git"]`.
+ *                             `disabledPlugins: ["git"]`.
  *   - `trackers.branch`    - sequential `git checkout` / `git switch`
  *                             branch tracker. See `./branch-tracker.ts`.
  *   - `trackerExtensions.cwd.git`
@@ -61,7 +61,7 @@ import { rules } from "./rules.ts";
  * literal `name: "git"` in the inferred type. That literal is the
  * input to any future `AllPluginNames<P>`-style inference in
  * `defineConfig`, which needs `name: "git"`, not `name: string`, to
- * offer string-literal completion for e.g. `disablePlugins`.
+ * offer string-literal completion for e.g. `disabledPlugins`.
  */
 const gitPlugin = {
 	name: "git",
