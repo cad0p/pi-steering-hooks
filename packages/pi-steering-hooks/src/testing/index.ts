@@ -60,6 +60,7 @@ import type {
 	ToolCallEventResult,
 } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../v2/defaults.ts";
+import { createAppendEntry } from "../v2/evaluator-internals/context.ts";
 import {
 	buildEvaluator,
 	type EvaluatorHost,
@@ -94,6 +95,37 @@ interface CapturedEntry {
  * itself beyond the weak slot.
  */
 const appendBuffers = new WeakMap<object, CapturedEntry[]>();
+
+/**
+ * Minimal {@link EvaluatorHost} whose `appendEntry` pushes into the
+ * given capture buffer. Used by {@link mockContext} /
+ * {@link mockObserverContext} to share the production
+ * `createAppendEntry` wrapper: the wrapper expects an
+ * `EvaluatorHost`, and wiring a buffering host here lets the mocks
+ * auto-tag writes with `_agentLoopIndex` in the exact same shape the
+ * real engine and dispatcher produce.
+ *
+ * `exec` is stubbed to reject — it's never touched on this path
+ * (`createAppendEntry` only calls `host.appendEntry`) but has to be
+ * present to satisfy the {@link EvaluatorHost} shape.
+ */
+function bufferingAppendHost(buffer: CapturedEntry[]): EvaluatorHost {
+	return {
+		exec: () =>
+			Promise.reject(
+				new Error(
+					"[pi-steering-hooks/testing] internal: bufferingAppendHost.exec " +
+						"should never be called",
+				),
+			),
+		appendEntry: (customType: string, data?: unknown) => {
+			buffer.push({
+				customType,
+				...(data !== undefined ? { data } : {}),
+			});
+		},
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -307,20 +339,26 @@ export function mockContext(
 	const tool = options.tool ?? "bash";
 	const input = options.input ?? defaultInputFor(tool);
 	const walkerState = options.walkerState ?? { cwd };
+	const agentLoopIndex = options.agentLoopIndex ?? 0;
 	const buffer: CapturedEntry[] = [];
+
+	// Route through the production `createAppendEntry` wrapper so mock
+	// and real engine stay in lockstep: plain-object payloads get
+	// `_agentLoopIndex` merged in, everything else wraps as
+	// `{ value, _agentLoopIndex }`. Without this, a rule author testing
+	// their self-mark pattern via `mockContext` would see un-tagged
+	// entries that would never have been written that way in
+	// production, and a follow-up `when.happened: { in: "agent_loop" }`
+	// simulation would disagree with the real engine.
+	const bufferingHost = bufferingAppendHost(buffer);
 
 	const ctx: PredicateContext = {
 		cwd,
 		tool,
 		input,
-		agentLoopIndex: options.agentLoopIndex ?? 0,
+		agentLoopIndex,
 		exec: buildExec(options.exec, "mockContext"),
-		appendEntry: <T>(customType: string, data?: T) => {
-			buffer.push({
-				customType,
-				...(data !== undefined ? { data } : {}),
-			});
-		},
+		appendEntry: createAppendEntry(bufferingHost, agentLoopIndex),
 		findEntries: buildFindEntries(options.entries ?? []),
 		walkerState,
 	};
@@ -383,17 +421,18 @@ export function mockObserverContext(
 	options: MockObserverContextOptions = {},
 ): ObserverContext {
 	const cwd = options.cwd ?? "/tmp/test";
+	const agentLoopIndex = options.agentLoopIndex ?? 0;
 	const buffer: CapturedEntry[] = [];
+
+	// Same wrapper as mockContext: keeps the mock observer context
+	// writing entries in the auto-tagged shape the real dispatcher
+	// produces.
+	const bufferingHost = bufferingAppendHost(buffer);
 
 	const ctx: ObserverContext = {
 		cwd,
-		agentLoopIndex: options.agentLoopIndex ?? 0,
-		appendEntry: <T>(customType: string, data?: T) => {
-			buffer.push({
-				customType,
-				...(data !== undefined ? { data } : {}),
-			});
-		},
+		agentLoopIndex,
+		appendEntry: createAppendEntry(bufferingHost, agentLoopIndex),
 		findEntries: buildFindEntries(options.entries ?? []),
 	};
 

@@ -367,15 +367,49 @@ describe("mockContext", () => {
 	});
 
 	it("appendEntry writes are captured (visible via getAppendedEntries)", () => {
+		// Auto-tag: object payloads get `_agentLoopIndex` merged in,
+		// bare calls wrap as `{ value: undefined, _agentLoopIndex }`.
+		// Same shape the real engine writes (production parity is the
+		// whole point of routing through createAppendEntry).
 		const ctx = mockContext();
 		ctx.appendEntry("x", { a: 1 });
 		ctx.appendEntry("y"); // no data — pi allows bare customType.
 		const captured = getAppendedEntries(ctx);
 		assert.equal(captured.length, 2);
 		assert.equal(captured[0]!.customType, "x");
-		assert.deepEqual(captured[0]!.data, { a: 1 });
+		assert.deepEqual(captured[0]!.data, { a: 1, _agentLoopIndex: 0 });
 		assert.equal(captured[1]!.customType, "y");
-		assert.equal(captured[1]!.data, undefined);
+		assert.deepEqual(captured[1]!.data, {
+			value: undefined,
+			_agentLoopIndex: 0,
+		});
+	});
+
+	it("appendEntry auto-tags object payloads with agentLoopIndex (G2)", () => {
+		const ctx = mockContext({ agentLoopIndex: 5 });
+		ctx.appendEntry("marker", { foo: 1 });
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "marker", data: { foo: 1, _agentLoopIndex: 5 } },
+		]);
+	});
+
+	it("appendEntry wraps primitive payloads as { value, _agentLoopIndex } (G2)", () => {
+		const ctx = mockContext({ agentLoopIndex: 2 });
+		ctx.appendEntry("num", 42);
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "num", data: { value: 42, _agentLoopIndex: 2 } },
+		]);
+	});
+
+	it("appendEntry wraps array payloads (F2 / G2 / G3)", () => {
+		const ctx = mockContext({ agentLoopIndex: 5 });
+		ctx.appendEntry("items", [1, 2, 3]);
+		const entries = getAppendedEntries(ctx);
+		assert.deepEqual(entries, [
+			{ customType: "items", data: { value: [1, 2, 3], _agentLoopIndex: 5 } },
+		]);
 	});
 });
 
@@ -415,15 +449,31 @@ describe("mockObserverContext", () => {
 	});
 
 	it("appendEntry captures are independent per context", () => {
-		const a = mockObserverContext();
-		const b = mockObserverContext();
+		const a = mockObserverContext({ agentLoopIndex: 0 });
+		const b = mockObserverContext({ agentLoopIndex: 0 });
 		a.appendEntry("one", { x: 1 });
 		b.appendEntry("two", { y: 2 });
 		assert.deepEqual(getAppendedEntries(a), [
-			{ customType: "one", data: { x: 1 } },
+			{ customType: "one", data: { x: 1, _agentLoopIndex: 0 } },
 		]);
 		assert.deepEqual(getAppendedEntries(b), [
-			{ customType: "two", data: { y: 2 } },
+			{ customType: "two", data: { y: 2, _agentLoopIndex: 0 } },
+		]);
+	});
+
+	it("observer appendEntry auto-tags with agentLoopIndex (G2)", () => {
+		const ctx = mockObserverContext({ agentLoopIndex: 9 });
+		ctx.appendEntry("seen", { foo: 1 });
+		assert.deepEqual(getAppendedEntries(ctx), [
+			{ customType: "seen", data: { foo: 1, _agentLoopIndex: 9 } },
+		]);
+	});
+
+	it("observer appendEntry wraps primitive payloads (G2)", () => {
+		const ctx = mockObserverContext({ agentLoopIndex: 3 });
+		ctx.appendEntry("n", 7);
+		assert.deepEqual(getAppendedEntries(ctx), [
+			{ customType: "n", data: { value: 7, _agentLoopIndex: 3 } },
 		]);
 	});
 });
@@ -442,7 +492,9 @@ describe("getAppendedEntries", () => {
 		const ctx = mockContext();
 		ctx.appendEntry("x", { a: 1 });
 		const captured = getAppendedEntries(ctx);
-		assert.deepEqual(captured, [{ customType: "x", data: { a: 1 } }]);
+		assert.deepEqual(captured, [
+			{ customType: "x", data: { a: 1, _agentLoopIndex: 0 } },
+		]);
 	});
 
 	it("returns empty for a non-mock context (safe lookup, no throw)", () => {
