@@ -705,10 +705,10 @@ export interface Plugin {
 	predicates?: Record<string, PredicateHandler>;
 
 	/** Rules the plugin suggests. Users can opt out via `disable: [...]`. */
-	rules?: Rule[];
+	rules?: readonly Rule[];
 
 	/** Observers the plugin ships. Referenced by name from rules. */
-	observers?: Observer[];
+	observers?: readonly Observer[];
 
 	/**
 	 * NEW trackers the plugin introduces. Keys are tracker names (e.g.
@@ -800,11 +800,11 @@ export interface SteeringConfig {
 	disableDefaults?: boolean;
 
 	/** Plugins to load. Order matters for first-wins name collisions. */
-	plugins?: Plugin[];
+	plugins?: readonly Plugin[];
 
 	/** User-authored rules. */
-	rules?: Rule[];
+	rules?: readonly Rule[];
 
 	/** Inline observers (rules reference by name). */
-	observers?: Observer[];
+	observers?: readonly Observer[];
 }

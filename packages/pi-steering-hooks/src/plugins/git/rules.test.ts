@@ -81,11 +81,13 @@ describe("rules: no-main-commit shape", () => {
 		assert.equal(rule.tool, "bash");
 		assert.equal(rule.field, "command");
 		assert.equal(rule.noOverride, false);
-		assert.ok(
-			typeof rule.pattern === "string"
-				? rule.pattern.includes("commit")
-				: rule.pattern.source.includes("commit"),
-		);
+		// Accept both shapes: runtime value can be string | RegExp per the
+		// schema, even though the narrowed literal type is string-only after
+		// the `as const satisfies Rule` narrowing in ./rules.ts.
+		const pattern = rule.pattern as string | RegExp;
+		const patternSource =
+			typeof pattern === "string" ? pattern : pattern.source;
+		assert.ok(patternSource.includes("commit"));
 		assert.ok(
 			rule.when !== undefined &&
 				"branch" in (rule.when as Record<string, unknown>),

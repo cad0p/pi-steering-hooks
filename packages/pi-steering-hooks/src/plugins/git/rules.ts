@@ -61,7 +61,7 @@ import type { Rule } from "../../index.ts";
  * rule, not an inherent-destructiveness rule - authors override when
  * the commit is intentional (e.g. release process on `main`).
  */
-const noMainCommit: Rule = {
+const noMainCommit = {
 	name: "no-main-commit",
 	tool: "bash",
 	field: "command",
@@ -76,7 +76,7 @@ const noMainCommit: Rule = {
 	// Explicit override-OK: workflow rules are intentionally
 	// overridable.
 	noOverride: false,
-};
+} as const satisfies Rule;
 
 /**
  * Suggested rules for the git plugin. Phase 4 ships the one
@@ -85,4 +85,4 @@ const noMainCommit: Rule = {
  * dependency, and adding it to DEFAULT_RULES rather than the git
  * plugin is a cleaner domain split.
  */
-export const rules: readonly Rule[] = [noMainCommit];
+export const rules = [noMainCommit] as const satisfies readonly Rule[];

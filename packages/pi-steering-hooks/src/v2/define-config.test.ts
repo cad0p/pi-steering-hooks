@@ -14,6 +14,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import shippedGitPlugin from "../plugins/git/index.ts";
 import { defineConfig } from "./define-config.ts";
 import type { Observer, Plugin, PredicateContext } from "./schema.ts";
 
@@ -533,5 +534,55 @@ describe("v2/defineConfig: bare-annotation footgun (ADR §8 authoring pattern)",
 			],
 		});
 		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "sync-done");
+	});
+});
+
+describe("v2/defineConfig: cross-module plugin typo detection (F2 regression fence)", () => {
+	// The F2 finding: gitPlugin's emitted .d.ts was widening rule names
+	// to `Rule<string, string>[]`, which silently disabled typo detection
+	// on `disable: [...]` for consumers importing the shipped plugin.
+	// `as const satisfies Rule` at the source and `as const satisfies
+	// readonly Rule[]` on the collection preserve the tuple + literals.
+	//
+	// These tests pin that the SHIPPED `gitPlugin` (not an inline copy)
+	// carries literal rule names through to `defineConfig` generics.
+	// If the widening regresses, the @ts-expect-error directives stop
+	// firing and these tests fail to compile — loud signal.
+
+	it("disable accepts rule names from the imported gitPlugin", () => {
+		const cfg = defineConfig({
+			plugins: [shippedGitPlugin],
+			disable: ["no-main-commit"],
+		});
+		assert.equal(cfg.disable?.[0], "no-main-commit");
+	});
+
+	it("disable rejects typos in imported-plugin rule names", () => {
+		const cfg = defineConfig({
+			plugins: [shippedGitPlugin],
+			// @ts-expect-error — "no-main-commit-typo" is not a registered
+			// rule name on the imported gitPlugin. If this directive stops
+			// firing, the .d.ts widening regression documented as F2 in
+			// the phase-a3b review has returned.
+			disable: ["no-main-commit-typo"],
+		});
+		assert.equal(cfg.disable?.length, 1);
+	});
+
+	it("disablePlugins accepts the imported gitPlugin's name", () => {
+		const cfg = defineConfig({
+			plugins: [shippedGitPlugin],
+			disablePlugins: ["git"],
+		});
+		assert.equal(cfg.disablePlugins?.[0], "git");
+	});
+
+	it("disablePlugins rejects a typo on the imported gitPlugin's name", () => {
+		const cfg = defineConfig({
+			plugins: [shippedGitPlugin],
+			// @ts-expect-error — "gti" is not a registered plugin name.
+			disablePlugins: ["gti"],
+		});
+		assert.equal(cfg.disablePlugins?.length, 1);
 	});
 });

@@ -66,7 +66,7 @@ import { rules } from "./rules.ts";
 const gitPlugin = {
 	name: "git",
 	predicates,
-	rules: [...rules],
+	rules,
 	trackers: {
 		// `Plugin.trackers` is typed `Record<string, Tracker<unknown>>`
 		// because the schema can't commit to a specific T per tracker.
