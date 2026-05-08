@@ -706,6 +706,106 @@ describe("register(): agent_start bumps agentLoopIndex threaded into evaluator",
 			5,
 		);
 	});
+
+	it("tool_call fired before any agent_start sees agentLoopIndex === 0 (G6)", async () => {
+		// Pins the counter's initial value. The counter bumps from 0 to 1
+		// on the first agent_start; a tool_call that happens BEFORE any
+		// agent_start (background tool, prompt autocompletion, extension
+		// smoke test) must see a well-defined — not undefined / NaN /
+		// -1 — agentLoopIndex. A later init-bug landing on undefined
+		// would pass all other tests but fail this one.
+		writeSteeringConfig(
+			tmpHome,
+			`{
+				rules: [
+					{
+						name: "capture-pre-agent-start",
+						tool: "bash",
+						field: "command",
+						pattern: /^echo/,
+						reason: "capture",
+						when: {
+							condition: (ctx) => {
+								ctx.appendEntry("captured", { agentLoopIndex: ctx.agentLoopIndex });
+								return false;
+							},
+						},
+					},
+				],
+			}`,
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		await fireSessionStart(mock, tmpHome);
+		// Intentionally skip fireAgentStart.
+		await fireBashToolCall(mock, "echo hi", tmpHome);
+
+		const captured = mock.entries.find((e) => e.kind === "captured");
+		assert.ok(captured);
+		assert.equal(
+			(captured.data as { agentLoopIndex: number }).agentLoopIndex,
+			0,
+		);
+	});
+
+	it("tool_call + tool_result in the same loop share the same agentLoopIndex (G6)", async () => {
+		// The predicate captures the agentLoopIndex it sees; the
+		// observer's auto-tagged write records the loop index the
+		// dispatcher saw. Both must agree, end-to-end via register().
+		writeSteeringConfig(
+			tmpHome,
+			`{
+				rules: [
+					{
+						name: "capture-predicate",
+						tool: "bash",
+						field: "command",
+						pattern: /^echo/,
+						reason: "r",
+						when: {
+							condition: (ctx) => {
+								ctx.appendEntry("pred", { agentLoopIndex: ctx.agentLoopIndex });
+								return false;
+							},
+						},
+					},
+				],
+				observers: [
+					{
+						name: "capture-observer",
+						watch: { toolName: "bash", exitCode: "success" },
+						onResult: (_event, ctx) => {
+							ctx.appendEntry("obs", { ok: true });
+						},
+					},
+				],
+			}`,
+		);
+
+		const mock = makeMockPi();
+		register(mock.api as never);
+		await fireSessionStart(mock, tmpHome);
+		fireAgentStart(mock); // loop 1
+		fireAgentStart(mock); // loop 2
+		await fireBashToolCall(mock, "echo hi", tmpHome);
+		await fireBashToolResult(mock, { command: "echo hi" }, 0, tmpHome);
+
+		const pred = mock.entries.find((e) => e.kind === "pred");
+		const obs = mock.entries.find((e) => e.kind === "obs");
+		assert.ok(pred, "predicate should have captured a pred entry");
+		assert.ok(obs, "observer should have captured an obs entry");
+		const predIdx = (pred.data as { agentLoopIndex: number })
+			.agentLoopIndex;
+		const obsIdx = (obs.data as { _agentLoopIndex: number })._agentLoopIndex;
+		assert.equal(predIdx, 2);
+		assert.equal(obsIdx, 2);
+		assert.equal(
+			predIdx,
+			obsIdx,
+			"predicate and observer must observe the same agent_loop index",
+		);
+	});
 });
 
 /* -------------------------------------------------------------------------- */

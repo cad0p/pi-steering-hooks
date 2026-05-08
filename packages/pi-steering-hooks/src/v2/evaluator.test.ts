@@ -644,6 +644,31 @@ describe("buildEvaluator: when.happened", () => {
 				),
 		);
 	});
+
+	it("untagged entries are treated as 'not happened this loop' (G5)", async () => {
+		// Simulates a pre-feature entry (hand-written session JSONL,
+		// migration across pi-steering versions, plugin that bypassed
+		// the wrapper): `data` has no `_agentLoopIndex` key. The
+		// agent_loop filter must NOT treat undefined as a match, so the
+		// rule's `when.happened` predicate still fires (rule blocks).
+		const rule: Rule = {
+			name: "cr-needs-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: { happened: { type: "legacy", in: "agent_loop" } },
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry("legacy", { foo: "bar" }), // no _agentLoopIndex
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.ok(
+			res && res.block === true,
+			"untagged entries must not satisfy agent_loop scope",
+		);
+	});
 });
 
 describe("buildEvaluator: when.not + when.condition", () => {
@@ -1127,6 +1152,34 @@ describe("buildEvaluator: Rule.onFire", () => {
 			false,
 			"first-match-wins — rule B's onFire must not run",
 		);
+	});
+
+	it("runs when rule is overridable but no override comment present (G7)", async () => {
+		// Branch not covered by the existing onFire suite: overridable
+		// rule (noOverride: false) + no override comment. Semantically
+		// equivalent to the fail-closed + no-override case but goes
+		// through a different code path — `extractOverride` returns null,
+		// falls through to onFire.
+		let called = false;
+		const rule: Rule = {
+			name: "f",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "f",
+			noOverride: false,
+			onFire: () => {
+				called = true;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.equal(called, true);
 	});
 });
 
@@ -2193,6 +2246,129 @@ describe("buildEvaluator: plugin-shipped rules", () => {
 			undefined,
 		);
 	});
+
+	it("user rule shadows plugin rule with the same name — @user source wins (G4)", async () => {
+		// Both rules named "same". User rule is first in `allRules` so
+		// first-match-wins returns it. Source-tag must be `@user` — the
+		// evaluator keys source-lookup by Rule object identity, not name,
+		// so the plugin rule's presence in the list never contaminates
+		// the user rule's tag.
+		const pluginRule: Rule = {
+			name: "same",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "plugin",
+		};
+		const userRule: Rule = {
+			name: "same",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "user",
+		};
+		const plugin: Plugin = { name: "p", rules: [pluginRule] };
+		const evaluator = buildEvaluator(
+			{ rules: [userRule] },
+			resolve([plugin]),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /^\[steering:same@user\]/);
+		assert.match(res!.reason!, /user/); // pins which reason text won
+	});
+
+	it('disabled plugin rule + user rule with same name → @user still wins (G4)', async () => {
+		// Plugin rule is filtered out by `resolvePlugins(... { disable })`.
+		// The user rule remains — source tag `@user`.
+		const pluginRule: Rule = {
+			name: "same",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "plugin",
+		};
+		const userRule: Rule = {
+			name: "same",
+			tool: "bash",
+			field: "command",
+			pattern: "^git\\s+push",
+			reason: "user",
+		};
+		const plugin: Plugin = { name: "p", rules: [pluginRule] };
+		const cfg: SteeringConfig = {
+			rules: [userRule],
+			disable: ["same"],
+		};
+		// resolvePlugins honors config.disable for plugin rules. User
+		// rules come through `config.rules` directly — buildEvaluator
+		// does NOT filter them on `disable`, so the user rule survives.
+		const evaluator = buildEvaluator(
+			cfg,
+			resolvePlugins([plugin], cfg),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /^\[steering:same@user\]/);
+	});
+
+	it("plugin-vs-plugin collision — surviving rule tags with the winning plugin name (G4)", async () => {
+		// First-registered plugin wins on name collision (merger emits a
+		// soft `rule-collision` warning). Source tag must be the winning
+		// plugin's name.
+		const p1: Plugin = {
+			name: "first",
+			rules: [
+				{
+					name: "dup",
+					tool: "bash",
+					field: "command",
+					pattern: "^git\\s+push",
+					reason: "first",
+				},
+			],
+		};
+		const p2: Plugin = {
+			name: "second",
+			rules: [
+				{
+					name: "dup",
+					tool: "bash",
+					field: "command",
+					pattern: "^git\\s+push",
+					reason: "second",
+				},
+			],
+		};
+		// `resolvePlugins` warns on rule-name collision; swallow the
+		// warning output so the test's stdout stays clean.
+		const origWarn = console.warn;
+		console.warn = () => {};
+		let resolved: ResolvedPluginState;
+		try {
+			resolved = resolvePlugins([p1, p2], {});
+		} finally {
+			console.warn = origWarn;
+		}
+		const evaluator = buildEvaluator({}, resolved, makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res!.reason!, /^\[steering:dup@first\]/);
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -2343,6 +2519,90 @@ describe("buildEvaluator: PredicateToolInput.basename + args", () => {
 		assert.equal(w.args, undefined);
 		assert.equal(e.basename, undefined);
 		assert.equal(e.args, undefined);
+	});
+
+	it("wrapper-expanded refs get their INNER basename + args (G8)", async () => {
+		// sh -c 'git commit -m hi' — the outer wrapper ref is `sh`, but
+		// the walker expands the inner command. The INNER ref must see
+		// basename="git" + quote-aware args [commit, -m, hi], not stay
+		// parsed as sh's arguments.
+		const seen: Array<{
+			basename?: string | undefined;
+			args?: readonly unknown[] | undefined;
+		}> = [];
+		const rule: Rule = {
+			name: "peek",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek",
+			when: {
+				condition: (ctx) => {
+					const i = ctx.input as {
+						basename?: string;
+						args?: readonly unknown[];
+					};
+					seen.push({ basename: i.basename, args: i.args });
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			bashEvent("sh -c 'git commit -m hi'"),
+			makeCtx("/r"),
+			0,
+		);
+		// After wrapper expansion we expect the inner git ref to be
+		// present with its own basename / args (the outer sh ref may or
+		// may not still be in `seen` depending on the walker's
+		// expansion strategy — what matters is that the inner ref's
+		// basename + args are exposed).
+		const git = seen.find((s) => s.basename === "git");
+		assert.ok(git, "expected a git ref after wrapper expansion");
+		assert.equal(git!.args!.length, 3);
+		const argValues = (
+			git!.args as ReadonlyArray<{ value?: string; text?: string }>
+		).map((w) => w.value ?? w.text);
+		assert.deepEqual(argValues, ["commit", "-m", "hi"]);
+	});
+
+	it("absolute-path command has basename stripped (G8)", async () => {
+		// ADR §9: /usr/bin/git push → basename "git", args [push].
+		const seen: Array<{
+			basename?: string | undefined;
+			args?: readonly unknown[] | undefined;
+		}> = [];
+		const rule: Rule = {
+			name: "peek",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek",
+			when: {
+				condition: (ctx) => {
+					const i = ctx.input as {
+						basename?: string;
+						args?: readonly unknown[];
+					};
+					seen.push({ basename: i.basename, args: i.args });
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			bashEvent("/usr/bin/git push"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		assert.equal(seen[0]!.basename, "git");
+		assert.equal(seen[0]!.args!.length, 1);
+		const argValues = (
+			seen[0]!.args as ReadonlyArray<{ value?: string; text?: string }>
+		).map((w) => w.value ?? w.text);
+		assert.deepEqual(argValues, ["push"]);
 	});
 });
 
