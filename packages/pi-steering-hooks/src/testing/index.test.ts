@@ -284,6 +284,71 @@ describe("loadHarness", () => {
 			console.warn = originalWarn;
 		}
 	});
+
+	it("exposes harness.config reflecting the effective (disable-filtered) state (T3)", () => {
+		const harness = loadHarness({
+			config: {
+				rules: [
+					{
+						name: "keep-me",
+						tool: "bash",
+						field: "command",
+						pattern: /^keep/,
+						reason: "keep",
+					},
+					{
+						name: "drop-me",
+						tool: "bash",
+						field: "command",
+						pattern: /^drop/,
+						reason: "drop",
+					},
+				],
+				disabledRules: ["drop-me"],
+			},
+		});
+		// Config mirror is post-filter: only `keep-me` survives in
+		// `config.rules`; the `disabledRules` list is preserved for
+		// introspection.
+		assert.ok(harness.config);
+		assert.equal(harness.config.rules?.length, 1);
+		assert.equal(harness.config.rules?.[0]?.name, "keep-me");
+		assert.deepEqual(harness.config.disabledRules, ["drop-me"]);
+	});
+
+	it("exposes harness.resolved with plugin-side rules after merger (T3)", () => {
+		const pluginRule = {
+			name: "plugin-rule",
+			tool: "bash" as const,
+			field: "command" as const,
+			pattern: /^keep/,
+			reason: "plugin",
+		};
+		const droppedPluginRule = {
+			name: "dropped-plugin-rule",
+			tool: "bash" as const,
+			field: "command" as const,
+			pattern: /^drop/,
+			reason: "drop",
+		};
+		const harness = loadHarness({
+			config: {
+				plugins: [
+					{ name: "demo", rules: [pluginRule, droppedPluginRule] },
+				],
+				disabledRules: ["dropped-plugin-rule"],
+			},
+		});
+		// `resolved` reflects plugin-merger output: plugin-shipped rules
+		// after disable filtering. User rules live on `harness.config`,
+		// not here.
+		const resolvedNames = harness.resolved.rules.map((r) => r.name);
+		assert.deepEqual(resolvedNames, ["plugin-rule"]);
+		assert.ok(
+			!resolvedNames.includes("dropped-plugin-rule"),
+			"disabled plugin rule must not appear in resolved state",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
