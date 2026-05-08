@@ -1,6 +1,6 @@
 # pi-steering
 
-AST-backed steering rules for [pi](https://github.com/earendil-works/pi-coding-agent) agents, with stateful predicates and plugin-first composition.
+AST-backed steering rules for [pi](https://github.com/earendil-works/pi) agents, with stateful predicates and plugin-first composition.
 
 ## What this is
 
@@ -8,7 +8,7 @@ A deterministic guardrail layer that sits between your pi agent and the tools it
 
 Use it when:
 
-- You want to gate commands by structure, not substring — `sh -c 'git push --force'`, `cd /repo && git push --force`, and `git push "--force"` should all trigger the same `^git\s+push.*--force` rule, and `echo 'git push --force'` should not.
+- You want to gate commands by structure, not substring — `sh -c 'git push --force'`, `cd /repo && git push --force`, and `git push "--force"` should all trigger the same `^git\s+push.*--force(?!-)` rule, and `echo 'git push --force'` should not.
 - You want "must run X before Y" rules that survive across tool calls within the same user prompt.
 - You want to ship + version a rule pack as an npm dependency (plugins), not a shared JSON file.
 
@@ -63,7 +63,10 @@ export default defineConfig({
       name: "no-force-push",
       tool: "bash",
       field: "command",
-      pattern: /^git\s+push.*--force\b/,
+      // `(?!-)` rules out `--force-with-lease` — `\b` alone would match
+      // it, since `-` is a non-word character and `--force\b` sees a
+      // word boundary between `e` and `-`.
+      pattern: /^git\s+push.*--force(?!-)/,
       reason: "Force-push rewrites history. Use --force-with-lease if needed.",
     },
   ],
@@ -132,7 +135,9 @@ User prompt sent to pi.
 
 5. pi emits tool_result. Dispatcher runs (once per tool_result):
 
-   a. Parse event.input.command via walker (shared with step 3 when possible).
+   a. Parse event.input.command via walker. (The dispatcher parses
+      independently from step 3 today — sub-millisecond per event.
+      Cross-step AST caching is a future optimization.)
    b. For every observer whose `watch` filter matches:
         - `watch.inputMatches.command` matches raw outer command
           OR any ref.text (wrapper-aware, ADR §12).
