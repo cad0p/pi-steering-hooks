@@ -2099,6 +2099,143 @@ describe("buildEvaluator: findEntries", () => {
 			"findEntries must return the same array reference on repeat calls",
 		);
 	});
+
+	it("invalidates the cache on appendEntry so later reads see the write (S2/E1)", async () => {
+		// Within a single rule: read X, write X, read X — the second read
+		// must reflect the write. Pre-S2 the cache held the pre-write list
+		// and masked the write within one phase.
+		let before: number | null = null;
+		let after: number | null = null;
+		const rule: Rule = {
+			name: "s2-single-rule",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "s2 single",
+			when: {
+				condition: (ctx) => {
+					before = ctx.findEntries("marker").length;
+					ctx.appendEntry("marker", { note: "added" });
+					after = ctx.findEntries("marker").length;
+					return false; // don't fire; we only care about the reads
+				},
+			},
+		};
+		const host = makeHost();
+		const ctx = makeCtx("/r", host.entries);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), host);
+		await evaluator.evaluate(bashEvent("echo x"), ctx, 0);
+		assert.equal(before, 0, "pre-write read must see zero entries");
+		assert.equal(after, 1, "post-write read must see the new entry");
+	});
+
+	it("cross-rule: rule A's onFire write is visible to rule B's when.happened (S2/E1)", async () => {
+		// Rule A fires and writes "A-fired" via onFire. Rule B's
+		// when.happened reads "A-fired" with `in: "agent_loop"` and fires
+		// only when the write is NOT present (the built-in `happened`
+		// semantics). Pre-S2 the cached read in rule B saw the pre-write
+		// snapshot and wrongly fired.
+		const ruleA: Rule = {
+			name: "a",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "a fires",
+			writes: ["A-fired"],
+			onFire: (ctx) => ctx.appendEntry("A-fired", {}),
+		};
+		const ruleB: Rule = {
+			name: "b",
+			tool: "bash",
+			field: "command",
+			pattern: "^echo",
+			reason: "b fires only if A has not fired this loop",
+			when: { happened: { type: "A-fired", in: "agent_loop" } },
+		};
+		const host = makeHost();
+		const ctx = makeCtx("/r", host.entries);
+		const evaluator = buildEvaluator(
+			{ rules: [ruleA, ruleB], defaultNoOverride: false },
+			resolve(),
+			host,
+		);
+		const result = await evaluator.evaluate(
+			bashEvent("echo x"),
+			ctx,
+			7,
+		);
+		// Rule A fires first (first-match-wins). Its block verdict is
+		// returned; rule B doesn't get to evaluate on this single event.
+		assert.ok(result && result.block === true);
+		assert.ok(
+			/\[steering:a@user\]/.test(result.reason ?? ""),
+			`expected rule A to fire; got: ${result.reason}`,
+		);
+		// The onFire wrote an "A-fired" entry tagged with the current
+		// agentLoopIndex. Verify it landed — the cross-rule visibility
+		// consequence is demonstrated by the next test.
+		assert.equal(host.appended.length, 1);
+		assert.equal(host.appended[0]!.type, "A-fired");
+	});
+
+	it("the override-audit write in an earlier rule is visible to a later rule's when.happened (S2/E1)", async () => {
+		// A rule-level `noOverride: false` rule writes a
+		// `steering-override` audit entry when the agent supplies an
+		// override comment. A later rule can gate on that via
+		// `when.happened: { type: "steering-override", in: "agent_loop" }`.
+		// Pre-S2, the later rule's cached findEntries read from before the
+		// override wrote would miss the audit entry.
+		const overridable: Rule = {
+			name: "overridable",
+			tool: "bash",
+			field: "command",
+			pattern: /^git\s+push/,
+			reason: "overridable",
+			noOverride: false,
+		};
+		// A second rule that fires ONLY when no steering-override has
+		// happened in this agent loop. With S2 in place, the override
+		// written by `overridable` invalidates the cache — so this rule
+		// sees the fresh entry and its `when.happened` returns false.
+		// Pre-S2, the cached read would miss the override write and this
+		// rule would wrongly fire.
+		const gate: Rule = {
+			name: "override-gate",
+			tool: "bash",
+			field: "command",
+			pattern: /^git\s+push/,
+			reason: "gate",
+			when: {
+				happened: { type: "steering-override", in: "agent_loop" },
+			},
+		};
+		const host = makeHost();
+		const ctx = makeCtx("/r", host.entries);
+		const evaluator = buildEvaluator(
+			{ rules: [overridable, gate] },
+			resolve(),
+			host,
+		);
+		// Send a command that matches both rules AND carries an override
+		// comment addressing `overridable`. The evaluator:
+		//   1. Evaluates `overridable` → fires → override comment accepted
+		//      → writes steering-override audit entry → returns "overridden".
+		//   2. Continues to `gate` → when.happened reads steering-override
+		//      — with S2, sees the fresh audit entry → predicate returns
+		//      false → rule does NOT fire.
+		const result = await evaluator.evaluate(
+			bashEvent(
+				"git push # steering-override: overridable — shipping a hotfix",
+			),
+			ctx,
+			3,
+		);
+		assert.equal(
+			result,
+			undefined,
+			"second rule should not fire after the override audit is visible",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------

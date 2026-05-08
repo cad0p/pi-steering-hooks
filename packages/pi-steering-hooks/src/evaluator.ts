@@ -66,6 +66,7 @@ import {
 	createAppendEntry,
 	createExecCache,
 	createFindEntries,
+	createSessionEntryCache,
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
 import { extractOverride } from "./evaluator-internals/override.ts";
@@ -638,9 +639,17 @@ async function evaluateEventInner(
 	// findEntries reads the current session JSONL on demand; appendEntry
 	// auto-tags writes with `_agentLoopIndex` so rules using
 	// `when.happened` can filter by agent-loop scope.
+	//
+	// findEntries + appendEntry share a session-entry cache so a write
+	// performed by an earlier rule's onFire (or by the override-audit
+	// path) invalidates the cached read — later rules' when.happened
+	// predicates see the fresh write instead of a stale snapshot
+	// (S2/E1). The evaluator itself doesn't interleave writes with reads,
+	// but onFire + override-audit do.
 	const exec = createExecCache(host, ctx.cwd);
-	const findEntries = createFindEntries(ctx);
-	const appendEntry = createAppendEntry(host, agentLoopIndex);
+	const entryCache = createSessionEntryCache();
+	const findEntries = createFindEntries(ctx, entryCache);
+	const appendEntry = createAppendEntry(host, agentLoopIndex, entryCache);
 
 	const shared: SharedEvalContext = {
 		agentLoopIndex,

@@ -164,16 +164,31 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
  * The returned closure matches both {@link PredicateContext.appendEntry}
  * and {@link ObserverContext.appendEntry} so the evaluator and the
  * observer dispatcher share one wrapper.
+ *
+ * `findEntriesCache` (optional) is a cache map shared with a sibling
+ * {@link createFindEntries} closure. When supplied, every `appendEntry`
+ * call invalidates the cache entry for the written `customType` so
+ * the next `findEntries(customType)` re-reads the session JSONL and
+ * sees the newly-written entry (S2/E1). Omit the parameter to keep
+ * the pre-S2 behaviour (no invalidation) — handy for tests or callers
+ * that don't pair the two closures.
  */
 export function createAppendEntry(
 	host: EvaluatorHost,
 	agentLoopIndex: number,
+	findEntriesCache?: Map<string, Array<{ data: unknown; timestamp: number }>>,
 ): PredicateContext["appendEntry"] {
 	return <T>(customType: string, data?: T) => {
 		const tagged = isPlainObject(data)
 			? { ...data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
 			: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
 		host.appendEntry(customType, tagged);
+		// S2/E1: drop the cached read for this customType so a later
+		// `findEntries(customType)` call from the same phase re-materializes
+		// the list and sees the write we just made. Without this, a rule's
+		// `onFire` that writes + a later rule's `when.happened` that reads
+		// see inconsistent snapshots within one tool_call.
+		findEntriesCache?.delete(customType);
 	};
 }
 
@@ -193,31 +208,31 @@ export function createAppendEntry(
  * Results are memoized PER invocation of `createFindEntries` by
  * customType. The evaluator rebuilds the closure on every tool_call;
  * the observer dispatcher rebuilds on every tool_result. So each phase
- * sees a consistent snapshot, but subsequent calls to the SAME closure
- * with the same customType return the previously-materialized array.
+ * sees a consistent snapshot across reads.
  *
- * Staleness caveat: appending an entry via `ctx.appendEntry` during the
- * same phase does NOT invalidate the cache for this closure. Within one
- * `evaluate()` call the evaluator never writes entries while predicates
- * read them (override-audit writes happen AFTER the when-chain resolves
- * — see `evaluateCandidate`), so this is sound. Observer handlers that
- * both read and write in the same phase should read first or call
- * `findEntries` before their own `appendEntry`.
+ * Cross-rule write visibility (S2/E1): when the same phase also uses
+ * a paired {@link createAppendEntry} with the SAME cache map, a write
+ * during rule A's `onFire` invalidates the cached read for that
+ * customType so rule B's `when.happened` predicate sees the fresh
+ * entry. Callers that want this consistency pass in a shared cache
+ * via the optional `cache` parameter; callers that omit it get the
+ * old per-closure snapshot behaviour (pre-S2), which is sound only
+ * when the closure never interleaves reads with writes.
  *
  * The `ctx` argument is the pi `ExtensionContext` — we re-read
- * `getEntries()` only on the first miss per customType. Cache keys are
- * per-closure so cross-tool_call or cross-tool_result reads always see
- * the freshest state (a new closure = a new cache).
+ * `getEntries()` only on a cache miss. Cache keys are per-closure (or
+ * per shared cache) so cross-tool_call or cross-tool_result reads
+ * always see the freshest state (a new closure = a new cache).
  */
 export function createFindEntries(
 	ctx: ExtensionContext,
+	cache?: Map<string, Array<{ data: unknown; timestamp: number }>>,
 ): PredicateContext["findEntries"] {
-	const cache = new Map<
-		string,
-		Array<{ data: unknown; timestamp: number }>
-	>();
+	const entryCache =
+		cache ??
+		new Map<string, Array<{ data: unknown; timestamp: number }>>();
 	return <T>(customType: string) => {
-		const hit = cache.get(customType);
+		const hit = entryCache.get(customType);
 		if (hit !== undefined) {
 			return hit as Array<{ data: T; timestamp: number }>;
 		}
@@ -231,12 +246,41 @@ export function createFindEntries(
 				timestamp: Number.isNaN(ts) ? 0 : ts,
 			});
 		}
-		cache.set(
+		entryCache.set(
 			customType,
 			out as Array<{ data: unknown; timestamp: number }>,
 		);
 		return out;
 	};
+}
+
+/**
+ * Allocate a fresh session-entry cache shared between a paired
+ * {@link createFindEntries} + {@link createAppendEntry} for the same
+ * tool_call (evaluator) or tool_result (observer dispatcher) phase.
+ *
+ * Using a shared cache gives two guarantees the evaluator + dispatcher
+ * rely on:
+ *
+ *   1. Consistent reads: N calls to `findEntries(type)` within one
+ *      phase materialize the entry list ONCE per type.
+ *   2. Write-through-reads (S2/E1): a write via the paired
+ *      `appendEntry` invalidates that type's cached list, so the next
+ *      read re-scans the session JSONL and observes the write. Without
+ *      this, a rule's `onFire` appending X followed by a later rule's
+ *      `when.happened: { type: X }` would read a stale pre-write
+ *      snapshot.
+ *
+ * Consumers who don't need write-through-reads (tests, one-shot
+ * `findEntries` calls) can pass a fresh cache or omit the parameter
+ * on both constructors — the closures then each get their own cache
+ * map and behave like the pre-S2 implementation.
+ */
+export function createSessionEntryCache(): Map<
+	string,
+	Array<{ data: unknown; timestamp: number }>
+> {
+	return new Map<string, Array<{ data: unknown; timestamp: number }>>();
 }
 
 // Silence a re-import of ExecOpts that older linters flag (we only use

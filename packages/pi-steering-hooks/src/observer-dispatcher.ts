@@ -46,6 +46,7 @@ import {
 import {
 	createAppendEntry,
 	createFindEntries,
+	createSessionEntryCache,
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
 import { matchesPattern } from "./evaluator-internals/predicates.ts";
@@ -137,15 +138,43 @@ async function dispatchEvent(
 	observers: readonly Observer[],
 	host: EvaluatorHost,
 ): Promise<void> {
-	// Shared per-event findEntries. Built once so an observer that
-	// reads a prior entry sees the same snapshot other observers on the
-	// same event see (mirroring evaluator semantics — evaluator rebuilds
-	// on every tool_call, dispatcher rebuilds on every tool_result).
-	const findEntries = createFindEntries(ctx);
+	// Top-level fail-open wrap (S1 follow-up, promised in d728ef0).
+	// Per-observer throws are already isolated in the inner loop; this
+	// outer wrap exists so a throw in the dispatch SCAFFOLDING (e.g. a
+	// session-JSONL read blowing up inside `createFindEntries`, or an
+	// unexpected shape on the incoming event) is logged rather than
+	// propagating back into pi's `tool_result` hook. Observers are
+	// best-effort state recorders — a broken engine should not take
+	// down the tool_result pipeline.
+	try {
+		await dispatchEventInner(event, ctx, agentLoopIndex, observers, host);
+	} catch (err) {
+		console.warn(
+			`[pi-steering-hooks] observer dispatcher threw: ${formatError(err)}`,
+		);
+	}
+}
+
+async function dispatchEventInner(
+	event: PiToolResultEvent,
+	ctx: ExtensionContext,
+	agentLoopIndex: number,
+	observers: readonly Observer[],
+	host: EvaluatorHost,
+): Promise<void> {
+	// Shared per-event session-entry cache: findEntries + appendEntry
+	// share it so an earlier observer's appendEntry invalidates the
+	// cached read for that customType, and a later observer's
+	// findEntries(customType) sees the fresh write (S2/E1). Without the
+	// shared cache, observer A appending "description-read" + observer
+	// B reading "description-read" on the same event would see a stale
+	// pre-write snapshot.
+	const entryCache = createSessionEntryCache();
+	const findEntries = createFindEntries(ctx, entryCache);
 	// Shared appendEntry: auto-tags writes with `_agentLoopIndex` so
 	// `when.happened: { in: "agent_loop" }` can filter by agent-loop
 	// scope. Safe to hoist out of the loop: the wrapper is stateless.
-	const appendEntry = createAppendEntry(host, agentLoopIndex);
+	const appendEntry = createAppendEntry(host, agentLoopIndex, entryCache);
 
 	// Hoist the per-event projections out of the loop so N observers
 	// each get the identical event shape + exit code without paying N

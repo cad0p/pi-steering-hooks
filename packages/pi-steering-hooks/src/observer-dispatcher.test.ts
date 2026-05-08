@@ -753,6 +753,53 @@ describe("buildObserverDispatcher: appendEntry + findEntries", () => {
 			_agentLoopIndex: 3,
 		});
 	});
+
+	it("cross-observer: appendEntry invalidates a sibling observer's cached findEntries read (S2/E1)", async () => {
+		// Three observers firing on the same event:
+		//   1. reader1  — reads "marker", caches the empty list.
+		//   2. writer   — appendEntry("marker", …).
+		//   3. reader2  — reads "marker" again.
+		// Pre-S2: reader2 saw the cached empty list because the cache was
+		// not invalidated on write. With S2, writer's appendEntry drops
+		// the "marker" cache slot so reader2 re-reads sessionManager and
+		// sees the fresh entry.
+		const host = makeHost();
+		const ctx = makeCtx("/r", host.entries);
+		let reader1Count: number | null = null;
+		let reader2Count: number | null = null;
+		const obs: Observer[] = [
+			{
+				name: "reader1",
+				onResult: (_e, c) => {
+					reader1Count = c.findEntries("marker").length;
+				},
+			},
+			{
+				name: "writer",
+				onResult: (_e, c) => {
+					c.appendEntry("marker", { n: 1 });
+				},
+			},
+			{
+				name: "reader2",
+				onResult: (_e, c) => {
+					reader2Count = c.findEntries("marker").length;
+				},
+			},
+		];
+		const dispatcher = buildObserverDispatcher(
+			resolvePlugins([], {}),
+			obs,
+			host,
+		);
+		await dispatcher.dispatch(bashResult("ls", 0), ctx, 5);
+		assert.equal(reader1Count, 0, "reader1 before the write sees zero");
+		assert.equal(
+			reader2Count,
+			1,
+			"reader2 after the write must see the fresh entry (S2/E1)",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
