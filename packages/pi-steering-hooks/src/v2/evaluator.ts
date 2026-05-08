@@ -60,8 +60,8 @@ import type {
 	ExtensionContext,
 	ToolCallEvent,
 	ToolCallEventResult,
-} from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import {
 	createAppendEntry,
 	createExecCache,

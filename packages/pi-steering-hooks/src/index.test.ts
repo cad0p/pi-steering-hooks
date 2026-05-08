@@ -33,7 +33,7 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import register from "./index.ts";
 import { buildSessionRuntime } from "./internal/session-runtime.ts";
 

@@ -58,7 +58,7 @@ import type {
 	ExtensionContext,
 	ToolCallEvent,
 	ToolCallEventResult,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../v2/defaults.ts";
 import { createAppendEntry } from "../v2/evaluator-internals/context.ts";
 import {

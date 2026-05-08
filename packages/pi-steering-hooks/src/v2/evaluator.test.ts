@@ -29,7 +29,7 @@ import type {
 	EditToolCallEvent,
 	ToolCallEvent,
 	WriteToolCallEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	makeCtx,
 	makeTrackedHost as makeHost,

@@ -30,7 +30,7 @@ import { describe, it } from "node:test";
 import type {
 	BashToolCallEvent,
 	ExecResult as PiExecResult,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	makeCtx,
 	makeTrackedHost,

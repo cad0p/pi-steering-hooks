@@ -35,7 +35,7 @@
 import type {
 	ExtensionContext,
 	ToolResultEvent as PiToolResultEvent,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
 	expandWrapperCommands,
 	extractAllCommandsFromAST,

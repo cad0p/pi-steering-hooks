@@ -2,7 +2,7 @@
 
 PoC workspace for two related packages:
 
-- **[`packages/pi-steering-hooks/`](packages/pi-steering-hooks/)** — AST-backed steering engine for [pi](https://github.com/mariozechner/pi-coding-agent). Deterministic tool-call guardrails with command-level effective-cwd scoping. Eventual npm package: `@cad0p/pi-steering-hooks`.
+- **[`packages/pi-steering-hooks/`](packages/pi-steering-hooks/)** — AST-backed steering engine for [pi](https://github.com/earendil-works/pi-coding-agent). Deterministic tool-call guardrails with command-level effective-cwd scoping. Eventual npm package: `@cad0p/pi-steering-hooks`.
 - **[`packages/unbash-walker/`](packages/unbash-walker/)** — utility for walking [unbash](https://github.com/webpro-nl/unbash) ASTs. Planned to be extracted into its own repo once the PoC proves the value.
 
 Both packages are currently `private: true`. Publishing is gated on PoC completion and upstream-coordination decisions (see "Status" below).

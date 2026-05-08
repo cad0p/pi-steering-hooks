@@ -11,7 +11,7 @@
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { buildSessionRuntime } from "./internal/session-runtime.ts";
 import type { EvaluatorRuntime, EvaluatorHost } from "./v2/evaluator.ts";
 import type { ObserverDispatcher } from "./v2/observer-dispatcher.ts";

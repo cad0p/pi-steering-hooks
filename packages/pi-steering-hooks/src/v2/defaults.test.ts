@@ -27,7 +27,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { BashToolCallEvent } from "@mariozechner/pi-coding-agent";
+import type { BashToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "./defaults.ts";
 import { buildEvaluator } from "./evaluator.ts";
 import { resolvePlugins } from "./plugin-merger.ts";

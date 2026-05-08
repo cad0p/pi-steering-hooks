@@ -27,7 +27,7 @@
 import type {
 	ExecResult as PiExecResult,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import type { EvaluatorHost } from "./evaluator-internals/context.ts";
 
 // ---------------------------------------------------------------------------

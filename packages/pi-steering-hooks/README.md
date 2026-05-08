@@ -1,6 +1,6 @@
 # @cad0p/pi-steering-hooks
 
-Declarative tool-call guardrails for [pi](https://github.com/mariozechner/pi-coding-agent), authored in TypeScript.
+Declarative tool-call guardrails for [pi](https://github.com/earendil-works/pi-coding-agent), authored in TypeScript.
 
 Three things that make this package distinct:
 

@@ -26,7 +26,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	expectAllows,
 	expectBlocks,
