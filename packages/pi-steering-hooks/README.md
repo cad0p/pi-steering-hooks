@@ -18,6 +18,40 @@ pi install @cad0p/pi-steering-hooks
 
 Requires **Node ≥ 22** — the loader reads `.pi/steering.ts` via native type-stripping (no `tsx` / `ts-node` runtime). On older Node the loader throws with an upgrade message at session start.
 
+### Local install (during the PoC)
+
+Until the first npm publish, install from a local clone:
+
+```bash
+git clone https://github.com/cad0p/pi-steering-hooks.git
+cd pi-steering-hooks
+
+pnpm install
+pnpm --filter @cad0p/pi-steering-hooks build   # dist/ is gitignored — build first
+
+pi install ./packages/pi-steering-hooks
+```
+
+Then restart pi.
+
+**After code changes.** Rebuild, then restart pi:
+
+```bash
+pnpm --filter @cad0p/pi-steering-hooks build
+```
+
+Why both steps matter:
+
+- `pi install <local-path>` only registers the path in settings — it does **not** run a build or any install hook.
+- The package is compiled (`"main": "./dist/index.js"`) and `dist/` is gitignored, so edits to `src/` only take effect after a build.
+- `/reload` inside pi picks up settings, skills, prompts, and themes — but for compiled extension code, transitive `dist/` imports sit in Node's native ESM cache and are not reliably reloaded. A full pi restart is the safe option after rebuilding.
+
+For tight iteration, run the build in watch mode in a separate terminal and only restart pi when you want to pick up the latest compiled output:
+
+```bash
+pnpm --filter @cad0p/pi-steering-hooks build -- --watch
+```
+
 ## Quick start
 
 Create `.pi/steering.ts` at your project root:
