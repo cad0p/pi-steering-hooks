@@ -31,8 +31,10 @@ import type {
 	PredicateContext,
 	PredicateFn,
 	PredicateHandler,
+	ToolResultEvent,
 	WhenClause,
 } from "../schema.ts";
+import { matchesWatch } from "../internal/watch-matcher.ts";
 import { AGENT_LOOP_INDEX_KEY } from "./context.ts";
 
 // ---------------------------------------------------------------------------
@@ -256,18 +258,25 @@ function evaluateHappened(
  *
  * Only `&&`-joined predecessors qualify (see
  * {@link PredicateContext.priorAndChainedRefs} and ADR amendment). The
- * guarantee: `A && B` short-circuits on A's failure, so if A observers
- * the event on success, the speculative decision is safe to grant —
- * either A succeeds (event writes, block was correct to skip) or A
- * fails and B (the current ref) never runs.
+ * guarantee: `A && B` short-circuits on A's failure, so if A would
+ * make the observer fire on success, the speculative decision is safe
+ * to grant — either A succeeds (event writes, block was correct to
+ * skip) or A fails and B (the current ref) never runs.
  *
- * Observer matching is command-pattern only: we check each candidate
- * observer's `watch.inputMatches.command` against the prior ref text.
- * Observers with no command pattern can't be safely matched (they
- * would fire on any bash event, which isn't a strong enough signal),
- * so they're skipped here. That's a user-facing authoring
- * requirement: observers participating in chain-aware allow must
- * declare `watch.inputMatches.command`.
+ * Filter semantics are delegated to the dispatcher's
+ * {@link matchesWatch} via a synthesized `ToolResultEvent`
+ * representing "a successful bash ref about to run" — the two paths
+ * share one filter contract so new `watch` fields added to
+ * {@link matchesWatch} automatically gate speculative-allow correctly.
+ * Chain-aware-specific invariants (see
+ * {@link observerEligibleForSpeculativeAllow}) are layered on top.
+ *
+ * IMPORTANT: `priorAndChainedRefs` contains refs STRICTLY BEFORE the
+ * current ref in source order. The contract is preserved by
+ * {@link computePriorAndChains} (a left-to-right walk that never
+ * forward-references) — we do NOT consult refs that come after, which
+ * would let an agent bypass a block by placing the "satisfying" ref
+ * after the blocked ref.
  */
 function speculativeHappenedAllow(
 	ctx: PredicateContext,
@@ -279,62 +288,60 @@ function speculativeHappenedAllow(
 	if (!observers || observers.length === 0) return false;
 	for (const ref of priorRefs) {
 		for (const obs of observers) {
-			if (observerMatchesRefCommand(obs.watch, ref.text)) return true;
+			if (!observerEligibleForSpeculativeAllow(obs.watch)) continue;
+			// Synthesize the minimal event shape `matchesWatch` inspects
+			// for a successful bash ref. Fields the dispatcher fills on a
+			// real `tool_result` are either covered (`toolName`, `input`,
+			// `exitCode`) or irrelevant to the filter (`output` — never
+			// read by `matchesWatch`). If a future filter field becomes
+			// speculative-relevant, extend the synthesis here; the filter
+			// body itself stays single-sourced in watch-matcher.ts.
+			const synthetic: ToolResultEvent = {
+				toolName: "bash",
+				input: { command: ref.text },
+				output: undefined,
+				exitCode: 0,
+			};
+			if (matchesWatch(obs.watch, synthetic)) return true;
 		}
 	}
 	return false;
 }
 
 /**
- * Test whether an observer's `watch` is eligible for chain-aware
- * speculative allow on a bash ref's text. Chain-aware allow depends on
- * the observer ACTUALLY firing when the prior `&&` ref runs (and
- * succeeds — `&&` guarantees that). To match the production
- * dispatcher's firing conditions, the observer's `watch`:
+ * Chain-aware-specific pre-gate layered on top of the shared
+ * {@link matchesWatch} contract. `matchesWatch` answers "would this
+ * observer fire on this concrete event?"; speculative-allow needs the
+ * stronger question "is it SAFE to grant an allow on the mere presence
+ * of a prior `&&` ref matching this watch?". Two gates are specific to
+ * speculative-allow:
  *
- *   - must not exclude `bash` via `toolName` — prior refs always
- *     come from the bash tool;
- *   - must not require failure/non-success exit codes — `&&`
- *     short-circuits on failure, so if the prior ref fails the
- *     successor doesn't run and the speculative decision is moot.
- *     An observer whose `exitCode` is `"failure"` or a non-zero
- *     number can never fire via the `&&` short-circuit path, so the
- *     event will never be written and speculative allow would be
- *     over-permissive;
- *   - must declare an `inputMatches.command` pattern the prior ref
- *     text matches — a command-agnostic observer isn't a strong
- *     enough signal (it would fire on any bash event).
+ *   - **Missing `inputMatches.command`**: an observer that fires on
+ *     any bash event isn't a strong enough signal — it would grant
+ *     allow on any `foo && cr` regardless of what `foo` does.
+ *     Observers participating in chain-aware allow must declare
+ *     `watch.inputMatches.command` (documented authoring
+ *     requirement).
+ *   - **toolName excluded from bash**: prior refs always come from
+ *     the bash tool; a non-bash watch can never fire on one. Caught
+ *     structurally by {@link matchesWatch}, but we fail fast here
+ *     too so the synthesized event isn't constructed for obviously
+ *     incompatible observers.
  *
- * Observers not meeting all three requirements are skipped (see
- * {@link speculativeHappenedAllow} for rationale).
+ * Exit-code validation is delegated entirely to {@link matchesWatch}
+ * against the synthesized `exitCode: 0` event — observers gated on
+ * `"failure"` or non-zero codes can never fire via `&&` short-circuit
+ * and `matchesWatch` correctly rejects the synthesized success event
+ * for them.
  */
-function observerMatchesRefCommand(
+function observerEligibleForSpeculativeAllow(
 	watch: ObserverWatch | undefined,
-	refText: string,
 ): boolean {
 	if (!watch) return false;
-	// Refs always originate from the bash tool; observers scoped to a
-	// different tool can't fire on a prior `&&` bash ref.
 	if (watch.toolName !== undefined && watch.toolName !== "bash") return false;
-	// `&&` only advances on success. An observer demanding failure (or
-	// a specific non-success exit code) never fires on a ref that ran
-	// successfully, so treating its `writes` as speculatively-happening
-	// would be wrong. `"success"`, `"any"`, `0`, and absent exit-code
-	// constraints are safe; anything else is not.
-	const exit = watch.exitCode;
-	if (
-		exit !== undefined &&
-		exit !== "success" &&
-		exit !== "any" &&
-		exit !== 0
-	) {
-		return false;
-	}
-	const inputMatches = watch.inputMatches;
-	if (!inputMatches) return false;
-	const commandPattern = inputMatches["command"];
-	if (commandPattern === undefined) return false;
-	return matchesPattern(commandPattern, refText);
+	const command = watch.inputMatches?.["command"];
+	if (command === undefined) return false;
+	return true;
 }
 
 /**

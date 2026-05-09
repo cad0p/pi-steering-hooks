@@ -37,29 +37,30 @@ import type {
 	ToolResultEvent as PiToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
-	expandWrapperCommands,
-	extractAllCommandsFromAST,
-	getBasename,
-	getCommandArgs,
-	parse as parseBash,
-} from "unbash-walker";
-import {
 	createAppendEntry,
 	createFindEntries,
 	createSessionEntryCache,
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
-import { matchesPattern } from "./evaluator-internals/predicates.ts";
 import { mergeObserversUserFirst } from "./internal/merge-observers.ts";
+import {
+	extractRefTextsForBash,
+	matchesWatch,
+} from "./internal/watch-matcher.ts";
 import { validateName } from "./plugin-merger.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
 	Observer,
 	ObserverContext,
-	ObserverWatch,
-	Pattern,
 	ToolResultEvent as SchemaToolResultEvent,
 } from "./schema.ts";
+
+// Re-export the shared filter contract so existing consumers that
+// imported `matchesWatch` from this module (most notably the testing
+// harness's `testObserver`) don't need to switch imports. The source
+// of truth lives in `./internal/watch-matcher.ts`; this re-export
+// keeps the public surface stable.
+export { matchesWatch } from "./internal/watch-matcher.ts";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -226,158 +227,14 @@ async function dispatchEventInner(
 }
 
 // ---------------------------------------------------------------------------
-// watch filter evaluation
+// Schema event projection
 // ---------------------------------------------------------------------------
-
-/**
- * True if the observer's `watch` filter accepts this event. No watch
- * → matches everything. Semantics per ADR "Observer schema":
- *
- *   - `toolName` — exact match against `event.toolName`.
- *   - `inputMatches` — every declared key's Pattern must match against
- *     `event.input[key]` if that key exists AND the value is a string.
- *     Keys absent from the event's input (or non-string values) make
- *     the whole filter fail — documented fail-closed choice: subset
- *     checks don't silently pass when the expected field isn't present.
- *   - `exitCode` — `"success"` → 0, `"failure"` → non-zero,
- *     `"any"`/omitted → pass, numeric → exact match. `exitCode` is
- *     sourced from the event's `exitCode` field (bash only via pi's
- *     `details.exitCode` after projection to the schema shape); other
- *     tool results leave it `undefined` and satisfy everything except
- *     a numeric `exitCode:` (treated as "no match" — bash-specific
- *     filter).
- *
- * Wrapper-aware command matching (ADR §12): when `inputMatches.command`
- * is set AND the event is a bash event, the pattern matches if EITHER
- * the raw outer `event.input.command` OR any extracted command ref
- * text matches. So `sh -c 'brazil ws sync'` with pattern
- * `/^brazil\s+ws\s+sync$/` fires the observer — the outer raw command
- * starts with `sh`, but the walker-extracted ref `brazil ws sync` does
- * hit the anchored pattern.
- *
- * Exported so the testing module's `testObserver` can reuse the exact
- * same filter semantics as production — prevents silent drift between
- * the test harness and the real dispatcher on wrapper-aware matching
- * and fail-closed edge cases.
- *
- * Performance: when multiple observers share the same event (the
- * production dispatch path), pass a memoizing `refTextsProvider` to
- * parse the bash command once across observers. Standalone callers
- * (e.g. `testObserver` evaluating one observer in isolation) can omit
- * it — the default provider parses on demand.
- */
-export function matchesWatch(
-	watch: ObserverWatch | undefined,
-	event: SchemaToolResultEvent,
-	refTextsProvider?: () => readonly string[] | null,
-): boolean {
-	if (!watch) return true;
-
-	if (watch.toolName !== undefined && watch.toolName !== event.toolName) {
-		return false;
-	}
-
-	if (watch.inputMatches) {
-		const rawInput = event.input;
-		const input: Record<string, unknown> =
-			typeof rawInput === "object" && rawInput !== null
-				? (rawInput as Record<string, unknown>)
-				: {};
-		const getRefTexts =
-			refTextsProvider ?? (() => extractRefTextsForBash(event));
-		for (const [key, pat] of Object.entries(watch.inputMatches)) {
-			const value = input[key];
-			if (typeof value !== "string") return false;
-			if (!matchesInputField(key, pat, value, event, getRefTexts)) {
-				return false;
-			}
-		}
-	}
-
-	if (watch.exitCode !== undefined && watch.exitCode !== "any") {
-		if (!matchesExitCode(event.exitCode, watch.exitCode)) return false;
-	}
-	return true;
-}
-
-/**
- * Match a single `inputMatches` key/value against the event. `command`
- * on a bash event is wrapper-aware per ADR §12 — the raw outer command
- * OR any extracted ref text matches. All other keys (and `command` on
- * non-bash events) keep the straight raw-string match the v0.0 engine
- * shipped with.
- *
- * Share the evaluator's regex cache (module-scoped in `predicates.ts`)
- * so observer `inputMatches` reuse the same compiled `RegExp` as
- * equivalent rule patterns.
- */
-function matchesInputField(
-	key: string,
-	pat: Pattern,
-	value: string,
-	event: SchemaToolResultEvent,
-	getRefTexts: () => readonly string[] | null,
-): boolean {
-	if (matchesPattern(pat, value)) return true;
-
-	// Wrapper-aware fallback: only for `command` on bash events. Other
-	// fields (path, content, …) don't have wrapper analogues — a
-	// file-path pattern has nothing to do with bash AST refs, so
-	// leaving them on the raw-string path is both correct and a perf
-	// guard against needless parsing on non-bash events.
-	if (key !== "command" || event.toolName !== "bash") return false;
-
-	const refTexts = getRefTexts();
-	if (refTexts === null) return false;
-	for (const text of refTexts) {
-		if (matchesPattern(pat, text)) return true;
-	}
-	return false;
-}
-
-/**
- * Extract per-ref flattened text (basename + args joined with spaces)
- * from a bash tool_result's outer command, mirroring the evaluator's
- * `prepareBashState` text projection so observer watch patterns match
- * the same strings rule patterns see for the same command.
- *
- * Returns `null` when the event isn't a bash tool_result, the raw
- * command is missing/non-string, or the walker throws while parsing
- * (hard-to-parse command — fall back to raw-only matching without
- * blowing up dispatch). Unlike the evaluator we don't walk trackers:
- * observers don't receive `walkerState`, so the parse+extract+expand
- * stages suffice.
- */
-function extractRefTextsForBash(
-	event: SchemaToolResultEvent,
-): readonly string[] | null {
-	if (event.toolName !== "bash") return null;
-	const input =
-		typeof event.input === "object" && event.input !== null
-			? (event.input as { command?: unknown })
-			: undefined;
-	const command = input?.command;
-	if (typeof command !== "string" || command.length === 0) return null;
-	try {
-		const script = parseBash(command);
-		const extracted = extractAllCommandsFromAST(script, command);
-		const { commands: refs } = expandWrapperCommands(extracted);
-		return refs.map((ref) =>
-			`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim(),
-		);
-	} catch {
-		// Don't let a parse error take down dispatch — a malformed
-		// command still deserves a raw-match chance. Returning null
-		// (as opposed to []) skips ref matching entirely for this event.
-		return null;
-	}
-}
 
 /**
  * Extract an exit code from a pi tool_result event. Only bash events
  * carry one (via `details.exitCode`). Other tool results lack a
- * meaningful numeric code; we return `undefined` and let
- * {@link matchesExitCode} decide.
+ * meaningful numeric code; we return `undefined` and let the watch
+ * filter's `exitCode` check decide.
  */
 function extractExitCode(event: PiToolResultEvent): number | undefined {
 	if (event.toolName !== "bash") return undefined;
@@ -385,24 +242,6 @@ function extractExitCode(event: PiToolResultEvent): number | undefined {
 	if (!details || typeof details.exitCode !== "number") return undefined;
 	return details.exitCode;
 }
-
-function matchesExitCode(
-	code: number | undefined,
-	filter: number | "success" | "failure",
-): boolean {
-	if (typeof filter === "number") {
-		// Numeric filter requires a concrete code; no-code events (non-bash)
-		// never match a numeric filter.
-		return code === filter;
-	}
-	if (filter === "success") return code === 0;
-	if (filter === "failure") return code !== undefined && code !== 0;
-	return true;
-}
-
-// ---------------------------------------------------------------------------
-// Schema event projection
-// ---------------------------------------------------------------------------
 
 /**
  * Project pi's concrete `ToolResultEvent` onto the schema's minimal
