@@ -500,6 +500,80 @@ describe("mockContext", () => {
 			{ customType: "items", data: { value: [1, 2, 3], _agentLoopIndex: 5 } },
 		]);
 	});
+
+	// ---- Chain-aware fields: priorAndChainedRefs + observersByWrittenEvent ----
+
+	it("priorAndChainedRefs defaults to undefined on the returned ctx", () => {
+		// Matches the production shape for non-bash candidates or when the
+		// evaluator has no prior-&& refs to thread in.
+		const ctx = mockContext();
+		assert.equal(ctx.priorAndChainedRefs, undefined);
+	});
+
+	it("observersByWrittenEvent defaults to undefined on the returned ctx", () => {
+		const ctx = mockContext();
+		assert.equal(ctx.observersByWrittenEvent, undefined);
+	});
+
+	it("threads priorAndChainedRefs through to the ctx (chain-aware scenario)", () => {
+		const ctx = mockContext({
+			priorAndChainedRefs: [{ text: "sync" }, { text: "echo ok" }],
+		});
+		assert.deepEqual(ctx.priorAndChainedRefs, [
+			{ text: "sync" },
+			{ text: "echo ok" },
+		]);
+	});
+
+	it("threads observersByWrittenEvent through to the ctx (chain-aware scenario)", () => {
+		const obs: Observer = {
+			name: "test-obs",
+			writes: ["X"],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+			},
+			onResult: () => {},
+		};
+		const map = new Map<string, readonly Observer[]>([["X", [obs]]]);
+		const ctx = mockContext({ observersByWrittenEvent: map });
+		assert.equal(ctx.observersByWrittenEvent, map);
+		assert.deepEqual(ctx.observersByWrittenEvent?.get("X"), [obs]);
+	});
+
+	it("testPredicate forwards chain-aware fields so the built-in happened speculative-allow path can be driven", async () => {
+		// Surface-level: a plugin author can write a custom predicate that
+		// introspects chain-aware state and exercise it via testPredicate
+		// without dropping to loadHarness. Here we simulate a predicate
+		// that fires iff at least one prior-&& ref matches an observer
+		// writing the requested event — a hand-rolled sketch of the
+		// built-in happened speculative-allow path.
+		const spyPredicate: PredicateHandler<string> = async (event, ctx) => {
+			const obs = ctx.observersByWrittenEvent?.get(event) ?? [];
+			const refs = ctx.priorAndChainedRefs ?? [];
+			return obs.length > 0 && refs.length > 0;
+		};
+		const syncObs: Observer = {
+			name: "sync-tracker",
+			writes: ["SYNC"],
+			watch: { toolName: "bash", inputMatches: { command: /^sync\b/ } },
+			onResult: () => {},
+		};
+		const map = new Map<string, readonly Observer[]>([["SYNC", [syncObs]]]);
+
+		const without = await testPredicate(spyPredicate, "SYNC", {});
+		assert.equal(without, false, "no chain-aware state → predicate sees nothing");
+
+		const withChain = await testPredicate(spyPredicate, "SYNC", {
+			priorAndChainedRefs: [{ text: "sync" }],
+			observersByWrittenEvent: map,
+		});
+		assert.equal(
+			withChain,
+			true,
+			"with both fields populated, the predicate can reason about chain-aware state",
+		);
+	});
 });
 
 // ---------------------------------------------------------------------------
