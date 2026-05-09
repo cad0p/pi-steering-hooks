@@ -198,7 +198,7 @@ describe("schema: shape smoke tests", () => {
 		assert.deepEqual(obs.writes, ["ws-sync-done", "ws-sync-failed"]);
 	});
 
-	it("WhenClause.happened accepts the { type, in } shape", () => {
+	it("WhenClause.happened accepts the { event, in } shape", () => {
 		const loop: WhenClause = {
 			happened: { event: "ws-sync-done", in: "agent_loop" },
 		};

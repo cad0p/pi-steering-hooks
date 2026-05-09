@@ -203,8 +203,9 @@ export type AllWrites<
  * Generic constraints:
  *   - `disabledRules` / `disabledPlugins` typed against the rule / plugin
  *     name unions — typos rejected at compile time.
- *   - `rules[].when.happened.event` typed against `AllWrites` — typos
- *     rejected at compile time.
+ *   - `rules[].when.happened.event` and `rules[].when.happened.since`
+ *     are both typed against `AllWrites` — typos rejected at compile
+ *     time.
  */
 export interface DefineConfigInput<
 	P extends readonly Plugin[],
@@ -233,9 +234,12 @@ export interface DefineConfigInput<
  * The `disabledRules` / `disabledPlugins` arrays are typed against the unions
  * of registered rule / plugin names — typos rejected.
  *
- * `rules[].when.happened.event` is typed against the union of all
- * `writes` declarations across plugin rules, plugin observers, user
- * rules, and user observers — typos rejected.
+ * `rules[].when.happened.event` and `rules[].when.happened.since` are
+ * both typed against the union of all `writes` declarations across
+ * plugin rules, plugin observers, user rules, and user observers —
+ * typos rejected. (The `since` field on the `Writes` union enforces
+ * the same contract as `event`: the sentinel event must be known to
+ * the config, not a free-form string.)
  *
  * Runtime behavior: returns a shallow copy of the input with optional
  * fields normalized from `readonly` arrays to mutable arrays (the

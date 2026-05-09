@@ -421,7 +421,7 @@ describe("pi-steering list", () => {
 		assert.match(r.stdout, /--format=text\|json/);
 	});
 
-	it("summarizes happened: predicate with its type", async () => {
+	it("summarizes happened: predicate with its event", async () => {
 		writeScratchConfig(
 			scratch,
 			`export default {

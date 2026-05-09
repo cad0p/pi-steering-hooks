@@ -537,7 +537,7 @@ describe("buildEvaluator: when.happened", () => {
 		assert.ok(fires);
 	});
 
-	it("in: 'session' — skips whenever ANY entry of type exists", async () => {
+	it("in: 'session' — skips whenever ANY entry of event exists", async () => {
 		const rule: Rule = {
 			name: "once-per-session",
 			tool: "bash",
@@ -558,7 +558,7 @@ describe("buildEvaluator: when.happened", () => {
 		assert.equal(skips, undefined);
 	});
 
-	it("in: 'session' — fires when no entry of type exists", async () => {
+	it("in: 'session' — fires when no entry of event exists", async () => {
 		const rule: Rule = {
 			name: "once-per-session",
 			tool: "bash",
@@ -576,7 +576,7 @@ describe("buildEvaluator: when.happened", () => {
 		assert.ok(fires);
 	});
 
-	it("not.happened: inverts — fires when type HAS happened in agent loop", async () => {
+	it("not.happened: inverts — fires when event HAS happened in agent loop", async () => {
 		const rule: Rule = {
 			name: "no-cr-twice",
 			tool: "bash",
@@ -602,7 +602,7 @@ describe("buildEvaluator: when.happened", () => {
 		assert.ok(fires);
 	});
 
-	it("not.happened: skips — when type has NOT happened in agent loop", async () => {
+	it("not.happened: skips — when event has NOT happened in agent loop", async () => {
 		const rule: Rule = {
 			name: "no-cr-twice",
 			tool: "bash",
@@ -1501,6 +1501,71 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 			"user observer's tighter watch wins; bare `sync` no longer matches",
 		);
 	});
+
+	// ---- Subshell coverage: multi-ref + conservative under-allow pins ----
+
+	it("allows `(echo hi && sync) && cr` — multi-ref subshell inherits the outer && chain", async () => {
+		// GAP-01 regression fence. The walker flattens the subshell into
+		// a linear ref list with `echo.joiner='&&', sync.joiner='&&',
+		// cr.joiner=undefined`. Under the chain reachability rule, sync is
+		// unconditionally reached via echo's `&&` and contributes to cr's
+		// prior set. Speculative allow fires via the sync observer.
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("(echo hi && sync) && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"multi-ref subshell: both refs inside the `(...)` participate in cr's prior chain; sync matches observer",
+		);
+	});
+
+	it("conservative-under: `foo && (bar ; sync) && cr` — only sync in prior, foo is dropped at `;`", async () => {
+		// GAP-02 regression fence. The walker flattens to
+		// `foo.joiner='&&', bar.joiner=';', sync.joiner='&&',
+		// cr.joiner=undefined`. The `;` inside the subshell clears the
+		// prior chain, so cr's prior set is `[sync]` only — NOT
+		// `[foo, sync]`. This is the intentional conservative-under trade-
+		// off documented on `computePriorAndChains`; pin it so a future
+		// walker change that treats the outer `&&` as bridging across the
+		// `;` doesn't silently flip to an over-allow.
+		//
+		// We prove it with an observer that matches ONLY `foo` (not sync).
+		// If foo were in cr's prior chain the rule would wrongly
+		// speculative-allow; because the `;` cleared it, the rule must
+		// still fire.
+		const fooObserver: Observer = {
+			name: "foo-only",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^foo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [fooObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("foo && (bar ; sync) && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"conservative-under: cr's prior is [sync] after `;`; fooObserver can't allow",
+		);
+	});
 });
 
 describe("buildEvaluator: when.not + when.condition", () => {
@@ -2243,7 +2308,7 @@ describe("buildEvaluator: override comments", () => {
 		assert.equal(data["rule"], "no-force-push");
 	});
 
-	it('when.happened { type: "steering-override", in: "agent_loop" } filters overrides by current loop (F3)', async () => {
+	it('when.happened { event: "steering-override", in: "agent_loop" } filters overrides by current loop (F3)', async () => {
 		// Loop 7: override is consumed for no-force-push. A DIFFERENT rule
 		// gates on `happened: { steering-override, agent_loop }` — after the
 		// override lands in loop 7 it should observe "happened" in loop 7
@@ -2307,7 +2372,7 @@ describe("buildEvaluator: override comments", () => {
 		);
 	});
 
-	it('when.happened { type: "steering-override", in: "session" } sees overrides across loops (F3)', async () => {
+	it('when.happened { event: "steering-override", in: "session" } sees overrides across loops (F3)', async () => {
 		// Session scope ignores the `_agentLoopIndex` tag — any override
 		// ever consumed in the session suppresses the canary regardless
 		// of which loop produced it.

@@ -628,14 +628,27 @@ Grep your config for `turnIndex` and rename every occurrence.
 
 ```diff
   when: {
--   happened: { type: "doc-read", in: "turn" }
+-   happened: { event: "doc-read", in: "turn" }
 +   happened: { event: "doc-read", in: "agent_loop" }
   }
 ```
 
 The engine throws a hard error with a migration hint if `in: "turn"` is seen. Unknown `in` values now throw at eval time with the offending rule name.
 
-### 5. Block reason format
+### 5. `when.happened.type` → `when.happened.event`
+
+```diff
+  when: {
+-   happened: { type: "doc-read", in: "agent_loop" }
++   happened: { event: "doc-read", in: "agent_loop" }
+  }
+```
+
+The field name changed because `type` collided with standard TypeScript reading (type aliases, union discriminants). `event` reads as `happened: { event: X, in: Y }` — "the X event happened in Y scope" — and pairs naturally with the `_EVENT` suffix convention for event-literal constants (e.g. `DOC_READ_EVENT`).
+
+This rename is independent of the `"turn"` → `"agent_loop"` rename above: if you track master between PR #3 and PR #4 you may have already moved to `in: "agent_loop"` while still using `type:` — run this rename separately.
+
+### 6. Block reason format
 
 Block reasons changed from `[steering:<name>]` to `[steering:<name>@<source>]`:
 
@@ -646,7 +659,7 @@ Block reasons changed from `[steering:<name>]` to `[steering:<name>@<source>]`:
 
 Source is `user` for user-authored rules, and the plugin name for plugin-shipped rules. **Update any CI grep that parses block reasons.** Tests using `expectBlocks({ rule: "no-force-push" })` work unchanged — the `rule:` matcher strips the source.
 
-### 6. Auto-tagged session entries
+### 7. Auto-tagged session entries
 
 The engine now auto-tags every `appendEntry` write with `_agentLoopIndex`, including `steering-override` audit entries. If your code parses session JSONL for overrides, accept the extra field:
 
@@ -658,7 +671,7 @@ The engine now auto-tags every `appendEntry` write with `_agentLoopIndex`, inclu
   { ruleName: "no-force-push", command: "…", _agentLoopIndex: 3 }
 ```
 
-### 7. Array / Date / Error payloads wrap
+### 8. Array / Date / Error payloads wrap
 
 The auto-tag wrapper merges into plain objects, but **wraps non-plain-object payloads** as `{ value: <payload>, _agentLoopIndex: N }`. Affected: arrays, `Date`, `Map`, `Set`, `Error`, class instances.
 
@@ -674,7 +687,7 @@ The auto-tag wrapper merges into plain objects, but **wraps non-plain-object pay
 
 Migration tip: if you care about backwards-compat, switch to writing a plain object: `ctx.appendEntry("my-list", { items: [1, 2, 3] })` — that merges cleanly.
 
-### 8. `disable` / `disablePlugins` renamed
+### 9. `disable` / `disablePlugins` renamed
 
 The two selective opt-out lists on `SteeringConfig` were renamed to
 past-participle form for shape-at-a-glance readability — lists read
@@ -695,7 +708,7 @@ The TypeScript compiler will point you at every site that needs
 updating. `.pi/steering.json` (v1 JSON) continues to use the old
 `disable` key; only the TypeScript surface changed.
 
-### 9. Nothing-new-to-do (additive)
+### 10. Nothing-new-to-do (additive)
 
 These are new in v0.1.0 but don't require migration:
 
@@ -713,6 +726,7 @@ These are new in v0.1.0 but don't require migration:
 [ ] pi types (plugin):  @mariozechner/…           → @earendil-works/…
 [ ] grep -r turnIndex       → rename to agentLoopIndex
 [ ] grep -r "in: \"turn\""  → "in: \"agent_loop\""
+[ ] grep -r "happened: { type"  → rename `type` to `event`
 [ ] CI grep for block reasons → add @source support
 [ ] session-JSONL parsers     → tolerate _agentLoopIndex field
 [ ] pnpm -r typecheck         → green
