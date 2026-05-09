@@ -61,10 +61,7 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import {
-	computePriorAndChains,
-	refToText,
-} from "./evaluator-internals/chain.ts";
+import { refToText } from "./evaluator-internals/chain.ts";
 import {
 	createAppendEntry,
 	createExecCache,
@@ -131,10 +128,14 @@ export interface EvaluatorRuntime {
  *                    a stub). Kept separate from `ExtensionContext`
  *                    because the ctx shape does not expose these.
  *
- * Note: `observersByWrittenEvent` is built ONCE at construction from
- * merged `config.observers + resolved.observers`. If future versions
- * add a dynamic-reload path (observers added at runtime), this reverse
- * index must be rebuilt on change — otherwise chain-aware
+ * Observers (`config.observers + resolved.observers`, user-first
+ * deduplicated via {@link mergeObserversUserFirst}) are threaded into
+ * {@link prepareBashState} where the walker-level synthesis pass
+ * turns them into per-ref speculative events on
+ * `walkerState.events`. The built-in `when.happened` predicate merges
+ * those with real entries via timestamp ordering. If future versions
+ * add a dynamic-reload path (observers added at runtime), this merged
+ * list must be rebuilt on change — otherwise chain-aware
  * `when.happened` consults a stale observer list. Today there is no
  * dynamic-reload path.
  */
@@ -202,25 +203,19 @@ export function buildEvaluator(
 		) as Tracker<unknown>;
 	}
 
-	// Chain-aware `when.happened`: for each event literal declared in
-	// an observer's `writes`, we index the observer(s) that produce it.
-	// The evaluator threads this map into PredicateContext so the
-	// built-in `happened` predicate can speculatively allow `&&` chains
-	// whose prior refs match a writing observer's watch. Both plugin-
-	// shipped observers and user inline observers contribute.
-	//
-	// Apply the same user-first dedup the observer-dispatcher applies
-	// (via the shared helper) so the reverse-index never keeps a plugin
-	// observer that will be shadowed at dispatch time by a user
-	// observer of the same name. Without this, chain-aware allow could
-	// grant on the shadowed plugin observer's watch pattern while the
-	// shadowed observer never fires, producing the exact infinite-loop
-	// speculative allow was designed to avoid.
+	// Merge user + plugin observers (user-first dedup via the shared
+	// helper, same convention as the observer-dispatcher). The merged
+	// list feeds the walker-level synthesis pass in
+	// {@link prepareBashState}, where eligible observers contribute
+	// speculative `walkerState.events` entries the built-in
+	// `when.happened` predicate consults alongside real entries. Without
+	// the dedup, a shadowed plugin observer's `writes` could produce
+	// synthetic entries that never match a real dispatch, re-creating
+	// the infinite-loop risk the speculative pass was designed to avoid.
 	const allObservers = mergeObserversUserFirst(
 		config.observers ?? [],
 		resolved.observers,
 	);
-	const observersByWrittenEvent = buildObserversByWrittenEvent(allObservers);
 
 	return {
 		evaluate: (event, ctx, agentLoopIndex) =>
@@ -235,35 +230,8 @@ export function buildEvaluator(
 				defaultNoOverride,
 				ruleSources,
 				allObservers,
-				observersByWrittenEvent,
 			),
 	};
-}
-
-/**
- * Build the reverse index `event literal → observers that write it`
- * from the evaluator's merged observer list. Observers with no
- * `writes[]` declaration contribute nothing (can't gate anything).
- * Returns `undefined` when the index is empty so downstream code can
- * short-circuit chain-aware logic without constructing a ctx field.
- */
-function buildObserversByWrittenEvent(
-	observers: readonly Observer[],
-): ReadonlyMap<string, readonly Observer[]> | undefined {
-	const map = new Map<string, Observer[]>();
-	for (const obs of observers) {
-		if (!obs.writes) continue;
-		for (const event of obs.writes) {
-			const bucket = map.get(event);
-			if (bucket) {
-				bucket.push(obs);
-			} else {
-				map.set(event, [obs]);
-			}
-		}
-	}
-	if (map.size === 0) return undefined;
-	return map as ReadonlyMap<string, readonly Observer[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,14 +292,6 @@ interface BashRefState {
 	readonly basename: string;
 	readonly args: readonly Word[];
 	readonly walkerState: Record<string, unknown>;
-	/**
-	 * Prior refs reachable via a continuous `&&` chain from the left of
-	 * this ref. Populated by {@link prepareBashState}; consumed by
-	 * chain-aware `when.happened`. Each entry carries the ref's
-	 * stringified text (enough to run `watch.inputMatches.command`
-	 * patterns against) — observers never see the full `CommandRef`.
-	 */
-	readonly priorAndChainedRefs: readonly { text: string }[];
 }
 
 /**
@@ -359,10 +319,9 @@ function prepareBashState(
 		trackers,
 		refs,
 	);
-	const priorChains = computePriorAndChains(refs);
 	const speculativeEvents: SpeculativeEventsByRef =
 		synthesizeSpeculativeEntries(refs, observers);
-	return refs.map((ref, i) => {
+	return refs.map((ref) => {
 		const trackerState = walkResult.get(ref) ?? { cwd: sessionCwd };
 		const events = speculativeEvents.get(ref) ?? {};
 		return {
@@ -380,7 +339,6 @@ function prepareBashState(
 			// plugin-merger.ts). The merge is a shallow copy so the walker's
 			// state object stays untouched for future evaluations.
 			walkerState: { ...trackerState, events },
-			priorAndChainedRefs: priorChains[i] ?? [],
 		};
 	});
 }
@@ -461,14 +419,6 @@ interface SharedEvalContext {
 	 * unambiguously.
 	 */
 	readonly ruleSources: ReadonlyMap<Rule, string>;
-	/**
-	 * Reverse index: event literal → observers that write it. Built
-	 * once at evaluator-construction time and threaded into
-	 * {@link PredicateContext.observersByWrittenEvent} so the built-in
-	 * `happened` predicate can chain-aware speculatively allow `&&`
-	 * chains whose prior refs match a writing observer's watch.
-	 */
-	readonly observersByWrittenEvent?: ReadonlyMap<string, readonly Observer[]>;
 }
 
 /**
@@ -504,16 +454,13 @@ interface Candidate {
 	readonly overrideEntryExtras: Record<string, string>;
 	/**
 	 * Walker state snapshot for this candidate. Bash candidates carry
-	 * the per-ref walk result; write / edit candidates leave it
-	 * undefined (no walker ran).
+	 * the per-ref walk result (including synthesized
+	 * `events: Record<customType, SyntheticEntry[]>` under the reserved
+	 * `events` key, populated by the walker-level speculative-entry
+	 * synthesis pass); write / edit candidates leave it undefined (no
+	 * walker ran).
 	 */
 	readonly walkerState?: Readonly<Record<string, unknown>>;
-	/**
-	 * Prior refs reachable via `&&` from the current ref. Populated
-	 * only for bash candidates, exposed to predicates via
-	 * {@link PredicateContext.priorAndChainedRefs}.
-	 */
-	readonly priorAndChainedRefs?: readonly { text: string }[];
 }
 
 /**
@@ -574,12 +521,6 @@ async function runPredicateChain(
 			findEntries: shared.findEntries,
 			...(cand.walkerState !== undefined
 				? { walkerState: cand.walkerState }
-				: {}),
-			...(cand.priorAndChainedRefs !== undefined
-				? { priorAndChainedRefs: cand.priorAndChainedRefs }
-				: {}),
-			...(shared.observersByWrittenEvent !== undefined
-				? { observersByWrittenEvent: shared.observersByWrittenEvent }
 				: {}),
 		};
 
@@ -715,7 +656,6 @@ async function evaluateEvent(
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
 	allObservers: readonly Observer[],
-	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Top-level fail-closed wrap (S1). If the engine's own scaffolding
 	// throws — parse errors, walker bugs, corrupted session JSONL, etc.
@@ -736,7 +676,6 @@ async function evaluateEvent(
 			defaultNoOverride,
 			ruleSources,
 			allObservers,
-			observersByWrittenEvent,
 		);
 	} catch (err) {
 		console.error(
@@ -762,7 +701,6 @@ async function evaluateEventInner(
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
 	allObservers: readonly Observer[],
-	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
 	// findEntries reads the current session JSONL on demand; appendEntry
@@ -789,9 +727,6 @@ async function evaluateEventInner(
 		host,
 		defaultNoOverride,
 		ruleSources,
-		...(observersByWrittenEvent !== undefined
-			? { observersByWrittenEvent }
-			: {}),
 	};
 
 	// Bash state is lazy: non-bash rules don't pay for parse / walk.
@@ -912,7 +847,6 @@ async function evaluateBashRule(
 			tool: "bash",
 			overrideEntryExtras: { command: rawCommand },
 			walkerState: refState.walkerState,
-			priorAndChainedRefs: refState.priorAndChainedRefs,
 		};
 		const r = await evaluateCandidate(rule, cand, shared);
 		if (r === "no-fire") continue;

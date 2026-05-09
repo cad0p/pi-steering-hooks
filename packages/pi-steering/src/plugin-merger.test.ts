@@ -173,6 +173,23 @@ describe("resolvePlugins: tracker collision (hard error)", () => {
 			/tracker name collision/,
 		);
 	});
+
+	it('throws when a plugin registers the reserved tracker name "events"', () => {
+		// `walkerState.events` is written by the evaluator's speculative-
+		// entry synthesis pass (see evaluator.ts `prepareBashState`). A
+		// plugin-registered `events` tracker would be silently clobbered
+		// when the evaluator merges synthesized entries in, breaking
+		// chain-aware `when.happened`. Schema JSDoc promises rejection;
+		// this test holds the promise honest.
+		const p: Plugin = {
+			name: "broken",
+			trackers: { events: mkTracker("x") as Tracker<unknown> },
+		};
+		assert.throws(
+			() => resolvePlugins([p], {}),
+			/tracker name "events" is reserved/,
+		);
+	});
 });
 
 describe("resolvePlugins: tracker extensions", () => {

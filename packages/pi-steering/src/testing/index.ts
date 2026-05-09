@@ -325,29 +325,6 @@ export interface MockContextOptions {
 	 * matching the production shape.
 	 */
 	readonly entries?: ReadonlyArray<MockEntry>;
-
-	/**
-	 * Chain-aware prior-`&&` refs (see
-	 * {@link PredicateContext.priorAndChainedRefs}). Empty by default —
-	 * single-ref bash tool_calls don't have any prior-&& siblings. Set
-	 * this to simulate `A && B && C` scenarios when unit-testing a
-	 * predicate that introspects chain-aware state (including the
-	 * built-in `happened` speculative-allow path).
-	 */
-	readonly priorAndChainedRefs?: readonly { text: string }[];
-
-	/**
-	 * Chain-aware observer reverse-index (see
-	 * {@link PredicateContext.observersByWrittenEvent}). Defaults to
-	 * undefined, which matches the production shape when no observer
-	 * declares `writes`. Provide a populated map to simulate
-	 * chain-aware speculative allow: key is the event literal, value
-	 * the list of observers writing it.
-	 */
-	readonly observersByWrittenEvent?: ReadonlyMap<
-		string,
-		readonly Observer[]
-	>;
 }
 
 /**
@@ -385,16 +362,6 @@ export function mockContext(
 		appendEntry: createAppendEntry(bufferingHost, agentLoopIndex),
 		findEntries: buildFindEntries(options.entries ?? []),
 		walkerState,
-		// Chain-aware state. Both fields are optional on the production
-		// `PredicateContext`, so omitting the option yields the same shape
-		// the evaluator produces for non-bash candidates or configs with
-		// no observer `writes`.
-		...(options.priorAndChainedRefs !== undefined
-			? { priorAndChainedRefs: options.priorAndChainedRefs }
-			: {}),
-		...(options.observersByWrittenEvent !== undefined
-			? { observersByWrittenEvent: options.observersByWrittenEvent }
-			: {}),
 	};
 
 	appendBuffers.set(ctx, buffer);
@@ -430,7 +397,7 @@ function defaultInputFor(
  */
 export type MockObserverContextOptions = Omit<
 	MockContextOptions,
-	"tool" | "input" | "walkerState" | "priorAndChainedRefs" | "observersByWrittenEvent"
+	"tool" | "input" | "walkerState"
 >;
 
 /**
@@ -922,10 +889,10 @@ function resolveToolResultEvent(
  * ```
  *
  * Chain-aware predicates (e.g. the built-in `happened` with its
- * `&&`-chain speculative allow) read `ctx.priorAndChainedRefs` and
- * `ctx.observersByWrittenEvent`. Both are surfaceable through
- * {@link MockContextOptions} so those code paths can be exercised in
- * isolation without wiring up `loadHarness` + a full bash event.
+ * `&&`-chain speculative allow) read per-ref synthetic events from
+ * `ctx.walkerState.events`. Populate `walkerState` directly in
+ * {@link MockContextOptions} to simulate that surface in isolation
+ * without wiring up `loadHarness` + a full bash event.
  */
 export async function testPredicate<A = unknown>(
 	predicate: PredicateHandler<A>,

@@ -266,11 +266,14 @@ describe("computePriorAndChains: mixed-operator cases", () => {
 // ---------------------------------------------------------------------------
 
 describe("computePriorAndChains: strictly-prior invariant", () => {
-	// Load-bearing safety property: `priorAndChainedRefs[i]` must
-	// contain ONLY refs at indices < i. Violating it would let an
+	// Load-bearing safety property: `computePriorAndChains(refs)[i]`
+	// must contain ONLY refs at indices < i. Violating it would let an
 	// agent bypass a block by placing the "satisfying" ref AFTER the
 	// blocked ref, since events from future refs would speculatively
-	// pre-satisfy a `when.happened` check on the current ref.
+	// pre-satisfy a `when.happened` check on the current ref. The
+	// speculative-entry synthesis pass mirrors this left-to-right
+	// contract inline, so the same invariant gates both the helper and
+	// the synthesis walk.
 	//
 	// The invariant is most load-bearing at chain-RESET boundaries
 	// (`;`, `||`, `|`, subshell commits) — that's where the walk has
