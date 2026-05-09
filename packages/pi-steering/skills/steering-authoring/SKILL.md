@@ -3,7 +3,7 @@ name: steering-authoring
 description: Author declarative steering rules for pi-steering. Use when the user asks to block or allow agent tool calls, write guardrails for bash/write/edit, author pi steering rules, add rule plugins, or migrate an old .pi/steering.json to the v2 TypeScript config.
 ---
 
-# pi-steering-hooks
+# pi-steering
 
 You have `pi-steering` installed. It blocks and allows agent tool calls (bash, write, edit) via declarative rules authored in TypeScript.
 

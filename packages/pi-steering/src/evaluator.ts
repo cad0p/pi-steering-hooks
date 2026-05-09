@@ -660,7 +660,7 @@ async function runPredicateChain(
 	} catch (err) {
 		const source = shared.ruleSources.get(rule) ?? "user";
 		console.warn(
-			`[pi-steering-hooks] predicate threw for rule "${rule.name}"@${source}: ${formatError(err)}`,
+			`[pi-steering] predicate threw for rule "${rule.name}"@${source}: ${formatError(err)}`,
 		);
 		return null;
 	}
@@ -740,7 +740,7 @@ async function evaluateCandidate(
 			await rule.onFire(ctx);
 		} catch (err) {
 			console.warn(
-				`[pi-steering-hooks] onFire for rule "${rule.name}" threw: ${formatError(err)}`,
+				`[pi-steering] onFire for rule "${rule.name}" threw: ${formatError(err)}`,
 			);
 		}
 	}
@@ -790,7 +790,7 @@ async function evaluateEvent(
 		);
 	} catch (err) {
 		console.error(
-			`[pi-steering-hooks] steering engine threw: ${formatError(err)}`,
+			`[pi-steering] steering engine threw: ${formatError(err)}`,
 		);
 		return {
 			block: true,

@@ -167,7 +167,7 @@ export function findConfigFile(dir: string): string | null {
 	const flatExists = flatForm !== undefined && existsSync(flatForm);
 	if (indexExists && flatExists) {
 		console.warn(
-			`[pi-steering-hooks] both .pi/steering.ts and .pi/steering/index.ts ` +
+			`[pi-steering] both .pi/steering.ts and .pi/steering/index.ts ` +
 				`exist at ${dir}; using directory form. ` +
 				"Delete .pi/steering.ts to remove this warning.",
 		);
@@ -248,7 +248,7 @@ export async function loadConfigs(cwd: string): Promise<SteeringConfig[]> {
 			if (existsSync(steeringDir)) {
 				for (const stray of unexpectedFilesUnderSteering(dir)) {
 					console.warn(
-						`[pi-steering-hooks] ignoring non-.ts file under .pi/steering/: ${stray}`,
+						`[pi-steering] ignoring non-.ts file under .pi/steering/: ${stray}`,
 					);
 				}
 			}
@@ -258,7 +258,7 @@ export async function loadConfigs(cwd: string): Promise<SteeringConfig[]> {
 			out.push(await importConfigFile(file));
 		} catch (err) {
 			console.warn(
-				`[pi-steering-hooks] failed to load config at ${file}: ${String(err)}`,
+				`[pi-steering] failed to load config at ${file}: ${String(err)}`,
 			);
 		}
 	}
@@ -275,7 +275,7 @@ export async function loadConfigs(cwd: string): Promise<SteeringConfig[]> {
  */
 function warnCollision(kind: string, name: string): void {
 	console.warn(
-		`[pi-steering-hooks] duplicate ${kind} "${name}"; keeping first-registered entry.`,
+		`[pi-steering] duplicate ${kind} "${name}"; keeping first-registered entry.`,
 	);
 }
 
@@ -319,7 +319,7 @@ function mergeRules(layers: readonly SteeringConfig[]): Rule[] {
 		for (const rule of layer.rules) {
 			if (seenInLayer.has(rule.name)) {
 				console.warn(
-					`[pi-steering-hooks] duplicate rule "${rule.name}" within ` +
+					`[pi-steering] duplicate rule "${rule.name}" within ` +
 						"single config layer; keeping first, dropping subsequent",
 				);
 				continue;
@@ -422,7 +422,7 @@ function assertTrackerNameUnique(plugins: readonly Plugin[]): void {
 			const prior = seen.get(trackerName);
 			if (prior !== undefined) {
 				throw new Error(
-					`[pi-steering-hooks] tracker name collision: ` +
+					`[pi-steering] tracker name collision: ` +
 						`both plugins "${prior}" and "${plugin.name}" register ` +
 						`a tracker called "${trackerName}". Two plugins ` +
 						`claiming the same state dimension is always a bug — ` +

@@ -115,7 +115,7 @@ function bufferingAppendHost(buffer: CapturedEntry[]): EvaluatorHost {
 		exec: () =>
 			Promise.reject(
 				new Error(
-					"[pi-steering-hooks/testing] internal: bufferingAppendHost.exec " +
+					"[pi-steering/testing] internal: bufferingAppendHost.exec " +
 						"should never be called",
 				),
 			),

@@ -767,7 +767,7 @@ If your steering config fails to load at `session_start` (a plugin throws during
 
 This is a deliberate fail-open for loader errors, not fail-closed: blocking every tool on a loader bug would leave every pi session unusable until the config was fixed. Fail-open-on-load + fail-closed-per-tool (S1) is the compromise.
 
-Check startup logs for `[pi-steering-hooks] Failed to load steering config: …` if rules stop firing unexpectedly.
+Check startup logs for `[pi-steering] Failed to load steering config: …` if rules stop firing unexpectedly.
 
 ### Block-reason tag trust
 

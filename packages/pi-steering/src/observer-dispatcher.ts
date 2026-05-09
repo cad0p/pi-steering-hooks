@@ -151,7 +151,7 @@ async function dispatchEvent(
 		await dispatchEventInner(event, ctx, agentLoopIndex, observers, host);
 	} catch (err) {
 		console.warn(
-			`[pi-steering-hooks] observer dispatcher threw: ${formatError(err)}`,
+			`[pi-steering] observer dispatcher threw: ${formatError(err)}`,
 		);
 	}
 }
@@ -219,7 +219,7 @@ async function dispatchEventInner(
 			// One observer's bug must not poison the rest. Log with the
 			// observer name so the operator can locate + disable it.
 			console.warn(
-				`[pi-steering-hooks] observer "${observer.name}" threw: ${formatError(err)}`,
+				`[pi-steering] observer "${observer.name}" threw: ${formatError(err)}`,
 			);
 		}
 	}

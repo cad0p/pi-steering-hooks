@@ -107,7 +107,7 @@ export class UnknownPredicateError extends Error {
 	readonly key: string;
 	constructor(key: string) {
 		super(
-			`[pi-steering-hooks] unknown when.${key} predicate — ` +
+			`[pi-steering] unknown when.${key} predicate — ` +
 				`no plugin registered a handler for this key. ` +
 				`Check for typos, or add a plugin that provides "${key}".`,
 		);
@@ -164,7 +164,7 @@ function evaluateHappened(
 		!("in" in value)
 	) {
 		throw new Error(
-			`[pi-steering-hooks] Rule "${ruleName}": when.happened ` +
+			`[pi-steering] Rule "${ruleName}": when.happened ` +
 				`expected { event: string; in: "agent_loop" | "session"; since?: string }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
@@ -187,7 +187,7 @@ function evaluateHappened(
 	// fallthrough to the else-branch (the agent_loop filter path).
 	if (scope === "turn") {
 		throw new Error(
-			`[pi-steering-hooks] Rule "${ruleName}": ` +
+			`[pi-steering] Rule "${ruleName}": ` +
 				`when.happened.in: "turn" is no longer supported in ` +
 				`pi-steering v0.1.0. Use "agent_loop" instead ` +
 				`(see the v0.1.0 migration notes).`,
@@ -195,14 +195,14 @@ function evaluateHappened(
 	}
 	if (scope !== "agent_loop" && scope !== "session") {
 		throw new Error(
-			`[pi-steering-hooks] Rule "${ruleName}": ` +
+			`[pi-steering] Rule "${ruleName}": ` +
 				`when.happened.in must be "agent_loop" or "session"; ` +
 				`got ${JSON.stringify(scope)}`,
 		);
 	}
 	if (since !== undefined && typeof since !== "string") {
 		throw new Error(
-			`[pi-steering-hooks] Rule "${ruleName}": ` +
+			`[pi-steering] Rule "${ruleName}": ` +
 				`when.happened.since must be a string if present; ` +
 				`got ${JSON.stringify(since)}`,
 		);

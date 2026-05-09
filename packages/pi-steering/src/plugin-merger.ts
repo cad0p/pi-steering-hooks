@@ -302,7 +302,7 @@ export function resolvePlugins(
 			const prior = trackerOwner.get(name);
 			if (prior !== undefined) {
 				throw new Error(
-					`[pi-steering-hooks] tracker name collision: ` +
+					`[pi-steering] tracker name collision: ` +
 						`both plugins "${prior}" and "${plugin.name}" register ` +
 						`a tracker called "${name}". Two plugins claiming the ` +
 						`same state dimension is always a bug — rename one ` +
