@@ -164,13 +164,18 @@ function evaluateHappened(
 	) {
 		throw new Error(
 			`[pi-steering-hooks] Rule "${ruleName}": when.happened ` +
-				`expected { event: string; in: "agent_loop" | "session" }; ` +
+				`expected { event: string; in: "agent_loop" | "session"; since?: string }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
-	const { event, in: scope } = value as {
+	const {
+		event,
+		in: scope,
+		since,
+	} = value as {
 		event: string;
 		in: unknown;
+		since?: unknown;
 	};
 	// Validate the scope string. The type system says
 	// `"agent_loop" | "session"`, but a user migrating from v0.0.0-poc
@@ -194,16 +199,63 @@ function evaluateHappened(
 				`got ${JSON.stringify(scope)}`,
 		);
 	}
-	const entries = ctx.findEntries<Record<string, unknown>>(event);
-	if (scope === "session") {
-		return entries.length === 0;
+	if (since !== undefined && typeof since !== "string") {
+		throw new Error(
+			`[pi-steering-hooks] Rule "${ruleName}": ` +
+				`when.happened.since must be a string if present; ` +
+				`got ${JSON.stringify(since)}`,
+		);
 	}
-	// scope === "agent_loop": filter by engine-injected tag.
-	for (const entry of entries) {
-		const tag = entry.data?.[AGENT_LOOP_INDEX_KEY];
-		if (tag === ctx.agentLoopIndex) return false;
+	const inScope = scopeFilter(scope, ctx);
+	const eventEntries = ctx
+		.findEntries<Record<string, unknown>>(event)
+		.filter(inScope);
+	if (eventEntries.length === 0) {
+		// Event has not happened at all in this scope → rule fires.
+		return true;
 	}
+	if (since === undefined) {
+		// Simple presence check: event happened → rule does NOT fire.
+		return false;
+	}
+	const sinceEntries = ctx
+		.findEntries<Record<string, unknown>>(since)
+		.filter(inScope);
+	if (sinceEntries.length === 0) {
+		// Sentinel never written → degrade to simple-happened semantics.
+		return false;
+	}
+	// Both present in scope. The event is "happened" iff its latest
+	// entry is strictly newer than the latest `since` entry.
+	// `findEntries` returns entries in append order, so the last
+	// element is the most recent.
+	const latestEvent = eventEntries[eventEntries.length - 1]?.timestamp ?? 0;
+	const latestSince = sinceEntries[sinceEntries.length - 1]?.timestamp ?? 0;
+	if (latestEvent > latestSince) {
+		// Event is fresher than the invalidator → still happened.
+		return false;
+	}
+	// Event is older than (or equal to) the invalidator → stale; rule fires.
 	return true;
+}
+
+/**
+ * Build a per-entry filter for the happened scope. Hoisted out of
+ * {@link evaluateHappened} so both the `event` and the optional
+ * `since` entry streams share the same predicate.
+ */
+function scopeFilter(
+	scope: "agent_loop" | "session",
+	ctx: PredicateContext,
+): (entry: { data: Record<string, unknown> }) => boolean {
+	if (scope === "session") {
+		return () => true;
+	}
+	const target = ctx.agentLoopIndex;
+	return (entry) => {
+		const tag = entry.data?.[AGENT_LOOP_INDEX_KEY];
+		return tag === target;
+	};
 }
 
 /**

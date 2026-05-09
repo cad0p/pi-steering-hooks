@@ -766,6 +766,304 @@ describe("buildEvaluator: when.happened", () => {
 	});
 });
 
+describe("buildEvaluator: when.happened.since (temporal ordering)", () => {
+	// `since` acts as an invalidation sentinel. Rule fires when the
+	// most-recent `event` entry in scope is NOT strictly newer than
+	// the most-recent `since` entry in scope. Absent / never-written
+	// `since` degrades to simple-happened semantics.
+	const sessionEntry = (
+		customType: string,
+		data: Record<string, unknown>,
+		ts: string,
+		id: string,
+	) => ({
+		type: "custom" as const,
+		customType,
+		data,
+		timestamp: ts,
+		id,
+		parentId: null,
+	});
+
+	it("same loop, event after since → happened (rule does NOT fire)", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"upstream-failed",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"a",
+			),
+			sessionEntry(
+				"ws-sync-done",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:10.000Z",
+				"b",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.equal(res, undefined, "rule must skip when event is fresh");
+	});
+
+	it("same loop, since after event → stale (rule fires)", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"ws-sync-done",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"a",
+			),
+			sessionEntry(
+				"upstream-failed",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:10.000Z",
+				"b",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.ok(res && res.block === true, "rule must fire when event is stale");
+	});
+
+	it("event present, since never written → happened (rule does NOT fire)", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"ws-sync-done",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"a",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.equal(
+			res,
+			undefined,
+			"never-written since degrades to simple-happened",
+		);
+	});
+
+	it("neither event nor since written → rule fires", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cr review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"no event at all must fire regardless of since",
+		);
+	});
+
+	it("only since written → event absent, rule fires", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"upstream-failed",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"a",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.ok(
+			res && res.block === true,
+			"no event means happened=false regardless of since",
+		);
+	});
+
+	it("cross-loop: since in prior loop, event in current loop (agent_loop scope)", async () => {
+		// The `since` entry from loop 4 is OUT of current-loop scope, so
+		// the agent_loop filter drops it. From loop-5's perspective
+		// `since` is "never written" → simple-happened semantics.
+		const rule: Rule = {
+			name: "needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "sync first",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"upstream-failed",
+				{ _agentLoopIndex: 4 },
+				"2026-01-01T00:00:05.000Z",
+				"a",
+			),
+			sessionEntry(
+				"ws-sync-done",
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"b",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 5);
+		assert.equal(
+			res,
+			undefined,
+			"prior-loop since must not invalidate current-loop event",
+		);
+	});
+
+	it("in: 'session' scope with since compares across whole session", async () => {
+		const rule: Rule = {
+			name: "needs-fresh-welcome",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "welcome",
+			when: {
+				happened: {
+					event: "welcome-shown",
+					in: "session",
+					since: "policy-updated",
+				},
+			},
+		};
+		// policy-updated after welcome-shown → stale, rule fires.
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				"welcome-shown",
+				{},
+				"2026-01-01T00:00:00.000Z",
+				"a",
+			),
+			sessionEntry(
+				"policy-updated",
+				{},
+				"2026-01-01T00:01:00.000Z",
+				"b",
+			),
+		]);
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(bashEvent("cr review"), ctx, 99);
+		assert.ok(
+			res && res.block === true,
+			"session-scope since must fire on stale event",
+		);
+	});
+
+	it("runtime error on non-string since value", async () => {
+		const rule: Rule = {
+			name: "bad-since",
+			tool: "bash",
+			field: "command",
+			pattern: "^cr\\b",
+			reason: "bad",
+			when: {
+				happened: {
+					event: "ws-sync-done",
+					in: "agent_loop",
+					// @ts-expect-error — deliberate runtime type violation.
+					since: 42,
+				},
+			},
+		};
+		const warnings = captureWarnings();
+		try {
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const res = await evaluator.evaluate(
+				bashEvent("cr review"),
+				makeCtx("/r"),
+				5,
+			);
+			// Predicate throw is isolated (S1) — no block verdict.
+			assert.equal(res, undefined);
+			assert.ok(
+				warnings.some((w) =>
+					/when\.happened\.since must be a string/.test(w),
+				),
+				`no matching warning in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
+	});
+});
+
 describe("buildEvaluator: when.not + when.condition", () => {
 	it("when.not inverts the nested clause", async () => {
 		const rule: Rule = {

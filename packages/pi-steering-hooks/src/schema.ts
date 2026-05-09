@@ -140,13 +140,30 @@ export interface WhenClause<Writes extends string = string> {
 	 * `not: { happened: { event, in } }` fires when the event HAS
 	 * happened. See ADR §5.
 	 *
-	 * Compile-time constraint: inside {@link defineConfig}, the `event`
-	 * field is narrowed to the union of all `writes` declared across
-	 * plugin rules, plugin observers, user rules, and user observers.
-	 * Typos become compile errors. Outside `defineConfig` the
-	 * `Writes` parameter defaults to `string` so the check is skipped.
+	 * Optional `since` sentinel (temporal ordering): when present,
+	 * `event` is considered "happened" only if its most-recent entry
+	 * in scope is newer than the most-recent `since` entry in scope.
+	 * If `since` has never been written, the clause behaves as if
+	 * `since` were absent (simple presence check on `event`).
+	 *
+	 * Use for invalidation semantics: "rule fires when sync has not
+	 * happened in this agent_loop, OR the last sync is older than the
+	 * last upstream-fail." Pattern:
+	 *   `happened: { event: SYNC_DONE_EVENT, in: "agent_loop",
+	 *                since: UPSTREAM_FAILED_EVENT }`.
+	 *
+	 * Compile-time constraint: inside {@link defineConfig}, both the
+	 * `event` and `since` fields are narrowed to the union of all
+	 * `writes` declared across plugin rules, plugin observers, user
+	 * rules, and user observers. Typos become compile errors. Outside
+	 * `defineConfig` the `Writes` parameter defaults to `string` so the
+	 * check is skipped.
 	 */
-	happened?: { event: Writes; in: "agent_loop" | "session" };
+	happened?: {
+		event: Writes;
+		in: "agent_loop" | "session";
+		since?: Writes;
+	};
 
 	/**
 	 * Boolean NOT: the rule fires only when every nested predicate
