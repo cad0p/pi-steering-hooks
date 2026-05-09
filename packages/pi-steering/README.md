@@ -444,7 +444,7 @@ Every observer file exports three things:
 
 Rules that consume the event import the EVENT constant, never the raw string. When no observer corresponds (self-marking rule only), the constant + helper live in the rule file instead.
 
-See [`examples/work-item-plugin/src/observers/npm-test-tracker.ts`](../../examples/work-item-plugin/src/observers/npm-test-tracker.ts) for a complete file following this pattern.
+See [`examples/work-item-plugin/src/observers/npm-test-tracker.ts`](./examples/work-item-plugin/src/observers/npm-test-tracker.ts) for a complete file following this pattern.
 
 ### Typed predicate handlers
 
@@ -466,7 +466,7 @@ export const branch = definePredicate<BranchArgs>(async (args, ctx) => {
 
 ### The canonical reference
 
-[`examples/work-item-plugin/`](../../examples/work-item-plugin/) is a compact, domain-generic plugin that demonstrates every v0.1.0 authoring pattern in one place. Read it top-to-bottom — the structure is meant to be copied.
+[`examples/work-item-plugin/`](./examples/work-item-plugin/) is a compact, domain-generic plugin that demonstrates every v0.1.0 authoring pattern in one place. Read it top-to-bottom — the structure is meant to be copied.
 
 Production plugins in this repo:
 
@@ -790,7 +790,7 @@ Future versions will add a session-manager-side index keyed by `customType`, mov
 
 ## Further reading
 
-- [`examples/work-item-plugin/`](../../examples/work-item-plugin/) — canonical plugin reference.
+- [`examples/work-item-plugin/`](./examples/work-item-plugin/) — canonical plugin reference.
 - [`src/plugins/git/`](./src/plugins/git) — production plugin with trackers and tracker extensions.
 - [`../unbash-walker/`](../unbash-walker/) — the AST walker.
 - Design decisions behind every field, flag, and semantic covered above are recorded in the repo's ADR log (napkin vault).

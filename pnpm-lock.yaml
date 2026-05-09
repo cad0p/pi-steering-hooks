@@ -15,15 +15,6 @@ importers:
         specifier: ^5.4.5
         version: 5.9.3
 
-  examples/work-item-plugin:
-    devDependencies:
-      pi-steering:
-        specifier: workspace:*
-        version: link:../../packages/pi-steering
-      unbash-walker:
-        specifier: workspace:*
-        version: link:../../packages/unbash-walker
-
   packages/pi-steering:
     dependencies:
       '@earendil-works/pi-coding-agent':
@@ -39,6 +30,15 @@ importers:
       typescript:
         specifier: ^5.4.5
         version: 5.9.3
+
+  packages/pi-steering/examples/work-item-plugin:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../..
+      unbash-walker:
+        specifier: workspace:*
+        version: link:../../../unbash-walker
 
   packages/unbash-walker:
     dependencies:

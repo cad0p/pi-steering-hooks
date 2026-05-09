@@ -7,7 +7,7 @@ A compact plugin that demonstrates every authoring pattern the v0.1.0 release sh
 ## What's in the box
 
 ```
-examples/work-item-plugin/
+packages/pi-steering/examples/work-item-plugin/
 ├── package.json                # peerDep on pi-steering
 ├── tsconfig.json               # extends repo base
 ├── README.md                   # (this file)
