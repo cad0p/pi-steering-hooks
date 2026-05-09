@@ -500,6 +500,74 @@ describe("mockContext", () => {
 			{ customType: "items", data: { value: [1, 2, 3], _agentLoopIndex: 5 } },
 		]);
 	});
+
+	// ---- syntheticEvents: walkerState.events surface for chain-aware
+	// ---- `when.happened` and plugin predicates over synthesized entries
+
+	it("syntheticEvents default: walkerState has no `events` key when the option is omitted", () => {
+		// Matches the production shape for non-bash candidates or configs
+		// with no eligible observer — the evaluator's synthesis pass runs
+		// only for bash, and mockContext doesn't manufacture one on the
+		// caller's behalf.
+		const ctx = mockContext();
+		assert.equal(
+			(ctx.walkerState as Record<string, unknown> | undefined)?.["events"],
+			undefined,
+		);
+	});
+
+	it("syntheticEvents threads through to ctx.walkerState.events", () => {
+		// Surface-level: plugin authors drive chain-aware `when.happened`
+		// in isolation by passing `syntheticEvents`. The option merges
+		// into walkerState under the reserved `events` key, same shape
+		// the walker-level synthesis pass produces in production.
+		const events = {
+			SYNC: [
+				{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
+			],
+		};
+		const ctx = mockContext({ syntheticEvents: events });
+		const got = (ctx.walkerState as Record<string, unknown>)["events"];
+		assert.equal(got, events);
+	});
+
+	it("syntheticEvents overrides an `events` entry placed on walkerState directly", () => {
+		// Explicit option wins: the caller who opts into `syntheticEvents`
+		// gets the canonical shape without having to strip their own
+		// `walkerState.events` entry. Mirrors the evaluator's merge order
+		// (`{ ...trackerState, events }`).
+		const override = { X: [{ data: 1, timestamp: 7, speculative: true as const }] };
+		const ctx = mockContext({
+			walkerState: { cwd: "/w", events: { X: [] } },
+			syntheticEvents: override,
+		});
+		const got = (ctx.walkerState as Record<string, unknown>)["events"];
+		assert.equal(got, override);
+	});
+
+	it("testPredicate forwards syntheticEvents so plugin predicates over walkerState.events can be driven", async () => {
+		// End-to-end: a plugin predicate introspects walkerState.events,
+		// and testPredicate (which forwards the full options object to
+		// mockContext) lets the caller exercise both branches.
+		const fires: PredicateHandler<string> = async (event, ctx) => {
+			const events = (ctx.walkerState as Record<string, unknown> | undefined)?.[
+				"events"
+			] as Record<string, readonly unknown[]> | undefined;
+			return (events?.[event]?.length ?? 0) > 0;
+		};
+
+		const cold = await testPredicate(fires, "SYNC", {});
+		assert.equal(cold, false, "no syntheticEvents → predicate sees nothing");
+
+		const warm = await testPredicate(fires, "SYNC", {
+			syntheticEvents: {
+				SYNC: [
+					{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
+				],
+			},
+		});
+		assert.equal(warm, true, "syntheticEvents populated → predicate fires");
+	});
 });
 
 // ---------------------------------------------------------------------------

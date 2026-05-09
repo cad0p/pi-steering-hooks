@@ -53,6 +53,7 @@ import type {
 	SteeringConfig,
 	ToolResultEvent as SchemaToolResultEvent,
 } from "../schema.ts";
+import type { SyntheticEntry } from "../evaluator-internals/speculative-synthesis.ts";
 import type {
 	ExecResult as PiExecResult,
 	ExtensionContext,
@@ -276,6 +277,16 @@ export interface MockEntry {
 }
 
 /**
+ * Re-exported for plugin authors constructing `syntheticEvents`
+ * fixtures on {@link MockContextOptions}. Structurally `{ data,
+ * timestamp, speculative: true }` — the same shape the walker-level
+ * speculative-entry synthesis pass produces in production. Plugin
+ * predicates that filter out speculative entries check
+ * `entry.speculative === true`.
+ */
+export type { SyntheticEntry } from "../evaluator-internals/speculative-synthesis.ts";
+
+/**
  * Options for {@link mockContext}.
  */
 export interface MockContextOptions {
@@ -325,6 +336,24 @@ export interface MockContextOptions {
 	 * matching the production shape.
 	 */
 	readonly entries?: ReadonlyArray<MockEntry>;
+
+	/**
+	 * Per-ref speculative events the built-in `when.happened` predicate
+	 * reads from `ctx.walkerState.events` (see
+	 * {@link PredicateContext.walkerState}'s reserved `events` key).
+	 * Keys are the `customType` event literals; values are the
+	 * synthetic entries for that type. When provided, overwrites any
+	 * `events` entry on the caller's {@link walkerState}.
+	 *
+	 * Use this to drive chain-aware `when.happened` (or any plugin
+	 * predicate that introspects `walkerState.events`) in isolation
+	 * without wiring up `loadHarness` + a full bash event. The shape
+	 * matches what the walker-level synthesis pass produces in
+	 * production — `{ data, timestamp, speculative: true }` per entry.
+	 */
+	readonly syntheticEvents?: Readonly<
+		Record<string, readonly SyntheticEntry[]>
+	>;
 }
 
 /**
@@ -339,7 +368,16 @@ export function mockContext(
 	const cwd = options.cwd ?? "/tmp/test";
 	const tool = options.tool ?? "bash";
 	const input = options.input ?? defaultInputFor(tool);
-	const walkerState = options.walkerState ?? { cwd };
+	const baseWalkerState = options.walkerState ?? { cwd };
+	// Fold `syntheticEvents` (option) into `walkerState.events` (ctx
+	// shape) the same way the evaluator's `prepareBashState` does —
+	// the caller doesn't have to know the reserved-key convention.
+	// Explicit option wins over any `events` entry the caller placed
+	// directly on `walkerState`.
+	const walkerState: Record<string, unknown> =
+		options.syntheticEvents !== undefined
+			? { ...baseWalkerState, events: options.syntheticEvents }
+			: baseWalkerState;
 	const agentLoopIndex = options.agentLoopIndex ?? 0;
 	const buffer: CapturedEntry[] = [];
 
@@ -397,7 +435,7 @@ function defaultInputFor(
  */
 export type MockObserverContextOptions = Omit<
 	MockContextOptions,
-	"tool" | "input" | "walkerState"
+	"tool" | "input" | "walkerState" | "syntheticEvents"
 >;
 
 /**
@@ -890,9 +928,10 @@ function resolveToolResultEvent(
  *
  * Chain-aware predicates (e.g. the built-in `happened` with its
  * `&&`-chain speculative allow) read per-ref synthetic events from
- * `ctx.walkerState.events`. Populate `walkerState` directly in
- * {@link MockContextOptions} to simulate that surface in isolation
- * without wiring up `loadHarness` + a full bash event.
+ * `ctx.walkerState.events`. Populate `syntheticEvents` (or set
+ * `walkerState` directly) in {@link MockContextOptions} to simulate
+ * that surface in isolation without wiring up `loadHarness` + a
+ * full bash event.
  */
 export async function testPredicate<A = unknown>(
 	predicate: PredicateHandler<A>,
