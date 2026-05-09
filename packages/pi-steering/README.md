@@ -117,15 +117,22 @@ User prompt sent to pi.
         ref#0 at cwd=/original
         ref#1 at cwd=/original
         ref#2 at cwd=/tmp  (the `cd /tmp` applied)
+      Walker-level speculative-entry synthesis runs in the same pass,
+      populating `walkerState.events` per ref (see "Chain-aware
+      `happened`" below).
    e. For each ref × for each rule, build a Candidate:
         input.command   = ref.text (FLATTENED: "git push --force")
         input.basename  = "git"
         input.args      = ref.node.suffix (Word[] with quote-aware .value)
         cwd             = walkerState.cwd   (per-ref)
-        walkerState     = { cwd, branch, … }  (all trackers)
+        walkerState     = { cwd, branch, …, events }  (all trackers +
+                          synthesized events under the reserved `events` key)
         agentLoopIndex  = N+1
    f. Test rule.pattern / requires / unless against ref.text.
       Run when.cwd / when.branch / when.happened / plugin predicates.
+      `when.happened` merges real entries (ctx.findEntries) with
+      synthesized speculative ones (walkerState.events) by timestamp
+      — one unified latest-entry comparison.
    g. First rule that ALL predicates pass on wins.
       Return { block: true, reason: "[steering:no-force-push@user] …" }.
       If the rule defines `onFire`, invoke it first (may writeSession entries,
@@ -329,7 +336,9 @@ sync && cr --description notes.md
 
 The naive evaluation path blocks this chain: the evaluator runs BEFORE execution, so when it sees `cr`, the observer hasn't written `ws-sync-done` yet. Rule fires, block, retry, same block — an infinite loop.
 
-pi-steering resolves this by looking at **prior `&&`-chained refs**. If any of them matches an observer declaring `writes: [event]`, the event is treated as "about to happen" and the rule does NOT fire. `&&` short-circuits on the prior's failure, so the speculative decision is safe: either the prior succeeds (and writes the event, retroactively justifying the allow), or it fails and the current ref never runs.
+pi-steering resolves this via a walker-level **speculative-entry synthesis pass**. For every ref in an unconditionally-`&&`-reachable segment, every observer declaring `writes: [event]` and matching the ref (via the shared `watch` filter) contributes a synthetic entry into the next ref's `walkerState.events[event]`. The built-in `when.happened` then merges these synthetic entries with real session entries by timestamp — so a speculative `ws-sync-done` entry satisfies the rule exactly as a real one would, and the chain is allowed.
+
+`&&` short-circuits on the prior's failure, so the speculative decision is safe: either the prior succeeds (and writes the event, retroactively justifying the allow), or it fails and the current ref never runs. Synthetic entries carry `speculative: true` so plugin predicates wanting pure historical semantics can filter them out; the built-in `happened` treats real and speculative entries identically.
 
 **Which joiners qualify:**
 
