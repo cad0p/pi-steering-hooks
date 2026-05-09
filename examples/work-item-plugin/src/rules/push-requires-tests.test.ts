@@ -10,6 +10,10 @@
  *   2. Dispatch an `npm test` success event through the harness →
  *      the observer writes TEST_PASSED_EVENT into the session entries.
  *   3. Push in the same agent loop → allow.
+ *   4. Dispatch a `git pull` → observer writes RETEST_REQUIRED_EVENT,
+ *      stale-ing the test entry. Push now blocks again (PR §4 `since`).
+ *   5. Chain-aware: `npm test && git push` allowed pre-execution
+ *      because the prior `&&` ref matches the npm-test observer (PR §4).
  *
  * Step (2) uses `harness.dispatch` — the same call production uses on
  * `tool_result`. `createRecordingHost` + `mockExtensionContext` share
@@ -31,15 +35,20 @@ import {
 	npmTestTracker,
 	TEST_PASSED_EVENT,
 } from "../observers/npm-test-tracker.ts";
+import {
+	retestRequiredTracker,
+	RETEST_REQUIRED_EVENT,
+} from "../observers/retest-required-tracker.ts";
 import { pushRequiresTests } from "./push-requires-tests.ts";
 
 /**
- * Minimal plugin with just the observer we care about. Keeps the
- * test focused.
+ * Plugin bundling the two observers this rule interacts with. Keeps
+ * the test config focused on what's under exercise — no unrelated
+ * rules from the work-item plugin.
  */
 const testPlugin: Plugin = {
 	name: "test",
-	observers: [npmTestTracker],
+	observers: [npmTestTracker, retestRequiredTracker],
 };
 
 describe("push-requires-tests", () => {
@@ -117,5 +126,120 @@ describe("push-requires-tests", () => {
 			0,
 		);
 		assert.equal(result, undefined);
+	});
+
+	it("re-blocks push after `git pull` stale-s the test entry (happened.since)", async () => {
+		// Demonstrates the PR #4 `since` invalidation sentinel. The
+		// rule is gated on `TEST_PASSED_EVENT` but `since: RETEST_REQUIRED_EVENT`
+		// means a later pull stale-s the test state.
+		const host = createRecordingHost();
+		const ctx = mockExtensionContext("/tmp/test", host.entries);
+
+		const harness = loadHarness({
+			config: {
+				plugins: [testPlugin],
+				rules: [pushRequiresTests],
+			},
+			host,
+		});
+
+		// 1. Tests pass.
+		await harness.dispatch(
+			{
+				type: "tool_result",
+				toolCallId: "tc1",
+				toolName: "bash",
+				input: { command: "npm test" },
+				content: [],
+				details: { exitCode: 0 },
+			} as unknown as Parameters<typeof harness.dispatch>[0],
+			ctx,
+			0,
+		);
+
+		// 2. Pull stale-s the test state.
+		await harness.dispatch(
+			{
+				type: "tool_result",
+				toolCallId: "tc2",
+				toolName: "bash",
+				input: { command: "git pull" },
+				content: [],
+				details: { exitCode: 0 },
+			} as unknown as Parameters<typeof harness.dispatch>[0],
+			ctx,
+			0,
+		);
+
+		assert.ok(
+			host.entries.some((e) => e.customType === RETEST_REQUIRED_EVENT),
+			"retest observer did not record RETEST_REQUIRED_EVENT",
+		);
+
+		// 3. Push blocked now — the most-recent TEST_PASSED_EVENT is
+		// older than the most-recent RETEST_REQUIRED_EVENT.
+		const result = await harness.evaluate(
+			{
+				type: "tool_call",
+				toolCallId: "tc3",
+				toolName: "bash",
+				input: { command: "git push origin feat/x" },
+			} as unknown as Parameters<typeof harness.evaluate>[0],
+			ctx,
+			0,
+		);
+		assert.ok(result && "block" in result, "post-pull push should block");
+	});
+
+	it("chain-aware: `npm test && git push` is allowed pre-execution", async () => {
+		// Demonstrates the PR #4 chain-aware speculative allow. The
+		// evaluator runs BEFORE the chain executes, so the observer
+		// hasn't written TEST_PASSED_EVENT yet — but because the prior
+		// `&&` ref matches the npm-test observer's watch, the engine
+		// speculatively allows. Safe: if `npm test` fails, `&&` short-
+		// circuits and `git push` never runs.
+		const harness = loadHarness({
+			config: {
+				plugins: [testPlugin],
+				rules: [pushRequiresTests],
+			},
+		});
+		await expectAllows(harness, {
+			command: "npm test && git push origin feat/x",
+		});
+	});
+
+	it("chain-aware: `git push && npm test` is NOT allowed (push is first)", async () => {
+		// Order matters — the speculative allow looks at PRIOR && refs
+		// only. Here push is first, so there's no prior observer to
+		// cite; the rule fires normally.
+		const harness = loadHarness({
+			config: {
+				plugins: [testPlugin],
+				rules: [pushRequiresTests],
+			},
+		});
+		await expectBlocks(
+			harness,
+			{ command: "git push origin feat/x && npm test" },
+			{ rule: "push-requires-tests" },
+		);
+	});
+
+	it("chain-aware: `npm test ; git push` still blocks (`;` does not qualify)", async () => {
+		// Only `&&` predecessors qualify for speculative allow. A
+		// `;`-joined prior doesn't short-circuit, so granting the
+		// allow would be unsafe.
+		const harness = loadHarness({
+			config: {
+				plugins: [testPlugin],
+				rules: [pushRequiresTests],
+			},
+		});
+		await expectBlocks(
+			harness,
+			{ command: "npm test ; git push origin feat/x" },
+			{ rule: "push-requires-tests" },
+		);
 	});
 });

@@ -16,12 +16,18 @@
  *         observer uses the helper.
  *       - `writes` declaration threading through for
  *         `defineConfig`'s compile-time type checking.
+ *   - `observers/retest-required-tracker.ts`
+ *       - Invalidation-sentinel pattern: observer writes
+ *         `RETEST_REQUIRED_EVENT` on `git pull`, which stale-s
+ *         prior `TEST_PASSED_EVENT` entries via `happened.since`.
  *   - `rules/commit-requires-work-item.ts`
  *       - Plugin-registered predicate consumption via `when.<key>`.
  *       - `not:` inversion in a `WhenClause`.
  *   - `rules/push-requires-tests.ts`
  *       - `when.happened: { in: "agent_loop" }` gating.
- *       - Observer → rule coupling via the shared TYPE constant.
+ *       - Observer → rule coupling via the shared EVENT constants.
+ *       - Temporal invalidation via `happened.since`.
+ *       - Chain-aware speculative allow for `npm test && git push`.
  *   - `rules/commit-description-check.ts`
  *       - Self-marking rules with `onFire`.
  *       - Constant + helper co-located with the rule when no
@@ -49,6 +55,10 @@ import {
 	npmTestTracker,
 	TEST_PASSED_EVENT,
 } from "./observers/npm-test-tracker.ts";
+import {
+	retestRequiredTracker,
+	RETEST_REQUIRED_EVENT,
+} from "./observers/retest-required-tracker.ts";
 import { commitRequiresWorkItem } from "./rules/commit-requires-work-item.ts";
 import { pushRequiresTests } from "./rules/push-requires-tests.ts";
 import {
@@ -59,7 +69,11 @@ import {
 // Re-export the type constants so consumers (e.g. another plugin or
 // a user's custom rule) can gate on the same events without
 // rediscovering the literal strings.
-export { TEST_PASSED_EVENT, DESCRIPTION_REVIEWED_EVENT };
+export {
+	TEST_PASSED_EVENT,
+	RETEST_REQUIRED_EVENT,
+	DESCRIPTION_REVIEWED_EVENT,
+};
 
 /**
  * The plugin. `as const satisfies Plugin` preserves the literal
@@ -76,7 +90,7 @@ const workItemPlugin = {
 		pushRequiresTests,
 		commitDescriptionCheck,
 	],
-	observers: [npmTestTracker],
+	observers: [npmTestTracker, retestRequiredTracker],
 } as const satisfies Plugin;
 
 export default workItemPlugin;
@@ -85,6 +99,10 @@ export default workItemPlugin;
 // just one rule or the predicate.
 export { workItemFormat } from "./predicates/work-item-format.ts";
 export { npmTestTracker, markTestPassed } from "./observers/npm-test-tracker.ts";
+export {
+	retestRequiredTracker,
+	markRetestRequired,
+} from "./observers/retest-required-tracker.ts";
 export { commitRequiresWorkItem } from "./rules/commit-requires-work-item.ts";
 export { pushRequiresTests } from "./rules/push-requires-tests.ts";
 export {

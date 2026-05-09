@@ -30,7 +30,7 @@ describe("work-item-plugin (end-to-end)", () => {
 		assert.equal(workItemPlugin.name, "work-item");
 		assert.ok(workItemPlugin.predicates?.workItemFormat);
 		assert.equal(workItemPlugin.rules?.length, 3);
-		assert.equal(workItemPlugin.observers?.length, 1);
+		assert.equal(workItemPlugin.observers?.length, 2);
 
 		const ruleNames = workItemPlugin.rules?.map((r) => r.name);
 		assert.deepEqual(ruleNames, [
@@ -40,7 +40,10 @@ describe("work-item-plugin (end-to-end)", () => {
 		]);
 
 		const observerNames = workItemPlugin.observers?.map((o) => o.name);
-		assert.deepEqual(observerNames, ["npm-test-tracker"]);
+		assert.deepEqual(observerNames, [
+			"npm-test-tracker",
+			"retest-required-tracker",
+		]);
 	});
 
 	it("blocks a commit without a work-item tag", async () => {

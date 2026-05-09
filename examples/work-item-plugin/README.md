@@ -18,8 +18,10 @@ examples/work-item-plugin/
     │   ├── work-item-format.ts       # workItemFormat + [PROJ-N] regex
     │   └── work-item-format.test.ts
     ├── observers/
-    │   ├── npm-test-tracker.ts       # observer + TEST_PASSED_EVENT + helper
-    │   └── npm-test-tracker.test.ts
+    │   ├── npm-test-tracker.ts        # TEST_PASSED_EVENT + observer
+    │   ├── npm-test-tracker.test.ts
+    │   ├── retest-required-tracker.ts # RETEST_REQUIRED_EVENT + observer
+    │   └── retest-required-tracker.test.ts
     └── rules/
         ├── commit-requires-work-item.ts
         ├── commit-requires-work-item.test.ts
@@ -35,8 +37,9 @@ examples/work-item-plugin/
 | --- | --- |
 | `predicates/work-item-format.ts` | `definePredicate<T>` for typed arg shapes. Quote-aware `input.args` access (ADR §9). |
 | `observers/npm-test-tracker.ts` | Observer encapsulation convention (ADR §14): export `<EVENT>_EVENT` + `mark<Event>(ctx)` helper + the observer. |
+| `observers/retest-required-tracker.ts` | Invalidation-sentinel observer for the `happened.since` pattern. Writes `RETEST_REQUIRED_EVENT` on every successful `git pull`. |
 | `rules/commit-requires-work-item.ts` | Plugin predicate consumed from `when.<key>`. `not:` inversion. |
-| `rules/push-requires-tests.ts` | Observer → rule coupling via shared type constant. `when.happened: { in: "agent_loop" }` gating. |
+| `rules/push-requires-tests.ts` | Observer → rule coupling via shared event constants. `when.happened: { in: "agent_loop", since: ... }` with temporal invalidation. Also demonstrates chain-aware speculative allow for `npm test && git push`. |
 | `rules/commit-description-check.ts` | Self-marking rule with `Rule.onFire` (ADR §6). Constant + helper co-located with the rule when no observer corresponds (ADR §14). |
 | `index.ts` | `as const satisfies Plugin` to preserve literal types for `defineConfig`'s compile-time cross-reference checking (ADR §7). |
 
@@ -84,7 +87,12 @@ In a real project, you'd replace `@examples/work-item-plugin` with your own publ
 
 **`commit-requires-work-item`** — intercepts `git commit -m "..."` and blocks unless the message carries a `[PROJ-N]` token. Uses the `workItemFormat` predicate under `when.not` (the predicate returns "work-item is present" as TRUE; we invert it to mean "fire when missing").
 
-**`push-requires-tests`** — intercepts `git push`. Blocks unless `npm test` has succeeded in the current agent loop. The `npm-test-tracker` observer writes `TEST_PASSED_EVENT` on every successful `npm test`; the rule consults via `when.happened: { in: "agent_loop" }`.
+**`push-requires-tests`** — intercepts `git push`. Blocks unless `npm test` has succeeded in the current agent loop AND no subsequent `git pull` has stale-d that success. Combines three features in one rule:
+
+  - `npm-test-tracker` writes `TEST_PASSED_EVENT` on every successful `npm test`.
+  - `retest-required-tracker` writes `RETEST_REQUIRED_EVENT` on every successful `git pull`.
+  - The rule gates via `when.happened: { event: TEST_PASSED_EVENT, in: "agent_loop", since: RETEST_REQUIRED_EVENT }` — fires when tests haven't passed at all in this loop, OR the latest test entry is older than the latest pull entry.
+  - Chain-aware: `npm test && git push` is speculatively allowed pre-execution. `&&` short-circuits on test failure, so the push is guarded without forcing a round-trip through the observer.
 
 **`commit-description-check`** — self-marking reminder. First `git commit` per agent loop blocks with a "re-read your description" message and self-marks via `onFire`. Second `git commit` in the same loop passes (the self-mark satisfies `when.happened`). A new agent loop resets the reminder.
 
