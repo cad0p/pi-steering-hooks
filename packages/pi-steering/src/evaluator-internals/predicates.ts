@@ -286,8 +286,26 @@ function speculativeHappenedAllow(
 }
 
 /**
- * Test whether an observer's `watch.inputMatches.command` matches a
- * bash ref's text. Skips observers without a command pattern (see
+ * Test whether an observer's `watch` is eligible for chain-aware
+ * speculative allow on a bash ref's text. Chain-aware allow depends on
+ * the observer ACTUALLY firing when the prior `&&` ref runs (and
+ * succeeds — `&&` guarantees that). To match the production
+ * dispatcher's firing conditions, the observer's `watch`:
+ *
+ *   - must not exclude `bash` via `toolName` — prior refs always
+ *     come from the bash tool;
+ *   - must not require failure/non-success exit codes — `&&`
+ *     short-circuits on failure, so if the prior ref fails the
+ *     successor doesn't run and the speculative decision is moot.
+ *     An observer whose `exitCode` is `"failure"` or a non-zero
+ *     number can never fire via the `&&` short-circuit path, so the
+ *     event will never be written and speculative allow would be
+ *     over-permissive;
+ *   - must declare an `inputMatches.command` pattern the prior ref
+ *     text matches — a command-agnostic observer isn't a strong
+ *     enough signal (it would fire on any bash event).
+ *
+ * Observers not meeting all three requirements are skipped (see
  * {@link speculativeHappenedAllow} for rationale).
  */
 function observerMatchesRefCommand(
@@ -295,6 +313,23 @@ function observerMatchesRefCommand(
 	refText: string,
 ): boolean {
 	if (!watch) return false;
+	// Refs always originate from the bash tool; observers scoped to a
+	// different tool can't fire on a prior `&&` bash ref.
+	if (watch.toolName !== undefined && watch.toolName !== "bash") return false;
+	// `&&` only advances on success. An observer demanding failure (or
+	// a specific non-success exit code) never fires on a ref that ran
+	// successfully, so treating its `writes` as speculatively-happening
+	// would be wrong. `"success"`, `"any"`, `0`, and absent exit-code
+	// constraints are safe; anything else is not.
+	const exit = watch.exitCode;
+	if (
+		exit !== undefined &&
+		exit !== "success" &&
+		exit !== "any" &&
+		exit !== 0
+	) {
+		return false;
+	}
 	const inputMatches = watch.inputMatches;
 	if (!inputMatches) return false;
 	const commandPattern = inputMatches["command"];

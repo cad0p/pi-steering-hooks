@@ -1353,6 +1353,154 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 			"stale event + prior && sync ref → speculative allow",
 		);
 	});
+
+	// ---- Chain reachability (|| and | must not bleed into && prior sets) ----
+
+	it("blocks `lint || sync && cr` — `||` short-circuits sync out of cr's prior", async () => {
+		// Bash parses as `(lint || sync) && cr`. When `lint` succeeds, `sync`
+		// is SKIPPED but the compound `(lint || sync)` is true, so `cr`
+		// still runs — without sync ever running. Speculative allow via
+		// sync would be unsafe here, because sync is not guaranteed to
+		// have run before cr.
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("lint || sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"`||` before a prior-&& ref breaks reachability — cr must still block",
+		);
+	});
+
+	it("allows `cd /r ; sync && cr` — `;` restores reachability on a new statement", async () => {
+		// After a `;` statement boundary, the next ref runs unconditionally
+		// again. From there `sync && cr` is a continuous `&&` chain
+		// starting on an unconditionally-reached ref, so speculative allow
+		// of `cr` via `sync` is safe.
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("cd /r ; sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"`;` restores reachability; the sync && cr segment grants speculative allow",
+		);
+	});
+
+	// ---- Observer watch compatibility (toolName + exitCode) ----
+
+	it("does not speculative-allow when observer requires exitCode: 'failure'", async () => {
+		// `&&` only advances on success, so an observer gated on failure
+		// can never fire from a prior-&& ref. Treating its `writes` as
+		// speculatively-happening would be wrong (the event will never be
+		// written from this path).
+		const failObserver: Observer = {
+			name: "fail-gated-sync",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "failure",
+			},
+			onResult: () => {},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [failObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"observer gated on failure cannot fire via && short-circuit; no speculative allow",
+		);
+	});
+
+	it("does not speculative-allow when observer's toolName is non-bash", async () => {
+		// Prior `&&` refs always originate from bash tool_calls. An
+		// observer scoped to a non-bash tool can never fire on one, so
+		// its declared writes are never produced on this code path.
+		const readObserver: Observer = {
+			name: "read-scoped-sync",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "read",
+				inputMatches: { command: /^sync\b/ },
+			},
+			onResult: () => {},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [readObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"read-scoped observer can't fire on bash refs; no speculative allow",
+		);
+	});
+
+	// ---- Observer dedup (user wins, matches dispatcher) ----
+
+	it("user observer shadows plugin observer of the same name in chain-aware allow", async () => {
+		// Plugin ships an observer `chain-sync-tracker` with a LOOSE watch
+		// (`/^sync\b/`) that would match `sync`. User declares their own
+		// observer of the same name with a TIGHT watch (`/^sync --lock\b/`)
+		// that does NOT match bare `sync`. The dispatcher fires only the
+		// user's observer (dedup-by-name, user wins); chain-aware reverse-
+		// index must apply the same semantics or it will grant on a
+		// pattern that never actually produces the event.
+		const userTightObserver: Observer = {
+			name: "chain-sync-tracker",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync --lock\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const pluginWithLooseObs: Plugin = {
+			name: "chain-plugin",
+			observers: [syncObserver], // loose `/^sync\b/`
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [userTightObserver] },
+			resolve([pluginWithLooseObs]),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"user observer's tighter watch wins; bare `sync` no longer matches",
+		);
+	});
 });
 
 describe("buildEvaluator: when.not + when.condition", () => {

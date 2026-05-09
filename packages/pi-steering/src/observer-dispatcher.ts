@@ -50,6 +50,7 @@ import {
 	type EvaluatorHost,
 } from "./evaluator-internals/context.ts";
 import { matchesPattern } from "./evaluator-internals/predicates.ts";
+import { mergeObserversUserFirst } from "./internal/merge-observers.ts";
 import { validateName } from "./plugin-merger.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import type {
@@ -116,19 +117,10 @@ export function buildObserverDispatcher(
 	// Merge user and plugin observers; duplicates of observer.name are
 	// deduped here by first-registered (user takes precedence over a
 	// plugin observer of the same name — matches the "user overrides
-	// plugin by declaring their own" pattern the rule list uses).
-	const merged: Observer[] = [];
-	const seen = new Set<string>();
-	for (const o of userObservers) {
-		if (seen.has(o.name)) continue;
-		seen.add(o.name);
-		merged.push(o);
-	}
-	for (const o of resolved.observers) {
-		if (seen.has(o.name)) continue;
-		seen.add(o.name);
-		merged.push(o);
-	}
+	// plugin by declaring their own" pattern the rule list uses). Shared
+	// with the evaluator's chain-aware reverse-index via
+	// `mergeObserversUserFirst` so both callers see the same final list.
+	const merged = mergeObserversUserFirst(userObservers, resolved.observers);
 
 	return {
 		dispatch: (event, ctx, agentLoopIndex) =>
