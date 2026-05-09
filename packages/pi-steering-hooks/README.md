@@ -183,7 +183,11 @@ The **reason** is written for the agent. Include what was blocked and what the s
 ```ts
 interface WhenClause {
   cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
-  happened?: { event: string; in: "agent_loop" | "session" };
+  happened?: {
+    event: string;
+    in: "agent_loop" | "session";
+    since?: string;  // optional invalidation sentinel
+  };
   not?: WhenClause;
   condition?: (ctx: PredicateContext) => boolean | Promise<boolean>;
 
@@ -195,7 +199,7 @@ interface WhenClause {
 Built-ins:
 
 - **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
-- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`.
+- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Chain-aware for `&&` bash chains — see "Chain-aware `happened`" below.
 - **`not`** — boolean NOT over a nested clause.
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
 
@@ -261,6 +265,106 @@ interface ObserverWatch {
 Observers fire on matching `tool_result` events. `watch.inputMatches.command` is **wrapper-aware** — a regex for `/^npm\s+test/` matches both `npm test` and `sh -c 'npm test'`.
 
 `observerCtx.appendEntry` auto-tags writes with `_agentLoopIndex`. Don't inject that tag yourself. Use `ctx.findEntries<Payload>(type)` to read prior entries back.
+
+### `writes` declarations
+
+Both `Rule.writes` and `Observer.writes` are optional string-literal arrays naming the custom session-entry event types the handler may `appendEntry`. They have **zero runtime cost** — the engine never reads them at dispatch time. Their sole purpose is compile-time cross-referencing inside {@link defineConfig}:
+
+```ts
+// observer ships the event
+const syncObserver = {
+  name: "ws-sync-tracker",
+  writes: ["ws-sync-done"],
+  watch: { toolName: "bash", inputMatches: { command: /^sync\b/ }, exitCode: "success" },
+  onResult: (_event, ctx) => ctx.appendEntry("ws-sync-done", {}),
+} as const satisfies Observer;
+
+export default defineConfig({
+  observers: [syncObserver],
+  rules: [{
+    name: "cr-needs-sync",
+    tool: "bash", field: "command",
+    pattern: /^cr\b/,
+    // `event` is type-narrowed to the union of all declared `writes`
+    // across plugins + user observers. A typo like "ws-sync-don" is
+    // rejected by the compiler.
+    when: { happened: { event: "ws-sync-done", in: "agent_loop" } },
+    reason: "Run sync first.",
+  }],
+});
+```
+
+When you skip declaring `writes`, the observer's produced events stay out of the `AllWrites` union and `when.happened.event` references to them are rejected as typos. The failure mode biases toward catching real typos (a plugin typo producing a non-firing rule turns into a compile error) at the cost of requiring each producer to enumerate its events once.
+
+### Temporal ordering with `happened.since`
+
+Sometimes "X happened" isn't enough — a later event should invalidate it. `happened.since` adds an optional invalidation sentinel:
+
+```ts
+{
+  name: "cr-needs-fresh-sync",
+  pattern: /^cr\b/,
+  when: {
+    happened: {
+      event: "ws-sync-done",
+      in: "agent_loop",
+      since: "upstream-failed",
+    },
+  },
+  reason: "Upstream failed after your last sync. Re-sync before cr.",
+}
+```
+
+Semantics: the event counts as "happened" only if its most-recent entry in scope is strictly newer than the most-recent `since` entry. If `since` has never been written in scope, the clause degrades to the simple presence check — so adding `since` is safe even when the invalidator isn't in play yet.
+
+Contrast with a hand-rolled `condition:` handler doing the same comparison: `since` is declarative, cross-checked at compile time (both `event` and `since` are constrained to the `Writes` union), and shared across rules without duplicating helper code. Reach for `condition` only when the comparison isn't "my event after their event" — e.g. counting, content matching, or quorum across multiple invalidators.
+
+### Chain-aware `happened`
+
+Agents frequently chain related commands in one tool_call:
+
+```bash
+sync && cr --description notes.md
+```
+
+The naive evaluation path blocks this chain: the evaluator runs BEFORE execution, so when it sees `cr`, the observer hasn't written `ws-sync-done` yet. Rule fires, block, retry, same block — an infinite loop.
+
+pi-steering resolves this by looking at **prior `&&`-chained refs**. If any of them matches an observer declaring `writes: [event]`, the event is treated as "about to happen" and the rule does NOT fire. `&&` short-circuits on the prior's failure, so the speculative decision is safe: either the prior succeeds (and writes the event, retroactively justifying the allow), or it fails and the current ref never runs.
+
+**Which joiners qualify:**
+
+| Joiner | Speculative allow? | Reason |
+|---|---|---|
+| `A && B` | ✅ | B runs only if A succeeded |
+| `A ; B`  | ❌ | B runs regardless of A |
+| `A \| B` | ❌ | pipeline, no ordering |
+| `A \|\| B` | ❌ | B runs only if A FAILED |
+
+**Authoring requirement.** Observers participating in chain-aware allow must declare `watch.inputMatches.command`. An observer matching every bash event isn't a strong enough signal to grant the allow.
+
+Worked example:
+
+```ts
+const syncObserver = {
+  name: "ws-sync-tracker",
+  writes: ["ws-sync-done"],
+  watch: { toolName: "bash", inputMatches: { command: /^sync\b/ }, exitCode: "success" },
+  onResult: (_e, ctx) => ctx.appendEntry("ws-sync-done", {}),
+} as const satisfies Observer;
+
+const crNeedsSync = {
+  name: "cr-needs-sync",
+  tool: "bash", field: "command",
+  pattern: /^cr\b/,
+  when: { happened: { event: "ws-sync-done", in: "agent_loop" } },
+  reason: "Run `sync` first.",
+} as const satisfies Rule;
+
+// Given the pair above:
+// bash `sync && cr ...` → allowed (cr has prior-&& ref matching the sync observer)
+// bash `cr ...`         → blocked (no prior && ref, observer hasn't fired yet)
+// bash `sync ; cr ...`  → blocked (semicolon doesn't short-circuit)
+```
 
 ### Compile-time safety via `defineConfig`
 
@@ -334,11 +438,11 @@ src/
 
 Every observer file exports three things:
 
-1. A `<EVENT>_TYPE` constant — the session-entry type literal.
+1. A `<EVENT>_EVENT` constant — the session-entry event literal.
 2. A `mark<Event>(ctx)` helper — encapsulates the shape of what gets written.
 3. The observer itself, using the helper.
 
-Rules that consume the event import the TYPE constant, never the raw string. When no observer corresponds (self-marking rule only), the constant + helper live in the rule file instead.
+Rules that consume the event import the EVENT constant, never the raw string. When no observer corresponds (self-marking rule only), the constant + helper live in the rule file instead.
 
 See [`examples/work-item-plugin/src/observers/npm-test-tracker.ts`](../../examples/work-item-plugin/src/observers/npm-test-tracker.ts) for a complete file following this pattern.
 
