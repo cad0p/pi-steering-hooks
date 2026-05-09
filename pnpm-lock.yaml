@@ -19,12 +19,12 @@ importers:
     devDependencies:
       pi-steering:
         specifier: workspace:*
-        version: link:../../packages/pi-steering-hooks
+        version: link:../../packages/pi-steering
       unbash-walker:
         specifier: workspace:*
         version: link:../../packages/unbash-walker
 
-  packages/pi-steering-hooks:
+  packages/pi-steering:
     dependencies:
       '@earendil-works/pi-coding-agent':
         specifier: '*'

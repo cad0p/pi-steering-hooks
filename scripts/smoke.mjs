@@ -30,7 +30,7 @@ import process from "node:process";
 const repoRoot = resolve(new URL("..", import.meta.url).pathname);
 const distEntry = join(
 	repoRoot,
-	"packages/pi-steering-hooks/dist/index.js",
+	"packages/pi-steering/dist/index.js",
 );
 
 /* -------------------------------------------------------------------------- */

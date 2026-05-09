@@ -34,7 +34,7 @@
  *         observer corresponds (ADR §14).
  *
  * Copy-adapt this layout. A real plugin likely ships more rules and
- * possibly a tracker too — see `packages/pi-steering-hooks/src/plugins/git/`
+ * possibly a tracker too — see `packages/pi-steering/src/plugins/git/`
  * for the tracker + tracker-extension pattern.
  *
  * ## Consuming this plugin

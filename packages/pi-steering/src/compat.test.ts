@@ -82,7 +82,7 @@ describe("compat: fromJSON happy paths", () => {
 
 	it("golden: example fixture used by the v1 JSON loader tests round-trips", () => {
 		// Mirrors the shape of the fixture at
-		// `packages/pi-steering-hooks/src/loader.test.ts` — using a
+		// `packages/pi-steering/src/loader.test.ts` — using a
 		// generic name so this test doesn't grow an import dependency
 		// on the legacy fixture file.
 		const fixture = {

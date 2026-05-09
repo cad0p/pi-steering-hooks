@@ -31,7 +31,7 @@ cd pi-steering-hooks
 pnpm install
 pnpm --filter pi-steering build   # dist/ is gitignored — build first
 
-pi install ./packages/pi-steering-hooks
+pi install ./packages/pi-steering
 ```
 
 Then restart pi.
