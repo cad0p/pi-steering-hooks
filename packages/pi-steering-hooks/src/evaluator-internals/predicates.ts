@@ -139,8 +139,8 @@ function evaluateCwd(
 
 /**
  * Built-in `when.happened` predicate. Reads session entries of the
- * given type from `ctx.findEntries`, filters by scope, and returns
- * **true when NO matching entry is found** — i.e. the type has NOT
+ * given event from `ctx.findEntries`, filters by scope, and returns
+ * **true when NO matching entry is found** — i.e. the event has NOT
  * happened yet in that scope.
  *
  * Matches ADR §5 semantics:
@@ -149,7 +149,7 @@ function evaluateCwd(
  *   - `in: "session"` keeps every entry.
  *
  * Inversion is handled by the caller via `when.not`. Authors wanting
- * "fires when the type HAS happened" wrap this clause in `not:`.
+ * "fires when the event HAS happened" wrap this clause in `not:`.
  */
 function evaluateHappened(
 	value: unknown,
@@ -159,17 +159,17 @@ function evaluateHappened(
 	if (
 		value === null ||
 		typeof value !== "object" ||
-		!("type" in value) ||
+		!("event" in value) ||
 		!("in" in value)
 	) {
 		throw new Error(
 			`[pi-steering-hooks] Rule "${ruleName}": when.happened ` +
-				`expected { type: string; in: "agent_loop" | "session" }; ` +
+				`expected { event: string; in: "agent_loop" | "session" }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
-	const { type, in: scope } = value as {
-		type: string;
+	const { event, in: scope } = value as {
+		event: string;
 		in: unknown;
 	};
 	// Validate the scope string. The type system says
@@ -194,7 +194,7 @@ function evaluateHappened(
 				`got ${JSON.stringify(scope)}`,
 		);
 	}
-	const entries = ctx.findEntries<Record<string, unknown>>(type);
+	const entries = ctx.findEntries<Record<string, unknown>>(event);
 	if (scope === "session") {
 		return entries.length === 0;
 	}

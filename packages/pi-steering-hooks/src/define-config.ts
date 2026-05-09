@@ -23,7 +23,7 @@
  *
  * Generics threaded through (ADR §8):
  *   - `AllObserverNames<P, Inline>` — for `Rule.observer` string refs.
- *   - `AllWrites<P, R, Inline>`     — for `Rule.when.happened.type`.
+ *   - `AllWrites<P, R, Inline>`     — for `Rule.when.happened.event`.
  *   - `AllRuleNames<P, R>`          — for `config.disabledRules`.
  *   - `AllPluginNames<P>`           — for `config.disabledPlugins`.
  *
@@ -171,13 +171,13 @@ export type AllRuleNames<
  *   - the top-level inline `rules`, AND
  *   - the top-level inline `observers`.
  *
- * Used to constrain {@link WhenClause.happened} `type` so typos
- * (e.g., `happened: { type: "sync-don" }` when the observer writes
+ * Used to constrain {@link WhenClause.happened} `event` so typos
+ * (e.g., `happened: { event: "sync-don" }` when the observer writes
  * `"sync-done"`) surface as compile errors.
  *
  * Authors who omit `writes` on a rule/observer don't contribute to the
  * union — the rule's write is undeclared, and any downstream
- * `when.happened.type` referencing it will be rejected. Matches the
+ * `when.happened.event` referencing it will be rejected. Matches the
  * "declare your writes" discipline that `writes[]` encourages.
  */
 export type AllWrites<
@@ -203,7 +203,7 @@ export type AllWrites<
  * Generic constraints:
  *   - `disabledRules` / `disabledPlugins` typed against the rule / plugin
  *     name unions — typos rejected at compile time.
- *   - `rules[].when.happened.type` typed against `AllWrites` — typos
+ *   - `rules[].when.happened.event` typed against `AllWrites` — typos
  *     rejected at compile time.
  */
 export interface DefineConfigInput<
@@ -233,7 +233,7 @@ export interface DefineConfigInput<
  * The `disabledRules` / `disabledPlugins` arrays are typed against the unions
  * of registered rule / plugin names — typos rejected.
  *
- * `rules[].when.happened.type` is typed against the union of all
+ * `rules[].when.happened.event` is typed against the union of all
  * `writes` declarations across plugin rules, plugin observers, user
  * rules, and user observers — typos rejected.
  *

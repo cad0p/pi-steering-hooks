@@ -12,12 +12,12 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { testObserver } from "pi-steering/testing";
 import {
-	TEST_PASSED_TYPE,
+	TEST_PASSED_EVENT,
 	npmTestTracker,
 } from "./npm-test-tracker.ts";
 
 describe("npm-test-tracker observer", () => {
-	it("records a TEST_PASSED_TYPE entry on successful `npm test`", async () => {
+	it("records a TEST_PASSED_EVENT entry on successful `npm test`", async () => {
 		const { entries, watchMatched } = await testObserver(
 			npmTestTracker,
 			{
@@ -30,7 +30,7 @@ describe("npm-test-tracker observer", () => {
 
 		assert.equal(watchMatched, true);
 		assert.equal(entries.length, 1);
-		assert.equal(entries[0]?.customType, TEST_PASSED_TYPE);
+		assert.equal(entries[0]?.customType, TEST_PASSED_EVENT);
 		assert.deepEqual(entries[0]?.data, {
 			command: "npm test",
 			// The dispatcher auto-tags plain-object payloads with

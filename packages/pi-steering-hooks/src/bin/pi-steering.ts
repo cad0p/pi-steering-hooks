@@ -468,7 +468,7 @@ function renderObserverLines(
  * Compact summary of a `WhenClause`. Returns a comma-separated list
  * of keys (e.g. `branch, cwd`). Built-in keys get special labels so
  * the output is informative without dumping full predicate values:
- *   - `happened` becomes `happened:<type>`
+ *   - `happened` becomes `happened:<event>`
  *   - `not` becomes `not:...`
  *   - `condition` stays `condition`
  *   - plugin predicates just show the key name (`branch`, `upstream`, …).
@@ -479,7 +479,7 @@ function whenSummaryKeys(when: WhenClause): string {
 		if (key === "happened") {
 			const happened = when.happened;
 			if (happened !== undefined) {
-				parts.push(`happened:${happened.type}`);
+				parts.push(`happened:${happened.event}`);
 			} else {
 				parts.push("happened");
 			}

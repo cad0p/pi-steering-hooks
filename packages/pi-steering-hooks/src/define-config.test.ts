@@ -224,7 +224,7 @@ describe("defineConfig: type-level checks", () => {
 //
 //   - `disabledRules` typed against union of registered rule names
 //   - `disabledPlugins` typed against union of registered plugin names
-//   - `when.happened.type` typed against union of declared `writes`
+//   - `when.happened.event` typed against union of declared `writes`
 //
 // Same `@ts-expect-error` strategy as above: if the type machinery
 // stops enforcing the constraint, the directive itself errors at
@@ -302,7 +302,7 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 		assert.equal(cfg.disabledPlugins?.length, 1);
 	});
 
-	it("when.happened.type rejects strings outside the writes union", () => {
+	it("when.happened.event rejects strings outside the writes union", () => {
 		const cfg = defineConfig({
 			rules: [
 				{
@@ -315,7 +315,7 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 					when: {
 						happened: {
 							// @ts-expect-error — "forbidden-type" not in writes union.
-							type: "forbidden-type",
+							event: "forbidden-type",
 							in: "agent_loop",
 						},
 					},
@@ -325,7 +325,7 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 		assert.equal(cfg.rules?.length, 1);
 	});
 
-	it("when.happened.type accepts strings in the rule's own writes union", () => {
+	it("when.happened.event accepts strings in the rule's own writes union", () => {
 		const cfg = defineConfig({
 			rules: [
 				{
@@ -335,14 +335,14 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 					pattern: /./,
 					reason: "r",
 					writes: ["self-type"],
-					when: { happened: { type: "self-type", in: "agent_loop" } },
+					when: { happened: { event: "self-type", in: "agent_loop" } },
 				},
 			],
 		});
 		assert.equal(cfg.rules?.[0]?.name, "r");
 	});
 
-	it("when.happened.type accepts strings from an inline observer's writes", () => {
+	it("when.happened.event accepts strings from an inline observer's writes", () => {
 		const observer = {
 			name: "obs",
 			writes: ["sync-done"],
@@ -357,14 +357,14 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 					field: "command",
 					pattern: /./,
 					reason: "r",
-					when: { happened: { type: "sync-done", in: "agent_loop" } },
+					when: { happened: { event: "sync-done", in: "agent_loop" } },
 				},
 			],
 		});
-		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "sync-done");
+		assert.equal(cfg.rules?.[0]?.when?.happened?.event, "sync-done");
 	});
 
-	it("when.happened.type accepts strings from a plugin rule's writes", () => {
+	it("when.happened.event accepts strings from a plugin rule's writes", () => {
 		const plugin = {
 			name: "p",
 			rules: [
@@ -387,14 +387,14 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 					field: "command",
 					pattern: /./,
 					reason: "r",
-					when: { happened: { type: "plugin-type", in: "agent_loop" } },
+					when: { happened: { event: "plugin-type", in: "agent_loop" } },
 				},
 			],
 		});
-		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "plugin-type");
+		assert.equal(cfg.rules?.[0]?.when?.happened?.event, "plugin-type");
 	});
 
-	it("when.happened.type accepts strings from a plugin observer's writes", () => {
+	it("when.happened.event accepts strings from a plugin observer's writes", () => {
 		const plugin = {
 			name: "p",
 			observers: [
@@ -415,12 +415,12 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 					pattern: /./,
 					reason: "r",
 					when: {
-						happened: { type: "plugin-obs-type", in: "agent_loop" },
+						happened: { event: "plugin-obs-type", in: "agent_loop" },
 					},
 				},
 			],
 		});
-		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "plugin-obs-type");
+		assert.equal(cfg.rules?.[0]?.when?.happened?.event, "plugin-obs-type");
 	});
 
 	it("G10 — Plugin.predicates without definePredicate requires the cast", () => {
@@ -458,7 +458,7 @@ describe("defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", ()
 	//     This is the "no typo detection" footgun.
 	//   - `writes` arrays: bare annotation widens `readonly ["x"]` to
 	//     `readonly string[]`, which can't project string literals, so
-	//     `AllWrites` collapses to `never`. EVERY `when.happened.type`
+	//     `AllWrites` collapses to `never`. EVERY `when.happened.event`
 	//     reference is rejected. This is the "can't use writes at all"
 	//     failure — louder, but still a footgun if you don't know why.
 
@@ -507,7 +507,7 @@ describe("defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", ()
 					// `AllWrites` to `never`. "sync-done" is rejected even
 					// though it IS in the runtime value — type info was lost
 					// at annotation time.
-					when: { happened: { type: "sync-done", in: "agent_loop" } },
+					when: { happened: { event: "sync-done", in: "agent_loop" } },
 				},
 			],
 		});
@@ -529,11 +529,11 @@ describe("defineConfig: bare-annotation footgun (ADR §8 authoring pattern)", ()
 					field: "command",
 					pattern: /./,
 					reason: "r",
-					when: { happened: { type: "sync-done", in: "agent_loop" } },
+					when: { happened: { event: "sync-done", in: "agent_loop" } },
 				},
 			],
 		});
-		assert.equal(cfg.rules?.[0]?.when?.happened?.type, "sync-done");
+		assert.equal(cfg.rules?.[0]?.when?.happened?.event, "sync-done");
 	});
 });
 

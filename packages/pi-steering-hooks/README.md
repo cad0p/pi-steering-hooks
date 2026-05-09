@@ -183,7 +183,7 @@ The **reason** is written for the agent. Include what was blocked and what the s
 ```ts
 interface WhenClause {
   cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
-  happened?: { type: string; in: "agent_loop" | "session" };
+  happened?: { event: string; in: "agent_loop" | "session" };
   not?: WhenClause;
   condition?: (ctx: PredicateContext) => boolean | Promise<boolean>;
 
@@ -195,7 +195,7 @@ interface WhenClause {
 Built-ins:
 
 - **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
-- **`happened`** — fires when an entry of `type` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`.
+- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`.
 - **`not`** — boolean NOT over a nested clause.
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
 
@@ -230,7 +230,7 @@ interface PredicateContext {
 {
   name: "commit-description-check",
   pattern: /^git\s+commit\b/,
-  when: { happened: { type: "description-reviewed", in: "agent_loop" } },
+  when: { happened: { event: "description-reviewed", in: "agent_loop" } },
   reason: "Re-read the commit message first.",
   writes: ["description-reviewed"],
   onFire: (ctx) => ctx.appendEntry("description-reviewed", {}),
@@ -275,7 +275,7 @@ export default defineConfig({
       tool: "bash", field: "command",
       pattern: /^npm\s+publish/,
       observer: "description-read",               // ← typo-checked against plugin + inline observers
-      when: { happened: { type: "doc-read", in: "agent_loop" } },  // ← type literal checked against writes
+      when: { happened: { event: "doc-read", in: "agent_loop" } },  // ← event literal checked against writes
       reason: "Read the release notes before publishing.",
     },
   ],
@@ -525,7 +525,7 @@ Grep your config for `turnIndex` and rename every occurrence.
 ```diff
   when: {
 -   happened: { type: "doc-read", in: "turn" }
-+   happened: { type: "doc-read", in: "agent_loop" }
++   happened: { event: "doc-read", in: "agent_loop" }
   }
 ```
 

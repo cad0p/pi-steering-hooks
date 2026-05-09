@@ -19,7 +19,7 @@ import {
 } from "pi-steering/testing";
 import {
 	commitDescriptionCheck,
-	DESCRIPTION_REVIEWED_TYPE,
+	DESCRIPTION_REVIEWED_EVENT,
 } from "./commit-description-check.ts";
 
 describe("commit-description-check", () => {
@@ -56,9 +56,9 @@ describe("commit-description-check", () => {
 		// `onFire` wrote the reminder entry.
 		assert.ok(
 			host.entries.some(
-				(e) => e.customType === DESCRIPTION_REVIEWED_TYPE,
+				(e) => e.customType === DESCRIPTION_REVIEWED_EVENT,
 			),
-			"onFire did not self-mark the DESCRIPTION_REVIEWED_TYPE entry",
+			"onFire did not self-mark the DESCRIPTION_REVIEWED_EVENT entry",
 		);
 
 		// Second commit in the same loop — the reminder entry is now

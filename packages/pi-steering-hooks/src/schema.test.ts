@@ -200,12 +200,12 @@ describe("schema: shape smoke tests", () => {
 
 	it("WhenClause.happened accepts the { type, in } shape", () => {
 		const loop: WhenClause = {
-			happened: { type: "ws-sync-done", in: "agent_loop" },
+			happened: { event: "ws-sync-done", in: "agent_loop" },
 		};
 		const session: WhenClause = {
-			happened: { type: "welcome-shown", in: "session" },
+			happened: { event: "welcome-shown", in: "session" },
 		};
-		assert.equal(loop.happened?.type, "ws-sync-done");
+		assert.equal(loop.happened?.event, "ws-sync-done");
 		assert.equal(session.happened?.in, "session");
 	});
 

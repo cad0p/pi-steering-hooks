@@ -482,7 +482,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "sync first",
-			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+			when: { happened: { event: "ws-sync-done", in: "agent_loop" } },
 		};
 		// No entries anywhere → rule fires.
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
@@ -501,7 +501,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "sync first",
-			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+			when: { happened: { event: "ws-sync-done", in: "agent_loop" } },
 		};
 		const ctx = makeCtx("/r", [
 			sessionEntry("ws-sync-done", { _agentLoopIndex: 5 }),
@@ -522,7 +522,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "sync first",
-			when: { happened: { type: "ws-sync-done", in: "agent_loop" } },
+			when: { happened: { event: "ws-sync-done", in: "agent_loop" } },
 		};
 		const ctx = makeCtx("/r", [
 			sessionEntry("ws-sync-done", { _agentLoopIndex: 3 }, undefined, "a"),
@@ -544,7 +544,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "once-per-session",
-			when: { happened: { type: "welcome-shown", in: "session" } },
+			when: { happened: { event: "welcome-shown", in: "session" } },
 		};
 		const ctx = makeCtx("/r", [
 			sessionEntry("welcome-shown", { _agentLoopIndex: 0 }),
@@ -565,7 +565,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "once-per-session",
-			when: { happened: { type: "welcome-shown", in: "session" } },
+			when: { happened: { event: "welcome-shown", in: "session" } },
 		};
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
 		const fires = await evaluator.evaluate(
@@ -584,7 +584,7 @@ describe("buildEvaluator: when.happened", () => {
 			pattern: "^cr\\b",
 			reason: "no-cr-twice",
 			when: {
-				not: { happened: { type: "cr-attempted", in: "agent_loop" } },
+				not: { happened: { event: "cr-attempted", in: "agent_loop" } },
 			},
 		};
 		// Entry tagged with the current agent loop → happened predicate
@@ -610,7 +610,7 @@ describe("buildEvaluator: when.happened", () => {
 			pattern: "^cr\\b",
 			reason: "no-cr-twice",
 			when: {
-				not: { happened: { type: "cr-attempted", in: "agent_loop" } },
+				not: { happened: { event: "cr-attempted", in: "agent_loop" } },
 			},
 		};
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
@@ -676,7 +676,7 @@ describe("buildEvaluator: when.happened", () => {
 			pattern: "^cr\\b",
 			reason: "legacy",
 			// @ts-expect-error — "turn" is the removed v0.0.0-poc scope name
-			when: { happened: { type: "ws-sync-done", in: "turn" } },
+			when: { happened: { event: "ws-sync-done", in: "turn" } },
 		};
 		const warnings = captureWarnings();
 		try {
@@ -712,7 +712,7 @@ describe("buildEvaluator: when.happened", () => {
 			pattern: "^cr\\b",
 			reason: "typo",
 			// @ts-expect-error — camelCase is not a valid scope
-			when: { happened: { type: "ws-sync-done", in: "agentLoop" } },
+			when: { happened: { event: "ws-sync-done", in: "agentLoop" } },
 		};
 		const warnings = captureWarnings();
 		try {
@@ -752,7 +752,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "sync first",
-			when: { happened: { type: "legacy", in: "agent_loop" } },
+			when: { happened: { event: "legacy", in: "agent_loop" } },
 		};
 		const ctx = makeCtx("/r", [
 			sessionEntry("legacy", { foo: "bar" }), // no _agentLoopIndex
@@ -1483,7 +1483,7 @@ describe("buildEvaluator: override comments", () => {
 
 	it("audit entry carries the current _agentLoopIndex (F3)", async () => {
 		// Override entries go through `shared.appendEntry` (the wrapped
-		// path) so rules using `when.happened: { type:
+		// path) so rules using `when.happened: { event:
 		// "steering-override", in: "agent_loop" }` can see them. This
 		// test just pins the shape — the agent_loop / session behaviours
 		// follow.
@@ -1530,7 +1530,7 @@ describe("buildEvaluator: override comments", () => {
 			pattern: "^echo",
 			reason: "canary",
 			when: {
-				happened: { type: "steering-override", in: "agent_loop" },
+				happened: { event: "steering-override", in: "agent_loop" },
 			},
 		};
 		const evaluator = buildEvaluator(
@@ -1589,7 +1589,7 @@ describe("buildEvaluator: override comments", () => {
 			field: "command",
 			pattern: "^echo",
 			reason: "canary",
-			when: { happened: { type: "steering-override", in: "session" } },
+			when: { happened: { event: "steering-override", in: "session" } },
 		};
 		const evaluator = buildEvaluator(
 			{ defaultNoOverride: false, rules: [overridableRule, canaryRule] },
@@ -2150,7 +2150,7 @@ describe("buildEvaluator: findEntries", () => {
 			field: "command",
 			pattern: "^echo",
 			reason: "b fires only if A has not fired this loop",
-			when: { happened: { type: "A-fired", in: "agent_loop" } },
+			when: { happened: { event: "A-fired", in: "agent_loop" } },
 		};
 		const host = makeHost();
 		const ctx = makeCtx("/r", host.entries);
@@ -2182,7 +2182,7 @@ describe("buildEvaluator: findEntries", () => {
 		// A rule-level `noOverride: false` rule writes a
 		// `steering-override` audit entry when the agent supplies an
 		// override comment. A later rule can gate on that via
-		// `when.happened: { type: "steering-override", in: "agent_loop" }`.
+		// `when.happened: { event: "steering-override", in: "agent_loop" }`.
 		// Pre-S2, the later rule's cached findEntries read from before the
 		// override wrote would miss the audit entry.
 		const overridable: Rule = {
@@ -2206,7 +2206,7 @@ describe("buildEvaluator: findEntries", () => {
 			pattern: /^git\s+push/,
 			reason: "gate",
 			when: {
-				happened: { type: "steering-override", in: "agent_loop" },
+				happened: { event: "steering-override", in: "agent_loop" },
 			},
 		};
 		const host = makeHost();

@@ -7,7 +7,7 @@
  * Demonstrates `Rule.onFire` + self-marking (ADR §6, §14):
  *
  *   - Pattern `/^git\s+commit\b/` matches any commit command.
- *   - `when.happened: { type: DESCRIPTION_REVIEWED_TYPE, in: "agent_loop" }`
+ *   - `when.happened: { event: DESCRIPTION_REVIEWED_EVENT, in: "agent_loop" }`
  *     fires when the reminder entry has NOT been written this loop.
  *   - `onFire: markDescriptionReviewed` writes that entry when the
  *     rule blocks. First commit per agent loop → blocks with the
@@ -17,7 +17,7 @@
  *
  * ## Encapsulation (ADR §14)
  *
- * No corresponding observer ships the `DESCRIPTION_REVIEWED_TYPE`
+ * No corresponding observer ships the `DESCRIPTION_REVIEWED_EVENT`
  * event — the rule is the producer and the consumer. The convention
  * for that case is: the constant + helper live IN THE RULE FILE
  * itself. Observer files own their constants; self-marking rule
@@ -33,7 +33,7 @@ import type { PredicateContext, Rule } from "pi-steering";
  * tests (or any other rule / observer in the same plugin) can
  * reference the same literal.
  */
-export const DESCRIPTION_REVIEWED_TYPE =
+export const DESCRIPTION_REVIEWED_EVENT =
 	"example-description-reviewed" as const;
 
 /**
@@ -58,7 +58,7 @@ export function markDescriptionReviewed(
 	payload: DescriptionReviewedPayload = { command: "" },
 ): void {
 	ctx.appendEntry<DescriptionReviewedPayload>(
-		DESCRIPTION_REVIEWED_TYPE,
+		DESCRIPTION_REVIEWED_EVENT,
 		payload,
 	);
 }
@@ -69,12 +69,12 @@ export const commitDescriptionCheck = {
 	field: "command",
 	pattern: /^git\s+commit\b/,
 	when: {
-		happened: { type: DESCRIPTION_REVIEWED_TYPE, in: "agent_loop" },
+		happened: { event: DESCRIPTION_REVIEWED_EVENT, in: "agent_loop" },
 	},
 	reason:
 		"Re-read the commit description before committing. This reminder fires once per agent loop — your next commit in this loop will go through.",
 	noOverride: false,
-	writes: [DESCRIPTION_REVIEWED_TYPE],
+	writes: [DESCRIPTION_REVIEWED_EVENT],
 	onFire: (ctx) => {
 		markDescriptionReviewed(ctx, {
 			command: ctx.input.command ?? "",

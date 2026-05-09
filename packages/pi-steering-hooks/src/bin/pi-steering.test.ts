@@ -431,7 +431,7 @@ describe("pi-steering list", () => {
 						tool: "bash",
 						field: "command",
 						pattern: /^git push/,
-						when: { happened: { type: "tests-passed", in: "agent_loop" } },
+						when: { happened: { event: "tests-passed", in: "agent_loop" } },
 						reason: "no",
 					},
 				],

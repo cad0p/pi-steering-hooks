@@ -346,7 +346,7 @@ function formatReason(
  * `appendEntry` auto-tags every write with the current
  * `_agentLoopIndex`, including the `steering-override` audit entries
  * written from the override-accepted path — so rules using
- * `when.happened: { type: "steering-override", in: "agent_loop" }`
+ * `when.happened: { event: "steering-override", in: "agent_loop" }`
  * can correctly filter override activity to the current agent loop.
  *
  * `host` is retained on the shared context for non-entry operations
@@ -542,7 +542,7 @@ async function evaluateCandidate(
 		if (reason !== null) {
 			// Go through the wrapped `shared.appendEntry` so the
 			// `_agentLoopIndex` auto-tag lands on the audit entry. Rules
-			// using `when.happened: { type: "steering-override", in:
+			// using `when.happened: { event: "steering-override", in:
 			// "agent_loop" }` rely on the tag to filter overrides by the
 			// current loop; a direct `host.appendEntry` here would bypass
 			// the wrapper and leave the entry invisible to that predicate.

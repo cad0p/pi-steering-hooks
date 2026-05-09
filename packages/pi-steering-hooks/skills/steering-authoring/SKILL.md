@@ -23,7 +23,7 @@ The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi
 | "block X only in dir Y" | Add `when: { cwd: /Y/ }` to the rule. |
 | "block X unless on branch Z" | `when: { not: { branch: /Z/ } }` — requires the git plugin. |
 | "block X unless `--flag`" | `unless: /--flag\b/`. |
-| "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.happened` gates on it (`{ type, in: "agent_loop" }`). Prefer this to hand-rolled `findEntries` + `agentLoopIndex` comparisons — same semantics, less code. |
+| "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.happened` gates on it (`{ event, in: "agent_loop" }`). Prefer this to hand-rolled `findEntries` + `agentLoopIndex` comparisons — same semantics, less code. |
 | "add a custom check" | Write a plugin in `.pi/steering/plugins/`, import it into `index.ts`, register it in `plugins: [...]`. |
 | "test this rule" | Create `steering.test.ts` using `expectBlocks` / `expectAllows` / `loadHarness`. |
 | "migrate my old JSON config" | Run `pi-steering import-json .pi/steering.json -o .pi/steering.ts`. |

@@ -6,9 +6,9 @@
  *
  * Exercises the observer → rule handoff end-to-end via `loadHarness`:
  *
- *   1. Push without a prior TEST_PASSED_TYPE entry → block.
+ *   1. Push without a prior TEST_PASSED_EVENT entry → block.
  *   2. Dispatch an `npm test` success event through the harness →
- *      the observer writes TEST_PASSED_TYPE into the session entries.
+ *      the observer writes TEST_PASSED_EVENT into the session entries.
  *   3. Push in the same agent loop → allow.
  *
  * Step (2) uses `harness.dispatch` — the same call production uses on
@@ -29,7 +29,7 @@ import {
 import type { Plugin } from "pi-steering";
 import {
 	npmTestTracker,
-	TEST_PASSED_TYPE,
+	TEST_PASSED_EVENT,
 } from "../observers/npm-test-tracker.ts";
 import { pushRequiresTests } from "./push-requires-tests.ts";
 
@@ -98,10 +98,10 @@ describe("push-requires-tests", () => {
 			0,
 		);
 
-		// The observer should have written TEST_PASSED_TYPE.
+		// The observer should have written TEST_PASSED_EVENT.
 		assert.ok(
-			host.entries.some((e) => e.customType === TEST_PASSED_TYPE),
-			"observer did not record TEST_PASSED_TYPE",
+			host.entries.some((e) => e.customType === TEST_PASSED_EVENT),
+			"observer did not record TEST_PASSED_EVENT",
 		);
 
 		// Now the push should be allowed — the rule's

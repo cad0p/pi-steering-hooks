@@ -21,8 +21,8 @@ import {
 	mockExtensionContext,
 } from "pi-steering/testing";
 import workItemPlugin, {
-	TEST_PASSED_TYPE,
-	DESCRIPTION_REVIEWED_TYPE,
+	TEST_PASSED_EVENT,
+	DESCRIPTION_REVIEWED_EVENT,
 } from "./index.ts";
 
 describe("work-item-plugin (end-to-end)", () => {
@@ -93,9 +93,9 @@ describe("work-item-plugin (end-to-end)", () => {
 		);
 		assert.ok(
 			host.entries.some(
-				(e) => e.customType === DESCRIPTION_REVIEWED_TYPE,
+				(e) => e.customType === DESCRIPTION_REVIEWED_EVENT,
 			),
-			"DESCRIPTION_REVIEWED_TYPE should be present after onFire",
+			"DESCRIPTION_REVIEWED_EVENT should be present after onFire",
 		);
 
 		// Second: well-formed commit passes. `commit-requires-work-item`
@@ -126,7 +126,7 @@ describe("work-item-plugin (end-to-end)", () => {
 		});
 
 		// Fire npm test success through the dispatcher — observer
-		// writes TEST_PASSED_TYPE into the shared entries store.
+		// writes TEST_PASSED_EVENT into the shared entries store.
 		await harness.dispatch(
 			{
 				type: "tool_result",
@@ -140,8 +140,8 @@ describe("work-item-plugin (end-to-end)", () => {
 			7,
 		);
 		assert.ok(
-			host.entries.some((e) => e.customType === TEST_PASSED_TYPE),
-			"observer should have written TEST_PASSED_TYPE",
+			host.entries.some((e) => e.customType === TEST_PASSED_EVENT),
+			"observer should have written TEST_PASSED_EVENT",
 		);
 
 		// Push now allowed — tests passed this loop.

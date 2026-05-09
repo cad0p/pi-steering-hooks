@@ -1139,7 +1139,7 @@ describe("mockExtensionContext", () => {
 			when: {
 				// Default `when.happened` semantic: fires when the type has
 				// NOT been written in the scope (ADR §5).
-				happened: { type: "test-passed", in: "agent_loop" },
+				happened: { event: "test-passed", in: "agent_loop" },
 			},
 		};
 		const observer: Observer = {

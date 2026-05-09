@@ -124,30 +124,29 @@ export interface WhenClause<Writes extends string = string> {
 	cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
 
 	/**
-	 * Rule fires when an entry of the given `type` has NOT happened in
-	 * the given scope. Typical usage: "block `cr` unless sync has
-	 * happened" —
-	 * `happened: { type: "rds-ws-sync-done", in: "agent_loop" }`.
+	 * Rule fires when the given `event` has NOT happened in the given
+	 * scope. Typical usage: "block `cr` unless sync has happened" —
+	 * `happened: { event: "rds-ws-sync-done", in: "agent_loop" }`.
 	 *
 	 * Scopes:
 	 *   - `"agent_loop"` — filter session entries by
 	 *     `entry.data._agentLoopIndex === ctx.agentLoopIndex`. The engine
 	 *     auto-injects that tag on every `appendEntry` write, so plugin
 	 *     authors don't have to remember to tag manually.
-	 *   - `"session"`    — no scope filter. Any entry of `type` present
+	 *   - `"session"`    — no scope filter. Any entry of `event` present
 	 *     in the session JSONL satisfies.
 	 *
 	 * Inversion: place inside `not` to flip —
-	 * `not: { happened: { type, in } }` fires when the type HAS
+	 * `not: { happened: { event, in } }` fires when the event HAS
 	 * happened. See ADR §5.
 	 *
-	 * Compile-time constraint: inside {@link defineConfig}, the `type`
+	 * Compile-time constraint: inside {@link defineConfig}, the `event`
 	 * field is narrowed to the union of all `writes` declared across
 	 * plugin rules, plugin observers, user rules, and user observers.
 	 * Typos become compile errors. Outside `defineConfig` the
 	 * `Writes` parameter defaults to `string` so the check is skipped.
 	 */
-	happened?: { type: Writes; in: "agent_loop" | "session" };
+	happened?: { event: Writes; in: "agent_loop" | "session" };
 
 	/**
 	 * Boolean NOT: the rule fires only when every nested predicate
@@ -236,8 +235,8 @@ export interface BaseRule<
 	/**
 	 * Composable predicate block. See {@link WhenClause}.
 	 *
-	 * `Writes` is the union of session-entry `type` literals the rule's
-	 * `when.happened.type` is allowed to reference. Threaded through by
+	 * `Writes` is the union of session-entry event literals the rule's
+	 * `when.happened.event` is allowed to reference. Threaded through by
 	 * {@link defineConfig} from all declared `writes` arrays in scope.
 	 */
 	when?: WhenClause<Writes>;
@@ -270,10 +269,10 @@ export interface BaseRule<
 	 *
 	 * **Compile-time effect (via {@link defineConfig}):** the union of
 	 * all `writes` literals declared across plugin rules, plugin
-	 * observers, user rules, and user observers constrains the `type`
+	 * observers, user rules, and user observers constrains the `event`
 	 * field of every {@link WhenClause.happened} inside the same config.
 	 * Declaring a write here makes it referenceable from
-	 * `when.happened.type` anywhere in that config; omitting it leaves
+	 * `when.happened.event` anywhere in that config; omitting it leaves
 	 * the string out of the union and downstream references to it are
 	 * rejected as typos.
 	 *
@@ -288,7 +287,7 @@ export interface BaseRule<
 	 * **Footgun: bare `: Rule` / `: Observer` / `: Plugin` annotations
 	 * widen the literal `writes` array to `readonly string[]`. The engine
 	 * can no longer project string-literal members, so `AllWrites`
-	 * collapses to `never` — meaning EVERY `when.happened.type`
+	 * collapses to `never` — meaning EVERY `when.happened.event`
 	 * reference in the config is rejected as a typo, not silently
 	 * accepted.
 	 *
@@ -299,7 +298,7 @@ export interface BaseRule<
 	 * **Opt-out:** authors who build their config via
 	 * `satisfies SteeringConfig` instead of `defineConfig` lose the
 	 * compile-time check — the `SteeringConfig` shape defaults the
-	 * {@link Rule} generics to `string`, so `when.happened.type` is
+	 * {@link Rule} generics to `string`, so `when.happened.event` is
 	 * unconstrained. `defineConfig` is the entry point that enforces.
 	 *
 	 * The wider warning — "name" / "plugin" literals widening to
@@ -522,10 +521,10 @@ export interface Observer {
 	 *
 	 * **Compile-time effect (via {@link defineConfig}):** the union of
 	 * all `writes` literals declared across plugin rules, plugin
-	 * observers, user rules, and user observers constrains the `type`
+	 * observers, user rules, and user observers constrains the `event`
 	 * field of every {@link WhenClause.happened} inside the same config.
 	 * Declaring a write here makes it referenceable from
-	 * `when.happened.type` anywhere in that config; omitting it leaves
+	 * `when.happened.event` anywhere in that config; omitting it leaves
 	 * the string out of the union and downstream references to it are
 	 * rejected as typos.
 	 *
@@ -534,7 +533,7 @@ export interface Observer {
 	 * reusable observer constants, or declare them inline inside
 	 * `defineConfig({ observers: [...] })`. Bare `: Observer` annotations
 	 * widen `writes` to `readonly string[]` and collapse `AllWrites` to
-	 * `never`, rejecting every `when.happened.type` reference.
+	 * `never`, rejecting every `when.happened.event` reference.
 	 *
 	 * **Runtime effect:** none. `writes` is purely documentation +
 	 * type-level plumbing — the engine does NOT verify that `onResult`

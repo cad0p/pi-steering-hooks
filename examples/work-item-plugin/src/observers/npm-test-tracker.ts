@@ -5,7 +5,7 @@
  * `npm-test-tracker` — example observer.
  *
  * Watches `bash` tool_results where the command matches `/^npm test/`
- * with `exitCode: "success"`. On match, records a `TEST_PASSED_TYPE`
+ * with `exitCode: "success"`. On match, records a `TEST_PASSED_EVENT`
  * session entry so rules can later consult whether tests have passed
  * this agent loop.
  *
@@ -14,12 +14,12 @@
  * The canonical observer encapsulation convention — every observer
  * file exports three things:
  *
- *   1. A `<EVENT>_TYPE` constant (the session-entry type).
+ *   1. A `<EVENT>_EVENT` constant (the session-entry event type).
  *   2. A `mark<Event>` helper that calls `ctx.appendEntry(<TYPE>)`
  *      with the right shape.
  *   3. The observer itself, using the helper.
  *
- * Rules that gate on this event import `TEST_PASSED_TYPE` (not the
+ * Rules that gate on this event import `TEST_PASSED_EVENT` (not the
  * raw string) and/or call `markTestPassed` from their own `onFire`.
  * The raw string literal lives in exactly one place — here — and
  * downstream typos become compile errors.
@@ -29,9 +29,9 @@ import type { Observer, ObserverContext, PredicateContext } from "pi-steering";
 
 /**
  * Session-entry type written when `npm test` succeeds. Rules gate via
- * `when: { happened: { type: TEST_PASSED_TYPE, in: "agent_loop" } }`.
+ * `when: { happened: { event: TEST_PASSED_EVENT, in: "agent_loop" } }`.
  */
-export const TEST_PASSED_TYPE = "example-npm-test-passed" as const;
+export const TEST_PASSED_EVENT = "example-npm-test-passed" as const;
 
 /**
  * Typed shape for the payload we write. Observers that need richer
@@ -55,14 +55,14 @@ export function markTestPassed(
 	ctx: ObserverContext | PredicateContext,
 	payload: TestPassedPayload = { command: "npm test" },
 ): void {
-	ctx.appendEntry<TestPassedPayload>(TEST_PASSED_TYPE, payload);
+	ctx.appendEntry<TestPassedPayload>(TEST_PASSED_EVENT, payload);
 }
 
 /**
  * The observer itself. `as const satisfies Observer` preserves the
  * literal `name: "npm-test-tracker"` and the `writes` tuple so
  * `defineConfig`'s compile-time cross-reference checking works —
- * rules referencing `happened: { type: TEST_PASSED_TYPE }` get
+ * rules referencing `happened: { event: TEST_PASSED_EVENT }` get
  * validated against this observer's declared writes.
  *
  * See ADR §7 (`writes` declarations) for the authoring-pattern
@@ -70,7 +70,7 @@ export function markTestPassed(
  */
 export const npmTestTracker = {
 	name: "npm-test-tracker",
-	writes: [TEST_PASSED_TYPE],
+	writes: [TEST_PASSED_EVENT],
 	watch: {
 		toolName: "bash",
 		inputMatches: { command: /^npm\s+test\b/ },

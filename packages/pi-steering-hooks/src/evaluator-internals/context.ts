@@ -268,7 +268,7 @@ export function createFindEntries(
  *      `appendEntry` invalidates that type's cached list, so the next
  *      read re-scans the session JSONL and observes the write. Without
  *      this, a rule's `onFire` appending X followed by a later rule's
- *      `when.happened: { type: X }` would read a stale pre-write
+ *      `when.happened: { event: X }` would read a stale pre-write
  *      snapshot.
  *
  * Consumers who don't need write-through-reads (tests, one-shot
