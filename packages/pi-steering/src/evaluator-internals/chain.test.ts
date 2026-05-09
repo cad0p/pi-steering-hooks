@@ -271,42 +271,42 @@ describe("computePriorAndChains: strictly-prior invariant", () => {
 	// agent bypass a block by placing the "satisfying" ref AFTER the
 	// blocked ref, since events from future refs would speculatively
 	// pre-satisfy a `when.happened` check on the current ref.
-	it("no ref in its own prior set", () => {
-		const refs = refsFor("A && B && C && D");
-		const chains = computePriorAndChains(refs);
-		for (let i = 0; i < refs.length; i++) {
-			const selfText = refToText(refs[i]!);
-			for (const prior of chains[i] ?? []) {
-				assert.notEqual(
-					prior.text,
-					selfText,
-					`ref ${i} (${selfText}) found itself in its prior set`,
-				);
-			}
-		}
-	});
+	//
+	// The invariant is most load-bearing at chain-RESET boundaries
+	// (`;`, `||`, `|`, subshell commits) — that's where the walk has
+	// to DISCARD state correctly. A forward-reference bug in the
+	// reset logic would escape a pure-`&&` fixture because `&&` only
+	// ever appends to `current`. The fixture table below deliberately
+	// mixes operators so every reset branch of
+	// {@link computePriorAndChains} is exercised by this invariant.
+	//
+	// Note: this test checks the SHAPE of the prior sets (strictly-
+	// prior indices only); the VALUES in each prior set are pinned
+	// by the reachability-matrix tests above.
+	const fixtures: readonly string[] = [
+		"A && B && C && D", // pure-&& baseline (append-only, no resets)
+		"A ; B && C", // `;` reset, then `&&` resumes
+		"A || B && C", // `||` break; C has no prior
+		"A && B ; C && D", // `;` reset mid-script
+		"A && B || C && D", // `||` break mid-script
+		"(A && B) && C", // subshell `&&`-commit to outer
+		"A && (B ; C) && D", // conservative under-allow subshell
+		"A && B | C && D", // pipe break
+	];
 
-	it("prior sets never include refs at indices >= self", () => {
-		// Concrete: for each (i, j) with j >= i, refs[j]'s text must
-		// not appear in chains[i]. The walk populates left-to-right and
-		// never forward-references by construction; this test pins the
-		// invariant against future refactors.
-		const script = "A && B && C && D";
-		const refs = refsFor(script);
-		const chains = computePriorAndChains(refs);
-		// Build the text-per-ref array the same way refToText does:
-		// `basename args...`. For these single-token commands the
-		// basename IS the text.
-		const texts = ["A", "B", "C", "D"];
-		for (let i = 0; i < refs.length; i++) {
-			const priorTextsSet = new Set(
-				(chains[i] ?? []).map((r) => r.text),
-			);
-			for (let j = i; j < refs.length; j++) {
-				assert.ok(
-					!priorTextsSet.has(texts[j]!),
-					`ref ${i} (${texts[i]}) contains future ref ${j} (${texts[j]}) in its prior set — forward-reference violates strictly-prior invariant`,
-				);
+	it("prior[i] contains only refs at indices < i across chain-reset boundaries", () => {
+		for (const command of fixtures) {
+			const refs = refsFor(command);
+			const chains = computePriorAndChains(refs);
+			const texts = refs.map(refToText);
+			for (let i = 0; i < refs.length; i++) {
+				for (const prior of chains[i] ?? []) {
+					const priorIndex = texts.indexOf(prior.text);
+					assert.ok(
+						priorIndex >= 0 && priorIndex < i,
+						`[${command}] ref ${i} (${texts[i]}) has prior "${prior.text}" at index ${priorIndex} — must be strictly < ${i} (self- or forward-reference violates strictly-prior invariant)`,
+					);
+				}
 			}
 		}
 	});
