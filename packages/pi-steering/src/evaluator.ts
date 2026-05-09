@@ -126,6 +126,13 @@ export interface EvaluatorRuntime {
  *                    (typically `pi` itself in production; tests pass
  *                    a stub). Kept separate from `ExtensionContext`
  *                    because the ctx shape does not expose these.
+ *
+ * Note: `observersByWrittenEvent` is built ONCE at construction from
+ * merged `config.observers + resolved.observers`. If future versions
+ * add a dynamic-reload path (observers added at runtime), this reverse
+ * index must be rebuilt on change — otherwise chain-aware
+ * `when.happened` consults a stale observer list. Today there is no
+ * dynamic-reload path.
  */
 export function buildEvaluator(
 	config: SteeringConfig,
