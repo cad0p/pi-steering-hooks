@@ -31,11 +31,11 @@ function refsFor(command: string): readonly CommandRef[] {
 	return expandWrapperCommands(extracted).commands;
 }
 
-/** No real entries — baseline is always 0. */
-const NO_REAL_ENTRIES = () => [];
-
 const SYNC_DONE = "sync-done" as const;
 const UPSTREAM_FAILED = "upstream-failed" as const;
+
+/** Reserved speculative baseline — keep in sync with SPECULATIVE_BASELINE. */
+const SPEC_BASE = 2 ** 52;
 
 function syncObserver(
 	overrides: Partial<Observer> = {},
@@ -55,17 +55,13 @@ function syncObserver(
 
 describe("synthesizeSpeculativeEntries: joiner reachability", () => {
 	it("empty refs → empty result", () => {
-		const out = synthesizeSpeculativeEntries([], [syncObserver()], NO_REAL_ENTRIES);
+		const out = synthesizeSpeculativeEntries([], [syncObserver()]);
 		assert.equal(out.size, 0);
 	});
 
 	it("`sync && cr` — cr sees sync's synthetic entry", () => {
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const syncView = out.get(refs[0]!);
 		const crView = out.get(refs[1]!);
 		assert.deepEqual(syncView, {}, "first ref sees empty chain");
@@ -73,41 +69,29 @@ describe("synthesizeSpeculativeEntries: joiner reachability", () => {
 		assert.equal(crView[SYNC_DONE].length, 1);
 		assert.deepEqual(crView[SYNC_DONE][0], {
 			data: {},
-			timestamp: 1, // baseline 0 + 1 + ref index 0
+			timestamp: SPEC_BASE + 1, // baseline + 1 + ref index 0
 			speculative: true,
 		});
 	});
 
 	it("`cr && sync` — cr has no prior && producer", () => {
 		const refs = refsFor("cr --review && sync");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(out.get(refs[0]!), {}, "cr sees empty");
-		// sync sees cr's produced events — but cr doesn't match the
-		// observer, so sync still sees empty too.
+		// sync is after cr in source order, so sync sees whatever cr
+		// produced — but cr doesn't match the observer, so sync sees empty.
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
 	it("`sync ; cr` — `;` does NOT propagate synthesis across", () => {
 		const refs = refsFor("sync ; cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(out.get(refs[1]!), {}, "cr after `;` sees no chain");
 	});
 
 	it("`sync || cr` — `||` breaks the chain", () => {
 		const refs = refsFor("sync || cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
@@ -117,21 +101,13 @@ describe("synthesizeSpeculativeEntries: joiner reachability", () => {
 		// `&&` happens on an unreachable segment → sync is not an
 		// eligible producer for cr.
 		const refs = refsFor("lint || sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(out.get(refs[2]!), {});
 	});
 
 	it("`cd /x ; sync && cr` — `;` restores reachability", () => {
 		const refs = refsFor("cd /x ; sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const crView = out.get(refs[refs.length - 1]!);
 		assert.ok(
 			crView?.[SYNC_DONE],
@@ -141,11 +117,7 @@ describe("synthesizeSpeculativeEntries: joiner reachability", () => {
 
 	it("`echo foo && sync && cr` — transitive chain", () => {
 		const refs = refsFor("echo foo && sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const crView = out.get(refs[2]!);
 		assert.ok(crView?.[SYNC_DONE], "cr inherits the && chain");
 	});
@@ -160,11 +132,7 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			onResult: () => {},
 		};
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[looseObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [looseObs]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
@@ -179,18 +147,14 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			onResult: () => {},
 		};
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[readObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [readObs]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
 	it("observer gated on exitCode: 'failure' → no synthesis (success event)", () => {
 		// The synthesized event is `exitCode: 0`; a watch demanding
-		// failure rejects it via `matchesWatch`. This is the
-		// delegation-to-matchesWatch contract — no subset re-impl here.
+		// failure rejects it via `matchesWatch`. Delegation to
+		// matchesWatch — no subset re-impl here.
 		const failObs = syncObserver({
 			name: "fail-gated",
 			watch: {
@@ -200,11 +164,7 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			},
 		});
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[failObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [failObs]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
@@ -217,11 +177,7 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			},
 		});
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[tightObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [tightObs]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
@@ -235,11 +191,7 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			onResult: () => {},
 		};
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[noWritesObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [noWritesObs]);
 		assert.deepEqual(out.get(refs[1]!), {});
 	});
 
@@ -259,11 +211,7 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 			},
 		});
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[obsA, obsB],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [obsA, obsB]);
 		const crView = out.get(refs[1]!);
 		assert.equal(
 			crView?.[SYNC_DONE]?.length,
@@ -274,39 +222,35 @@ describe("synthesizeSpeculativeEntries: observer watch gating", () => {
 });
 
 describe("synthesizeSpeculativeEntries: timestamp convention", () => {
-	it("baseline = max(real) + 1 + astIndex", () => {
-		const realEntries = (type: string) => {
-			if (type !== SYNC_DONE) return [];
-			return [{ timestamp: 1000 }, { timestamp: 500 }];
-		};
+	it("speculative timestamp uses fixed reserved baseline + 1 + astIndex", () => {
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			realEntries,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const entry = out.get(refs[1]!)?.[SYNC_DONE]?.[0];
-		assert.equal(entry?.timestamp, 1001, "1000 (max real) + 1 + 0 (ref index of sync) = 1001");
+		// sync is at index 0, baseline + 1 + 0
+		assert.equal(entry?.timestamp, SPEC_BASE + 1);
 	});
 
-	it("no real entries → baseline 0; timestamps encode AST index", () => {
-		// `echo foo && sync && cr`: echo.idx=0, sync.idx=1.
-		// Only sync matches the observer. Its timestamp: 0 + 1 + 1 = 2.
+	it("baseline is strictly greater than any realistic epoch-ms timestamp", () => {
+		// Date.now() is < 2^48 for any date through 4199 AD. Our
+		// baseline is 2^52. The gap is the headroom that makes
+		// speculative > real trivially.
+		assert.ok(SPEC_BASE > Date.now() * 100);
+	});
+
+	it("AST-order monotonic — later ref has later speculative timestamp", () => {
+		// `echo foo && sync && cr`: echo.idx=0, sync.idx=1. Only sync
+		// matches the observer. Its timestamp: baseline + 1 + 1.
 		const refs = refsFor("echo foo && sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const entry = out.get(refs[2]!)?.[SYNC_DONE]?.[0];
-		assert.equal(entry?.timestamp, 2);
+		assert.equal(entry?.timestamp, SPEC_BASE + 2);
 	});
 
 	it("two speculative writes in same chain — later ref has later timestamp", () => {
 		// `A && B && cr` where A writes X and B writes Y. AST order:
-		// A.idx=0, B.idx=1. Timestamps: X=1, Y=2. A `when.happened: {
-		// event: X, since: Y }` evaluation downstream correctly reads
-		// X as stale — the two-speculative-writes-with-since-invalidator
+		// A.idx=0, B.idx=1. Timestamps: X=SPEC_BASE+1, Y=SPEC_BASE+2.
+		// Downstream `when.happened: { event: X, since: Y }` reads X
+		// as stale — the two-speculative-writes-with-since-invalidator
 		// correctness case.
 		const EVENT_X = "event-x";
 		const EVENT_Y = "event-y";
@@ -329,14 +273,18 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 			onResult: () => {},
 		};
 		const refs = refsFor("a && b && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[obsA, obsB],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [obsA, obsB]);
 		const crView = out.get(refs[2]!);
-		assert.equal(crView?.[EVENT_X]?.[0]?.timestamp, 1, "X ts = 0 + 1 + 0");
-		assert.equal(crView?.[EVENT_Y]?.[0]?.timestamp, 2, "Y ts = 0 + 1 + 1");
+		assert.equal(
+			crView?.[EVENT_X]?.[0]?.timestamp,
+			SPEC_BASE + 1,
+			"X ts = baseline + 1 + 0",
+		);
+		assert.equal(
+			crView?.[EVENT_Y]?.[0]?.timestamp,
+			SPEC_BASE + 2,
+			"Y ts = baseline + 1 + 1",
+		);
 		// Invariant: X older than Y in the speculative timeline.
 		assert.ok(
 			(crView![EVENT_X]![0]!.timestamp) <
@@ -344,43 +292,19 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 			"AST order preserved among speculatives",
 		);
 	});
-
-	it("speculative is strictly newer than real for the same type", () => {
-		// Real entry at ts=5000 for SYNC_DONE. Synthetic via ref
-		// at index 0: baseline=5000 → ts=5001. The happened predicate's
-		// timestamp merge sees the synthetic as newer.
-		const realEntries = (type: string) =>
-			type === SYNC_DONE ? [{ timestamp: 5000 }] : [];
-		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			realEntries,
-		);
-		const entry = out.get(refs[1]!)?.[SYNC_DONE]?.[0];
-		assert.ok(entry!.timestamp > 5000);
-	});
 });
 
 describe("synthesizeSpeculativeEntries: flag + identity", () => {
 	it("all synthetic entries carry `speculative: true`", () => {
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const entry = out.get(refs[1]!)?.[SYNC_DONE]?.[0];
 		assert.equal(entry?.speculative, true);
 	});
 
 	it("output is keyed by ref identity, not index", () => {
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		for (const ref of refs) {
 			assert.ok(out.has(ref), `result has ref ${ref.node.name?.text ?? ""}`);
 		}
@@ -388,11 +312,7 @@ describe("synthesizeSpeculativeEntries: flag + identity", () => {
 
 	it("single ref with no joiner → empty view", () => {
 		const refs = refsFor("cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(out.get(refs[0]!), {});
 	});
 });
@@ -400,11 +320,7 @@ describe("synthesizeSpeculativeEntries: flag + identity", () => {
 describe("synthesizeSpeculativeEntries: subshell coverage", () => {
 	it("`(sync) && cr` — subshell refs participate in the chain", () => {
 		const refs = refsFor("(sync) && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		// cr is the last ref; sync's synthetic entry must be visible.
 		const crView = out.get(refs[refs.length - 1]!);
 		assert.ok(crView?.[SYNC_DONE], "subshell sync feeds cr's chain");
@@ -414,11 +330,7 @@ describe("synthesizeSpeculativeEntries: subshell coverage", () => {
 		// GAP-01 regression fence. Both refs inside `(...)` participate
 		// in cr's prior chain; sync matches the observer.
 		const refs = refsFor("(echo hi && sync) && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const crView = out.get(refs[refs.length - 1]!);
 		assert.ok(crView?.[SYNC_DONE], "multi-ref subshell: sync feeds cr");
 	});
@@ -436,11 +348,7 @@ describe("synthesizeSpeculativeEntries: subshell coverage", () => {
 			},
 		});
 		const refs = refsFor("foo && (bar ; sync) && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[fooObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [fooObs]);
 		const crView = out.get(refs[refs.length - 1]!);
 		assert.deepEqual(
 			crView,
@@ -455,11 +363,7 @@ describe("synthesizeSpeculativeEntries: per-ref isolation", () => {
 		// Load-bearing safety property. `sync && cr`: sync (idx 0)
 		// must NOT see its own synthetic entry. Only cr (idx 1) does.
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		assert.deepEqual(
 			out.get(refs[0]!),
 			{},
@@ -469,11 +373,7 @@ describe("synthesizeSpeculativeEntries: per-ref isolation", () => {
 
 	it("map entries are distinct per ref (no cross-ref mutation)", () => {
 		const refs = refsFor("echo foo && sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const echoView = out.get(refs[0]!);
 		const syncView = out.get(refs[1]!);
 		const crView = out.get(refs[2]!);
@@ -485,7 +385,7 @@ describe("synthesizeSpeculativeEntries: per-ref isolation", () => {
 	});
 });
 
-describe("synthesizeSpeculativeEntries: baseline semantics", () => {
+describe("synthesizeSpeculativeEntries: multi-type coexistence", () => {
 	it("writes by distinct observers for different customTypes coexist", () => {
 		const OTHER = "other-event";
 		const otherObs: Observer = {
@@ -498,11 +398,7 @@ describe("synthesizeSpeculativeEntries: baseline semantics", () => {
 			onResult: () => {},
 		};
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver(), otherObs],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver(), otherObs]);
 		const crView = out.get(refs[1]!);
 		assert.ok(crView?.[SYNC_DONE]);
 		assert.ok(crView?.[OTHER]);
@@ -510,11 +406,7 @@ describe("synthesizeSpeculativeEntries: baseline semantics", () => {
 
 	it("custom type with no observers remains unrepresented", () => {
 		const refs = refsFor("sync && cr --review");
-		const out = synthesizeSpeculativeEntries(
-			refs,
-			[syncObserver()],
-			NO_REAL_ENTRIES,
-		);
+		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const crView = out.get(refs[1]!) as Record<
 			string,
 			readonly SyntheticEntry[]

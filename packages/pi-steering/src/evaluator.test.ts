@@ -1566,6 +1566,123 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 			"conservative-under: cr's prior is [sync] after `;`; fooObserver can't allow",
 		);
 	});
+
+	// ---- Pinned correctness case: two-speculative-writes + since ----
+
+	it("blocks `A && B && cr` when A writes X and B writes Y (X since Y)", async () => {
+		// Walker-producer unification correctness case. Pre-unification,
+		// speculative-allow was a boolean "any prior && ref matches an
+		// observer writing the event" — it ignored cross-type invalidators
+		// written by OTHER prior && refs. So `A && B && cr` with X-writer A
+		// and Y-writer B (Y being X's since-invalidator) incorrectly
+		// speculative-allowed: A's write of X counted even though B's later
+		// write of Y would stale it.
+		//
+		// Post-unification, speculative entries carry AST-ordered timestamps
+		// (baseline + 1 + index), so the synthetic X at ts=baseline+1 is
+		// older than synthetic Y at ts=baseline+2. `when.happened: { event:
+		// X, since: Y }` correctly reads X as stale and fires the rule.
+		const EVENT_X = "chain-two-writes-x" as const;
+		const EVENT_Y = "chain-two-writes-y" as const;
+		const aObserver: Observer = {
+			name: "a-writer",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObserver: Observer = {
+			name: "b-writer",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-y-blocks",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver, bObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"unification: synthetic X older than synthetic Y → X is stale → rule fires",
+		);
+	});
+
+	it("allows `A && B && cr` when the since-type matches NEITHER prior ref's observer", async () => {
+		// Regression guard for the inverse scenario. If only X's observer
+		// is registered (no one writes Y), A's write of X makes the event
+		// fresh AND the invalidator is absent in scope — happened degrades
+		// to simple-presence semantics, rule does NOT fire. Confirms the
+		// unification still grants allow when there's no cross-type
+		// invalidator in play.
+		const EVENT_X = "chain-only-x" as const;
+		const EVENT_Y_ABSENT = "chain-only-x-since-absent" as const;
+		const aObserver: Observer = {
+			name: "a-writer-only",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-absent-allows",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y_ABSENT,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"synthetic X present + Y absent → simple-presence → rule does NOT fire",
+		);
+	});
 });
 
 describe("buildEvaluator: when.not + when.condition", () => {

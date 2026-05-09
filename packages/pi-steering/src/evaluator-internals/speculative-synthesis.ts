@@ -12,32 +12,38 @@
  * later `happened` evaluations merge with real entries via timestamp
  * ordering.
  *
- * Pure function of `(refs, observers, realEntries)`. The evaluator
- * wires the output into per-ref `walkerState.events` before running
- * predicates.
+ * Pure function of `(refs, observers)`. The evaluator wires the
+ * output into per-ref `walkerState.events` before running predicates.
  *
  * ## Timestamp convention
  *
- *   speculativeTimestamp(ref_j, customType) =
- *     max(realEntries(customType).timestamp ∪ {0}) + 1 + j
+ *   speculativeTimestamp(ref_j) = SPECULATIVE_BASELINE + 1 + j
+ *
+ * where `SPECULATIVE_BASELINE = 2^52` — a literal chosen far above
+ * any epoch-ms timestamp pi writes on real entries (`Date.now()`
+ * returns < 2^48 for any date through year 4199 AD). The speculative
+ * timestamp is thus strictly greater than ANY real entry's timestamp,
+ * regardless of type or scope. So a speculative `sync-done` at ts
+ * `2^52 + 1` beats a real `upstream-failed` at ts `Date.now()` in
+ * the since-invalidator comparison.
  *
  * Two properties follow (see the `unification-reconsider` review's
  * "Timestamp reframing" section for the full walk-through):
  *
- *   1. **Strictly newer than every real entry in the widest scope.**
- *      We use session scope (all real entries for the type, no
- *      agent-loop filter) as the baseline — a speculative entry newer
- *      than ALL real entries is also newer than any scope subset, so
- *      the rule's actual scope (`agent_loop` vs `session`) doesn't
- *      need to be consulted here.
+ *   1. **Strictly newer than every real entry across all types and
+ *      scopes.** The reserved-range literal sidesteps a per-type
+ *      max-plus-one approach — which would fail on a two-writes
+ *      scenario where the since-invalidator's latest real entry is
+ *      newer than the event type's latest real entry. A speculative
+ *      entry newer than ALL real entries is newer than any subset.
  *
  *   2. **Relative ordering among multiple speculative writes follows
- *      AST order.** Ref at index `j` writing event X gets
- *      `base + 1 + j`; a later ref at index `k > j` writing Y gets
- *      `base + 1 + k`. So `when.happened: { event: X, since: Y }`
- *      correctly reads X as stale when Y is written later — the
- *      two-speculative-writes-with-since-invalidator correctness case
- *      pinned by the `A && B && cr` test in this commit pack.
+ *      AST order.** Ref at index `j` gets `BASELINE + 1 + j`; a later
+ *      ref at `k > j` gets `BASELINE + 1 + k`. So
+ *      `when.happened: { event: X, since: Y }` correctly reads X as
+ *      stale when Y is written later — the two-speculative-writes-
+ *      with-since-invalidator correctness case pinned by the
+ *      `A && B && cr` test in this commit pack.
  *
  * ## Safety
  *
@@ -64,6 +70,14 @@ import type { Observer } from "../schema.ts";
 import { matchesWatch } from "../internal/watch-matcher.ts";
 
 /**
+ * Reserved timestamp baseline for speculative entries. Chosen far
+ * above any realistic epoch-ms value (`Date.now()` < 2^48 for any
+ * date through year 4199 AD); 2^52 gives us headroom while staying
+ * under `Number.MAX_SAFE_INTEGER` (2^53 - 1).
+ */
+const SPECULATIVE_BASELINE = 2 ** 52;
+
+/**
  * Speculative session entry. Structurally a superset of real entries
  * (`{ data, timestamp }`) plus a `speculative: true` marker so the
  * built-in `happened` predicate and plugin filters over
@@ -77,14 +91,6 @@ export interface SyntheticEntry<T = unknown> {
 	readonly timestamp: number;
 	readonly speculative: true;
 }
-
-/**
- * Real-entry lookup the synthesis pass consults for timestamp
- * baselines. Structurally compatible with `PredicateContext.findEntries`.
- */
-export type RealEntryLookup = (
-	customType: string,
-) => ReadonlyArray<{ readonly timestamp: number }>;
 
 /** Per-ref view: `walkerState.events[customType] → SyntheticEntry[]`. */
 export type SyntheticEventsByType = Readonly<
@@ -104,7 +110,6 @@ export type SpeculativeEventsByRef = ReadonlyMap<
 export function synthesizeSpeculativeEntries(
 	refs: readonly CommandRef[],
 	observers: readonly Observer[],
-	realEntries: RealEntryLookup,
 ): SpeculativeEventsByRef {
 	const result = new Map<CommandRef, SyntheticEventsByType>();
 
@@ -129,19 +134,6 @@ export function synthesizeSpeculativeEntries(
 		for (const ref of refs) result.set(ref, EMPTY_EVENTS);
 		return result;
 	}
-
-	// Lazily-memoized timestamp baseline per customType.
-	const baselineByType = new Map<string, number>();
-	const baselineFor = (customType: string): number => {
-		const hit = baselineByType.get(customType);
-		if (hit !== undefined) return hit;
-		let max = 0;
-		for (const e of realEntries(customType)) {
-			if (e.timestamp > max) max = e.timestamp;
-		}
-		baselineByType.set(customType, max);
-		return max;
-	};
 
 	// Single left-to-right pass mirroring `computePriorAndChains`.
 	// `chainEvents` holds speculative entries from the active `&&`
@@ -190,7 +182,7 @@ export function synthesizeSpeculativeEntries(
 				if (next === null) next = { ...chainEvents };
 				const entry: SyntheticEntry = {
 					data: {},
-					timestamp: baselineFor(customType) + 1 + i,
+					timestamp: SPECULATIVE_BASELINE + 1 + i,
 					speculative: true,
 				};
 				const existing = next[customType];

@@ -26,16 +26,14 @@
  */
 
 import type {
-	ObserverWatch,
 	Pattern,
 	PredicateContext,
 	PredicateFn,
 	PredicateHandler,
-	ToolResultEvent,
 	WhenClause,
 } from "../schema.ts";
-import { matchesWatch } from "../internal/watch-matcher.ts";
 import { AGENT_LOOP_INDEX_KEY } from "./context.ts";
+import type { SyntheticEntry } from "./speculative-synthesis.ts";
 
 // ---------------------------------------------------------------------------
 // Pattern / PredicateFn resolution
@@ -141,15 +139,32 @@ function evaluateCwd(
 }
 
 /**
- * Built-in `when.happened` predicate. Reads session entries of the
- * given event from `ctx.findEntries`, filters by scope, and returns
- * **true when NO matching entry is found** — i.e. the event has NOT
- * happened yet in that scope.
+ * Built-in `when.happened` predicate. Merges real session entries
+ * (from `ctx.findEntries`, scope-filtered) with speculative entries
+ * (from `ctx.walkerState.events[event]`, produced by the walker-level
+ * synthesis pass — see {@link synthesizeSpeculativeEntries}) and
+ * returns **true when the unified timeline says the event has NOT
+ * happened** — i.e. the rule should fire.
  *
- * Matches ADR §5 semantics:
- *   - `in: "agent_loop"` keeps only entries whose
- *     `_agentLoopIndex === ctx.agentLoopIndex`.
- *   - `in: "session"` keeps every entry.
+ * Single pipeline: the merge via timestamp ordering collapses the
+ * prior two-path structure (specialized chain-aware speculative-allow
+ * running only on stale/absent real entries) into one uniform
+ * sort-and-compare. Synthetic entries carry reserved timestamps above
+ * all real entries in the same type (see
+ * {@link synthesizeSpeculativeEntries}'s timestamp convention); so on
+ * an `&&` chain where the prior ref would produce `event`, the
+ * merged timeline correctly treats the event as fresher than any
+ * stale real entry of the same type.
+ *
+ * ADR §5 scope semantics are applied to real entries only —
+ * speculative entries are always considered in-scope. Synthetic
+ * entries represent "about to happen in the current tool_call", and
+ * the current tool_call is always part of the current agent_loop and
+ * session, so a scope subset check adds no signal. This also means a
+ * rule using `in: "agent_loop"` and a rule using `in: "session"` see
+ * the same speculative view (correct — "about to happen" is scope-
+ * independent; a speculative entry newer than ALL real entries for
+ * the type is newer than any scope subset too).
  *
  * Inversion is handled by the caller via `when.not`. Authors wanting
  * "fires when the event HAS happened" wrap this clause in `not:`.
@@ -210,138 +225,67 @@ function evaluateHappened(
 		);
 	}
 	const inScope = scopeFilter(scope, ctx);
-	const eventEntries = ctx
-		.findEntries<Record<string, unknown>>(event)
-		.filter(inScope);
-	if (eventEntries.length > 0) {
-		if (since === undefined) {
-			// Simple presence check: event happened → rule does NOT fire.
-			return false;
-		}
-		const sinceEntries = ctx
-			.findEntries<Record<string, unknown>>(since)
-			.filter(inScope);
-		if (sinceEntries.length === 0) {
-			// Sentinel never written → degrade to simple-happened semantics.
-			return false;
-		}
-		// Both present in scope. The event is "happened" iff its latest
-		// entry is strictly newer than the latest `since` entry.
-		// `findEntries` returns entries in append order, so the last
-		// element is the most recent.
-		const latestEvent =
-			eventEntries[eventEntries.length - 1]?.timestamp ?? 0;
-		const latestSince =
-			sinceEntries[sinceEntries.length - 1]?.timestamp ?? 0;
-		if (latestEvent > latestSince) {
-			// Event is fresher than the invalidator → still happened.
-			return false;
-		}
-		// Event is older than (or equal to) the invalidator → stale;
-		// fall through to speculative-allow + fire.
+	const eventLatest = latestTimestamp(event, inScope, ctx);
+	if (eventLatest === null) {
+		// Event absent in unified timeline → rule fires.
+		return true;
 	}
-	// At this point the happened predicate WOULD fire (event absent or
-	// stale). Before firing, try the chain-aware speculative-allow path
-	// (only meaningful for bash candidates with prior-`&&` refs and a
-	// config that ships observers writing `event`).
-	if (speculativeHappenedAllow(ctx, event)) {
+	if (since === undefined) {
+		// Simple presence check: event happened → rule does NOT fire.
 		return false;
 	}
-	return true;
-}
-
-/**
- * Chain-aware speculative allow for `when.happened`. Returns `true`
- * when the current tool_call contains a prior `&&`-chained ref that
- * matches an observer declaring `writes: [event]` — meaning the event
- * is "about to happen" once the chain executes.
- *
- * Only `&&`-joined predecessors qualify (see
- * {@link PredicateContext.priorAndChainedRefs} and ADR amendment). The
- * guarantee: `A && B` short-circuits on A's failure, so if A would
- * make the observer fire on success, the speculative decision is safe
- * to grant — either A succeeds (event writes, block was correct to
- * skip) or A fails and B (the current ref) never runs.
- *
- * Filter semantics are delegated to the dispatcher's
- * {@link matchesWatch} via a synthesized `ToolResultEvent`
- * representing "a successful bash ref about to run" — the two paths
- * share one filter contract so new `watch` fields added to
- * {@link matchesWatch} automatically gate speculative-allow correctly.
- * Chain-aware-specific invariants (see
- * {@link observerEligibleForSpeculativeAllow}) are layered on top.
- *
- * IMPORTANT: `priorAndChainedRefs` contains refs STRICTLY BEFORE the
- * current ref in source order. The contract is preserved by
- * {@link computePriorAndChains} (a left-to-right walk that never
- * forward-references) — we do NOT consult refs that come after, which
- * would let an agent bypass a block by placing the "satisfying" ref
- * after the blocked ref.
- */
-function speculativeHappenedAllow(
-	ctx: PredicateContext,
-	event: string,
-): boolean {
-	const priorRefs = ctx.priorAndChainedRefs;
-	if (priorRefs === undefined || priorRefs.length === 0) return false;
-	const observers = ctx.observersByWrittenEvent?.get(event);
-	if (!observers || observers.length === 0) return false;
-	for (const ref of priorRefs) {
-		for (const obs of observers) {
-			if (!observerEligibleForSpeculativeAllow(obs.watch)) continue;
-			// Synthesize the minimal event shape `matchesWatch` inspects
-			// for a successful bash ref. Fields the dispatcher fills on a
-			// real `tool_result` are either covered (`toolName`, `input`,
-			// `exitCode`) or irrelevant to the filter (`output` — never
-			// read by `matchesWatch`). If a future filter field becomes
-			// speculative-relevant, extend the synthesis here; the filter
-			// body itself stays single-sourced in watch-matcher.ts.
-			const synthetic: ToolResultEvent = {
-				toolName: "bash",
-				input: { command: ref.text },
-				output: undefined,
-				exitCode: 0,
-			};
-			if (matchesWatch(obs.watch, synthetic)) return true;
-		}
+	const sinceLatest = latestTimestamp(since, inScope, ctx);
+	if (sinceLatest === null) {
+		// Invalidator never written in scope → degrade to simple-
+		// happened semantics (event wins).
+		return false;
 	}
-	return false;
+	// Both present. Event counts as happened iff its latest entry
+	// (real or speculative) is strictly newer than the invalidator's.
+	return eventLatest <= sinceLatest;
 }
 
 /**
- * Chain-aware-specific pre-gate layered on top of the shared
- * {@link matchesWatch} contract. `matchesWatch` answers "would this
- * observer fire on this concrete event?"; speculative-allow needs the
- * stronger question "is it SAFE to grant an allow on the mere presence
- * of a prior `&&` ref matching this watch?". Two gates are specific to
- * speculative-allow:
+ * Latest timestamp across the unified real + speculative timeline
+ * for the given customType. `null` when no entries exist in either
+ * the scope-filtered real stream or the speculative stream.
  *
- *   - **Missing `inputMatches.command`**: an observer that fires on
- *     any bash event isn't a strong enough signal — it would grant
- *     allow on any `foo && cr` regardless of what `foo` does.
- *     Observers participating in chain-aware allow must declare
- *     `watch.inputMatches.command` (documented authoring
- *     requirement).
- *   - **toolName excluded from bash**: prior refs always come from
- *     the bash tool; a non-bash watch can never fire on one. Caught
- *     structurally by {@link matchesWatch}, but we fail fast here
- *     too so the synthesized event isn't constructed for obviously
- *     incompatible observers.
- *
- * Exit-code validation is delegated entirely to {@link matchesWatch}
- * against the synthesized `exitCode: 0` event — observers gated on
- * `"failure"` or non-zero codes can never fire via `&&` short-circuit
- * and `matchesWatch` correctly rejects the synthesized success event
- * for them.
+ * Speculative entries bypass the scope filter — see
+ * {@link evaluateHappened}'s JSDoc for why the scope subset check
+ * adds no signal on "about to happen" entries.
  */
-function observerEligibleForSpeculativeAllow(
-	watch: ObserverWatch | undefined,
-): boolean {
-	if (!watch) return false;
-	if (watch.toolName !== undefined && watch.toolName !== "bash") return false;
-	const command = watch.inputMatches?.["command"];
-	if (command === undefined) return false;
-	return true;
+function latestTimestamp(
+	customType: string,
+	inScope: (entry: { data: Record<string, unknown> }) => boolean,
+	ctx: PredicateContext,
+): number | null {
+	let latest = -Infinity;
+	for (const entry of ctx.findEntries<Record<string, unknown>>(customType)) {
+		if (!inScope(entry)) continue;
+		if (entry.timestamp > latest) latest = entry.timestamp;
+	}
+	const speculative = speculativeEntriesFor(ctx, customType);
+	for (const entry of speculative) {
+		if (entry.timestamp > latest) latest = entry.timestamp;
+	}
+	return latest === -Infinity ? null : latest;
+}
+
+/**
+ * Read the speculative-entry slice for `customType` off
+ * `ctx.walkerState.events`. Returns an empty array when walkerState
+ * is undefined (non-bash candidates) or carries no `events` field
+ * (configs with no chain-aware observers → the synthesis pass
+ * returned empty views per ref).
+ */
+function speculativeEntriesFor(
+	ctx: PredicateContext,
+	customType: string,
+): readonly SyntheticEntry[] {
+	const events = ctx.walkerState?.["events"] as
+		| Readonly<Record<string, readonly SyntheticEntry[]>>
+		| undefined;
+	return events?.[customType] ?? [];
 }
 
 /**

@@ -78,6 +78,10 @@ import {
 	matchesPatternOrFn,
 	matchesPattern,
 } from "./evaluator-internals/predicates.ts";
+import {
+	synthesizeSpeculativeEntries,
+	type SpeculativeEventsByRef,
+} from "./evaluator-internals/speculative-synthesis.ts";
 import { mergeObserversUserFirst } from "./internal/merge-observers.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import { validateName } from "./plugin-merger.ts";
@@ -230,6 +234,7 @@ export function buildEvaluator(
 				host,
 				defaultNoOverride,
 				ruleSources,
+				allObservers,
 				observersByWrittenEvent,
 			),
 	};
@@ -332,11 +337,18 @@ interface BashRefState {
 /**
  * Prepare bash state for every rule to share: parse once, extract +
  * expand wrappers once, walk trackers once, stringify each ref once.
+ *
+ * Also runs the walker-level speculative-entry synthesis pass and
+ * merges its output into each ref's walkerState under the reserved
+ * `events` key. The built-in `when.happened` predicate consults
+ * `ctx.walkerState.events[customType]` to unify real + speculative
+ * entries via timestamp ordering (see {@link evaluateHappened}).
  */
 function prepareBashState(
 	command: string,
 	sessionCwd: string,
 	trackers: Record<string, Tracker<unknown>>,
+	observers: readonly Observer[],
 ): BashRefState[] {
 	const script = parseBash(command);
 	const extracted = extractAllCommandsFromAST(script, command);
@@ -348,17 +360,29 @@ function prepareBashState(
 		refs,
 	);
 	const priorChains = computePriorAndChains(refs);
-	return refs.map((ref, i) => ({
-		ref,
-		text: refToText(ref),
-		basename: getBasename(ref),
-		// `node.suffix` is the quote-aware Word[] for the ref. Exposed
-		// to predicates via PredicateToolInput.args; the walker already
-		// parsed it so we just pass it through.
-		args: ref.node.suffix,
-		walkerState: walkResult.get(ref) ?? { cwd: sessionCwd },
-		priorAndChainedRefs: priorChains[i] ?? [],
-	}));
+	const speculativeEvents: SpeculativeEventsByRef =
+		synthesizeSpeculativeEntries(refs, observers);
+	return refs.map((ref, i) => {
+		const trackerState = walkResult.get(ref) ?? { cwd: sessionCwd };
+		const events = speculativeEvents.get(ref) ?? {};
+		return {
+			ref,
+			text: refToText(ref),
+			basename: getBasename(ref),
+			// `node.suffix` is the quote-aware Word[] for the ref. Exposed
+			// to predicates via PredicateToolInput.args; the walker already
+			// parsed it so we just pass it through.
+			args: ref.node.suffix,
+			// Merge tracker state with synthesized events so the built-in
+			// `happened` predicate can read `walkerState.events` without
+			// threading a separate context field. Trackers cannot name a
+			// dimension `"events"` — the plugin merger rejects that (see
+			// plugin-merger.ts). The merge is a shallow copy so the walker's
+			// state object stays untouched for future evaluations.
+			walkerState: { ...trackerState, events },
+			priorAndChainedRefs: priorChains[i] ?? [],
+		};
+	});
 }
 
 /**
@@ -690,6 +714,7 @@ async function evaluateEvent(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
+	allObservers: readonly Observer[],
 	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Top-level fail-closed wrap (S1). If the engine's own scaffolding
@@ -710,6 +735,7 @@ async function evaluateEvent(
 			host,
 			defaultNoOverride,
 			ruleSources,
+			allObservers,
 			observersByWrittenEvent,
 		);
 	} catch (err) {
@@ -735,6 +761,7 @@ async function evaluateEventInner(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
+	allObservers: readonly Observer[],
 	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
@@ -788,6 +815,7 @@ async function evaluateEventInner(
 					bashEvent.input.command,
 					ctx.cwd,
 					trackers,
+					allObservers,
 				);
 			}
 			const result = await evaluateBashRule(
