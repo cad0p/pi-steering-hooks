@@ -26,6 +26,7 @@
  */
 
 import type {
+	ObserverWatch,
 	Pattern,
 	PredicateContext,
 	PredicateFn,
@@ -210,33 +211,95 @@ function evaluateHappened(
 	const eventEntries = ctx
 		.findEntries<Record<string, unknown>>(event)
 		.filter(inScope);
-	if (eventEntries.length === 0) {
-		// Event has not happened at all in this scope → rule fires.
-		return true;
+	if (eventEntries.length > 0) {
+		if (since === undefined) {
+			// Simple presence check: event happened → rule does NOT fire.
+			return false;
+		}
+		const sinceEntries = ctx
+			.findEntries<Record<string, unknown>>(since)
+			.filter(inScope);
+		if (sinceEntries.length === 0) {
+			// Sentinel never written → degrade to simple-happened semantics.
+			return false;
+		}
+		// Both present in scope. The event is "happened" iff its latest
+		// entry is strictly newer than the latest `since` entry.
+		// `findEntries` returns entries in append order, so the last
+		// element is the most recent.
+		const latestEvent =
+			eventEntries[eventEntries.length - 1]?.timestamp ?? 0;
+		const latestSince =
+			sinceEntries[sinceEntries.length - 1]?.timestamp ?? 0;
+		if (latestEvent > latestSince) {
+			// Event is fresher than the invalidator → still happened.
+			return false;
+		}
+		// Event is older than (or equal to) the invalidator → stale;
+		// fall through to speculative-allow + fire.
 	}
-	if (since === undefined) {
-		// Simple presence check: event happened → rule does NOT fire.
+	// At this point the happened predicate WOULD fire (event absent or
+	// stale). Before firing, try the chain-aware speculative-allow path
+	// (only meaningful for bash candidates with prior-`&&` refs and a
+	// config that ships observers writing `event`).
+	if (speculativeHappenedAllow(ctx, event)) {
 		return false;
 	}
-	const sinceEntries = ctx
-		.findEntries<Record<string, unknown>>(since)
-		.filter(inScope);
-	if (sinceEntries.length === 0) {
-		// Sentinel never written → degrade to simple-happened semantics.
-		return false;
-	}
-	// Both present in scope. The event is "happened" iff its latest
-	// entry is strictly newer than the latest `since` entry.
-	// `findEntries` returns entries in append order, so the last
-	// element is the most recent.
-	const latestEvent = eventEntries[eventEntries.length - 1]?.timestamp ?? 0;
-	const latestSince = sinceEntries[sinceEntries.length - 1]?.timestamp ?? 0;
-	if (latestEvent > latestSince) {
-		// Event is fresher than the invalidator → still happened.
-		return false;
-	}
-	// Event is older than (or equal to) the invalidator → stale; rule fires.
 	return true;
+}
+
+/**
+ * Chain-aware speculative allow for `when.happened`. Returns `true`
+ * when the current tool_call contains a prior `&&`-chained ref that
+ * matches an observer declaring `writes: [event]` — meaning the event
+ * is "about to happen" once the chain executes.
+ *
+ * Only `&&`-joined predecessors qualify (see
+ * {@link PredicateContext.priorAndChainedRefs} and ADR amendment). The
+ * guarantee: `A && B` short-circuits on A's failure, so if A observers
+ * the event on success, the speculative decision is safe to grant —
+ * either A succeeds (event writes, block was correct to skip) or A
+ * fails and B (the current ref) never runs.
+ *
+ * Observer matching is command-pattern only: we check each candidate
+ * observer's `watch.inputMatches.command` against the prior ref text.
+ * Observers with no command pattern can't be safely matched (they
+ * would fire on any bash event, which isn't a strong enough signal),
+ * so they're skipped here. That's a user-facing authoring
+ * requirement: observers participating in chain-aware allow must
+ * declare `watch.inputMatches.command`.
+ */
+function speculativeHappenedAllow(
+	ctx: PredicateContext,
+	event: string,
+): boolean {
+	const priorRefs = ctx.priorAndChainedRefs;
+	if (priorRefs === undefined || priorRefs.length === 0) return false;
+	const observers = ctx.observersByWrittenEvent?.get(event);
+	if (!observers || observers.length === 0) return false;
+	for (const ref of priorRefs) {
+		for (const obs of observers) {
+			if (observerMatchesRefCommand(obs.watch, ref.text)) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Test whether an observer's `watch.inputMatches.command` matches a
+ * bash ref's text. Skips observers without a command pattern (see
+ * {@link speculativeHappenedAllow} for rationale).
+ */
+function observerMatchesRefCommand(
+	watch: ObserverWatch | undefined,
+	refText: string,
+): boolean {
+	if (!watch) return false;
+	const inputMatches = watch.inputMatches;
+	if (!inputMatches) return false;
+	const commandPattern = inputMatches["command"];
+	if (commandPattern === undefined) return false;
+	return matchesPattern(commandPattern, refText);
 }
 
 /**

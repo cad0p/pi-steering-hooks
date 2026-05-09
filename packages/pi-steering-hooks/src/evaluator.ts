@@ -78,6 +78,7 @@ import {
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import { validateName } from "./plugin-merger.ts";
 import type {
+	Observer,
 	PredicateContext,
 	PredicateToolInput,
 	Rule,
@@ -186,6 +187,18 @@ export function buildEvaluator(
 		) as Tracker<unknown>;
 	}
 
+	// Chain-aware `when.happened`: for each event literal declared in
+	// an observer's `writes`, we index the observer(s) that produce it.
+	// The evaluator threads this map into PredicateContext so the
+	// built-in `happened` predicate can speculatively allow `&&` chains
+	// whose prior refs match a writing observer's watch. Both plugin-
+	// shipped observers and user inline observers contribute.
+	const allObservers: Observer[] = [
+		...(config.observers ?? []),
+		...resolved.observers,
+	];
+	const observersByWrittenEvent = buildObserversByWrittenEvent(allObservers);
+
 	return {
 		evaluate: (event, ctx, agentLoopIndex) =>
 			evaluateEvent(
@@ -198,8 +211,35 @@ export function buildEvaluator(
 				host,
 				defaultNoOverride,
 				ruleSources,
+				observersByWrittenEvent,
 			),
 	};
+}
+
+/**
+ * Build the reverse index `event literal → observers that write it`
+ * from the evaluator's merged observer list. Observers with no
+ * `writes[]` declaration contribute nothing (can't gate anything).
+ * Returns `undefined` when the index is empty so downstream code can
+ * short-circuit chain-aware logic without constructing a ctx field.
+ */
+function buildObserversByWrittenEvent(
+	observers: readonly Observer[],
+): ReadonlyMap<string, readonly Observer[]> | undefined {
+	const map = new Map<string, Observer[]>();
+	for (const obs of observers) {
+		if (!obs.writes) continue;
+		for (const event of obs.writes) {
+			const bucket = map.get(event);
+			if (bucket) {
+				bucket.push(obs);
+			} else {
+				map.set(event, [obs]);
+			}
+		}
+	}
+	if (map.size === 0) return undefined;
+	return map as ReadonlyMap<string, readonly Observer[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +300,59 @@ interface BashRefState {
 	readonly basename: string;
 	readonly args: readonly Word[];
 	readonly walkerState: Record<string, unknown>;
+	/**
+	 * Prior refs reachable via a continuous `&&` chain from the left of
+	 * this ref. Populated by {@link prepareBashState}; consumed by
+	 * chain-aware `when.happened`. Each entry carries the ref's
+	 * stringified text (enough to run `watch.inputMatches.command`
+	 * patterns against) — observers never see the full `CommandRef`.
+	 */
+	readonly priorAndChainedRefs: readonly { text: string }[];
+}
+
+/**
+ * Compute the text of a ref the same way `BashRefState.text` does.
+ * Hoisted so the prior-`&&` chain computation in {@link prepareBashState}
+ * doesn't double-up the logic.
+ */
+function refToText(ref: CommandRef): string {
+	return `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
+}
+
+/**
+ * For each ref in `refs`, compute the list of prior refs reachable via
+ * a continuous left-to-right `&&` chain. Walking left-to-right: when
+ * a ref's joiner is `&&`, the NEXT ref inherits the current chain
+ * plus the current ref. Any other joiner (`;`, `|`, `||`) resets the
+ * chain to empty for the next ref.
+ *
+ * Subshells (`(A && B) && C`) are flattened by the walker into a flat
+ * ref list — the joiner metadata on each ref describes the operator
+ * to the NEXT extracted ref in source order. In practice this gives
+ * the right answer for the common shapes (see tests), and is
+ * **conservative** for the rare shapes where a subshell's last ref
+ * joiner is `&&` (e.g. `A && (B ; C) && D` gives `D ← [C]`, not
+ * `[A, C]`). Conservative under-allow is safe; we never grant a
+ * speculative allow we shouldn't.
+ */
+function computePriorAndChains(
+	refs: readonly CommandRef[],
+): Array<readonly { text: string }[]> {
+	const result: Array<readonly { text: string }[]> = new Array(refs.length);
+	let current: Array<{ text: string }> = [];
+	for (let i = 0; i < refs.length; i++) {
+		result[i] = current;
+		const ref = refs[i];
+		if (ref === undefined) continue;
+		if (ref.joiner === "&&") {
+			// Next ref inherits the current chain plus this ref.
+			current = [...current, { text: refToText(ref) }];
+		} else {
+			// Any other joiner breaks the && chain.
+			current = [];
+		}
+	}
+	return result;
 }
 
 /**
@@ -280,15 +373,17 @@ function prepareBashState(
 		trackers,
 		refs,
 	);
-	return refs.map((ref) => ({
+	const priorChains = computePriorAndChains(refs);
+	return refs.map((ref, i) => ({
 		ref,
-		text: `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim(),
+		text: refToText(ref),
 		basename: getBasename(ref),
 		// `node.suffix` is the quote-aware Word[] for the ref. Exposed
 		// to predicates via PredicateToolInput.args; the walker already
 		// parsed it so we just pass it through.
 		args: ref.node.suffix,
 		walkerState: walkResult.get(ref) ?? { cwd: sessionCwd },
+		priorAndChainedRefs: priorChains[i] ?? [],
 	}));
 }
 
@@ -368,6 +463,14 @@ interface SharedEvalContext {
 	 * unambiguously.
 	 */
 	readonly ruleSources: ReadonlyMap<Rule, string>;
+	/**
+	 * Reverse index: event literal → observers that write it. Built
+	 * once at evaluator-construction time and threaded into
+	 * {@link PredicateContext.observersByWrittenEvent} so the built-in
+	 * `happened` predicate can chain-aware speculatively allow `&&`
+	 * chains whose prior refs match a writing observer's watch.
+	 */
+	readonly observersByWrittenEvent?: ReadonlyMap<string, readonly Observer[]>;
 }
 
 /**
@@ -407,6 +510,12 @@ interface Candidate {
 	 * undefined (no walker ran).
 	 */
 	readonly walkerState?: Readonly<Record<string, unknown>>;
+	/**
+	 * Prior refs reachable via `&&` from the current ref. Populated
+	 * only for bash candidates, exposed to predicates via
+	 * {@link PredicateContext.priorAndChainedRefs}.
+	 */
+	readonly priorAndChainedRefs?: readonly { text: string }[];
 }
 
 /**
@@ -467,6 +576,12 @@ async function runPredicateChain(
 			findEntries: shared.findEntries,
 			...(cand.walkerState !== undefined
 				? { walkerState: cand.walkerState }
+				: {}),
+			...(cand.priorAndChainedRefs !== undefined
+				? { priorAndChainedRefs: cand.priorAndChainedRefs }
+				: {}),
+			...(shared.observersByWrittenEvent !== undefined
+				? { observersByWrittenEvent: shared.observersByWrittenEvent }
 				: {}),
 		};
 
@@ -601,6 +716,7 @@ async function evaluateEvent(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
+	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Top-level fail-closed wrap (S1). If the engine's own scaffolding
 	// throws — parse errors, walker bugs, corrupted session JSONL, etc.
@@ -620,6 +736,7 @@ async function evaluateEvent(
 			host,
 			defaultNoOverride,
 			ruleSources,
+			observersByWrittenEvent,
 		);
 	} catch (err) {
 		console.error(
@@ -644,6 +761,7 @@ async function evaluateEventInner(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
+	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
 	// findEntries reads the current session JSONL on demand; appendEntry
@@ -670,6 +788,9 @@ async function evaluateEventInner(
 		host,
 		defaultNoOverride,
 		ruleSources,
+		...(observersByWrittenEvent !== undefined
+			? { observersByWrittenEvent }
+			: {}),
 	};
 
 	// Bash state is lazy: non-bash rules don't pay for parse / walk.
@@ -789,6 +910,7 @@ async function evaluateBashRule(
 			tool: "bash",
 			overrideEntryExtras: { command: rawCommand },
 			walkerState: refState.walkerState,
+			priorAndChainedRefs: refState.priorAndChainedRefs,
 		};
 		const r = await evaluateCandidate(rule, cand, shared);
 		if (r === "no-fire") continue;

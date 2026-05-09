@@ -1064,6 +1064,297 @@ describe("buildEvaluator: when.happened.since (temporal ordering)", () => {
 	});
 });
 
+describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () => {
+	// When the current bash tool_call contains a prior `&&`-chained ref
+	// that matches an observer writing the required event, the engine
+	// speculatively treats the event as "about to happen" and declines
+	// to fire the rule. Safe because `&&` short-circuits: if the prior
+	// command fails, the current one never runs, so the speculative
+	// decision is moot.
+	const SYNC_DONE_EVENT = "chain-sync-done" as const;
+
+	const syncObserver: Observer = {
+		name: "chain-sync-tracker",
+		writes: [SYNC_DONE_EVENT],
+		watch: {
+			toolName: "bash",
+			inputMatches: { command: /^sync\b/ },
+			exitCode: "success",
+		},
+		onResult: () => {
+			/* unused in evaluator tests — the reverse-index only reads metadata */
+		},
+	};
+
+	const crNeedsSync: Rule = {
+		name: "cr-needs-sync",
+		tool: "bash",
+		field: "command",
+		pattern: /^cr\b/,
+		reason: "sync first",
+		when: { happened: { event: SYNC_DONE_EVENT, in: "agent_loop" } },
+	};
+
+	it("allows `sync && cr` — prior && ref matches the sync observer", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"speculative allow should skip the rule on sync && cr",
+		);
+	});
+
+	it("blocks `cr && sync` — cr is first, no prior && match", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("cr --review && sync"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"cr has no prior && ref matching sync — rule must fire",
+		);
+	});
+
+	it("blocks `sync ; cr` — `;` does NOT qualify as prior-&&", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync ; cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"semicolon does not short-circuit — speculative allow unsafe",
+		);
+	});
+
+	it("blocks `sync || cr` — `||` means cr runs on sync failure", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync || cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"|| means cr runs on sync failure — speculative allow unsafe",
+		);
+	});
+
+	it("allows `(sync) && cr` — subshell + && commits the chain", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("(sync) && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"subshell exit with && should still count as prior-&&",
+		);
+	});
+
+	it("allows `echo foo && sync && cr` — full && chain", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("echo foo && sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"sync is a prior && ref of cr via transitive chain",
+		);
+	});
+
+	it("no observers writing event → no speculative allow", async () => {
+		// Reverse index is empty (no observers registered), so the rule
+		// fires even though `sync` runs first — no way to know sync
+		// writes SYNC_DONE_EVENT without the observer's `writes:` link.
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"with no observers, fall back to simple happened check",
+		);
+	});
+
+	it("observer without inputMatches.command → no speculative allow", async () => {
+		// An observer that would fire on any bash tool_result isn't a
+		// strong enough signal for speculative allow: we can't tell
+		// whether the prior ref would actually make the observer fire.
+		const looseObserver: Observer = {
+			name: "loose-observer",
+			writes: [SYNC_DONE_EVENT],
+			watch: { toolName: "bash" },
+			onResult: () => {},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [looseObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"observers with no command pattern must not trigger speculative allow",
+		);
+	});
+
+	it("multiple observers writing same event — any command match triggers allow", async () => {
+		const obsA: Observer = {
+			name: "obs-a",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^never-match\b/ },
+			},
+			onResult: () => {},
+		};
+		const obsB: Observer = {
+			name: "obs-b",
+			writes: [SYNC_DONE_EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+			},
+			onResult: () => {},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync], observers: [obsA, obsB] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(res, undefined, "obs-b's command pattern matches — allow");
+	});
+
+	it("plugin observer (not inline) also feeds the reverse index", async () => {
+		const pluginWithObs: Plugin = {
+			name: "chain-plugin",
+			observers: [syncObserver],
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [crNeedsSync] },
+			resolve([pluginWithObs]),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"plugin-shipped observers should populate the reverse index too",
+		);
+	});
+
+	it("combines with since — speculative allow also applies when event is stale", async () => {
+		// Event previously happened but since-sentinel made it stale.
+		// Prior && ref matches → the new sync is "about to happen" and
+		// freshens the state. Speculative allow, rule skips.
+		const ruleWithSince: Rule = {
+			name: "cr-needs-fresh-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync first",
+			when: {
+				happened: {
+					event: SYNC_DONE_EVENT,
+					in: "agent_loop",
+					since: "upstream-failed",
+				},
+			},
+		};
+		const makeStaleCtx = () =>
+			makeCtx("/r", [
+				{
+					type: "custom" as const,
+					customType: SYNC_DONE_EVENT,
+					data: { _agentLoopIndex: 5 },
+					timestamp: "2026-01-01T00:00:00.000Z",
+					id: "a",
+					parentId: null,
+				},
+				{
+					type: "custom" as const,
+					customType: "upstream-failed",
+					data: { _agentLoopIndex: 5 },
+					timestamp: "2026-01-01T00:00:10.000Z",
+					id: "b",
+					parentId: null,
+				},
+			]);
+		const evaluator = buildEvaluator(
+			{ rules: [ruleWithSince], observers: [syncObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeStaleCtx(),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"stale event + prior && sync ref → speculative allow",
+		);
+	});
+});
+
 describe("buildEvaluator: when.not + when.condition", () => {
 	it("when.not inverts the nested clause", async () => {
 		const rule: Rule = {

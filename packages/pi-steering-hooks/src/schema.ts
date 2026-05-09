@@ -757,6 +757,32 @@ export interface PredicateContext {
 	 * concern.
 	 */
 	walkerState?: Readonly<Record<string, unknown>>;
+
+	/**
+	 * Prior refs in the current bash tool_call that are connected to the
+	 * current ref via a continuous `&&` chain (left-to-right). Populated
+	 * only for bash rules. Used by chain-aware {@link WhenClause.happened}:
+	 * if any prior ref matches an observer that writes `event`, the
+	 * `happened` predicate treats the event as "about to happen" and
+	 * the rule does NOT fire (speculative allow). Safe because `&&`
+	 * short-circuits — if any prior failed, the current ref never runs,
+	 * so the speculative allow decision is moot.
+	 *
+	 * Refs connected via `;`, `|`, or `||` do NOT qualify and are not
+	 * in this set. Empty for the first ref or when the current ref is
+	 * preceded by a non-`&&` joiner.
+	 */
+	priorAndChainedRefs?: readonly { text: string }[];
+
+	/**
+	 * Reverse index: for each event literal declared in an observer's
+	 * `writes`, the list of observers that produce it. Built once at
+	 * config resolution time from every loaded plugin's + inline
+	 * observer's declarations. Consumed by chain-aware
+	 * {@link WhenClause.happened}; undefined for evaluator callers that
+	 * don't ship observers.
+	 */
+	observersByWrittenEvent?: ReadonlyMap<string, readonly Observer[]>;
 }
 
 // ---------------------------------------------------------------------------
