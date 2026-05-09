@@ -48,7 +48,6 @@ import {
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	getBasename,
-	getCommandArgs,
 	parse as parseBash,
 	walk,
 	type CommandRef,
@@ -62,6 +61,10 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import {
+	computePriorAndChains,
+	refToText,
+} from "./evaluator-internals/chain.ts";
 import {
 	createAppendEntry,
 	createExecCache,
@@ -317,92 +320,6 @@ interface BashRefState {
 	 * patterns against) — observers never see the full `CommandRef`.
 	 */
 	readonly priorAndChainedRefs: readonly { text: string }[];
-}
-
-/**
- * Compute the text of a ref the same way `BashRefState.text` does.
- * Hoisted so the prior-`&&` chain computation in {@link prepareBashState}
- * doesn't double-up the logic.
- */
-function refToText(ref: CommandRef): string {
-	return `${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
-}
-
-/**
- * For each ref in `refs`, compute the list of prior refs reachable via
- * a continuous left-to-right `&&` chain starting from an
- * unconditionally-reached point.
- *
- * Walk left-to-right tracking two pieces of state:
- *   - `current`: the prior-`&&` chain for the NEXT ref.
- *   - `reachable`: whether the NEXT ref will be unconditionally reached
- *     regardless of any prior conditional branches (or, for `&&`-
- *     joined successors, whether the current ref is itself part of an
- *     unconditionally-reachable segment).
- *
- * Safety model for chain-aware `when.happened` speculative allow: we
- * must only let a prior ref count as a predecessor of a successor if
- * (a) the successor is joined to it via `&&` (short-circuit guarantees
- * the prior ref ran AND succeeded before successor runs) AND (b) the
- * prior ref itself was part of an unconditionally-reached segment
- * (so it wasn't skipped by a `||`/`|` short-circuit further left). The
- * `reachable` flag tracks (b); the `ref.joiner === "&&"` check tracks
- * (a).
- *
- * Concrete breaks:
- *   - `A || B && C`: when A succeeds, B is SKIPPED, then C runs
- *     (because `A || B` is true). B must NOT appear in C's prior
- *     chain — speculative allow via B is unsafe.
- *   - `A | B && C`: pipelines don't give us success-ordering semantics
- *     we can rely on; treat `|` the same as `||` for this purpose.
- *   - `A ; B && C`: `;` is a statement boundary — B runs
- *     unconditionally, so B's success predecessor-ness for C is
- *     restored.
- *
- * Subshells (`(A && B) && C`) are flattened by the walker into a flat
- * ref list — the joiner metadata on each ref describes the operator
- * to the NEXT extracted ref in source order. In practice this gives
- * the right answer for the common shapes (see tests), and is
- * **conservative** for the rare shapes where a subshell's last ref
- * joiner is `&&` (e.g. `A && (B ; C) && D` gives `D ← [C]`, not
- * `[A, C]`). Conservative under-allow is safe; we never grant a
- * speculative allow we shouldn't.
- */
-function computePriorAndChains(
-	refs: readonly CommandRef[],
-): Array<readonly { text: string }[]> {
-	const result: Array<readonly { text: string }[]> = new Array(refs.length);
-	let current: Array<{ text: string }> = [];
-	// The first ref runs unconditionally from the start of the command.
-	let reachable = true;
-	for (let i = 0; i < refs.length; i++) {
-		result[i] = current;
-		const ref = refs[i];
-		if (ref === undefined) continue;
-		if (ref.joiner === "&&" && reachable) {
-			// `ref` is unconditionally-reached AND joined to the next ref
-			// via `&&`. The next ref runs only if `ref` succeeded — so when
-			// it runs, `ref` is guaranteed to have completed successfully.
-			// Push `ref` onto the chain for the next ref; `reachable` stays
-			// true for the same reason.
-			current = [...current, { text: refToText(ref) }];
-		} else if (ref.joiner === ";") {
-			// Statement boundary. Next ref runs unconditionally regardless
-			// of prior branches. Reset the chain (prior `&&` predecessors
-			// no longer precede the next ref via `&&`) and mark reachable.
-			current = [];
-			reachable = true;
-		} else {
-			// `||`, `|`, undefined, or `&&` on an unreachable ref. The next
-			// ref is not unconditionally reached (it runs only on a
-			// specific branch), so no ref from this segment can safely
-			// serve as a prior-`&&` predecessor. Clear the chain and mark
-			// the next ref unreachable until a `;` restores it.
-			current = [];
-			reachable = false;
-		}
-	}
-	return result;
 }
 
 /**
