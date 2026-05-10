@@ -4,8 +4,9 @@
 /**
  * Unified speculative-entry synthesis for chain-aware `when.happened`.
  *
- * Replaces the specialized `speculativeHappenedAllow` +
- * `observerEligibleForSpeculativeAllow` pair. For every bash command
+ * Replaces the pre-PR-5 specialized chain-aware speculative-allow path
+ * (a pair of helpers on the evaluator that matched observers against
+ * prior `&&` refs on a per-call boolean basis). For every bash command
  * ref in an unconditionally-`&&`-reachable segment, for every observer
  * writing an event AND matching the ref via the shared
  * {@link matchesWatch} contract, we produce a synthetic entry that
@@ -21,7 +22,7 @@
  *
  * where `SPECULATIVE_BASELINE = 2^52` — a literal chosen far above
  * any epoch-ms timestamp pi writes on real entries (`Date.now()`
- * returns < 2^48 for any date through year 4199 AD). The speculative
+ * returns < 2^48 for any date through ~year 10,890 AD). The speculative
  * timestamp is thus strictly greater than ANY real entry's timestamp,
  * regardless of type or scope. So a speculative `sync-done` at ts
  * `2^52 + 1` beats a real `upstream-failed` at ts `Date.now()` in
@@ -71,8 +72,17 @@ import { matchesWatch } from "../internal/watch-matcher.ts";
 /**
  * Reserved timestamp baseline for speculative entries. Chosen far
  * above any realistic epoch-ms value (`Date.now()` < 2^48 for any
- * date through year 4199 AD); 2^52 gives us headroom while staying
- * under `Number.MAX_SAFE_INTEGER` (2^53 - 1).
+ * date through ~year 10,890 AD); 2^52 itself maps to ~year 144,700
+ * AD and sits comfortably under `Number.MAX_SAFE_INTEGER` (2^53 - 1).
+ *
+ * Note: "strictly greater than every real entry" is a numerical
+ * convention rather than a type-level guarantee. A malformed or
+ * attacker-constructed session entry with `timestamp > 2^52` would
+ * silently defeat chain-aware speculative allow by ordering newer
+ * than the synthetic entries. Real entries go through `Date.parse`
+ * with NaN → 0 clamping, so the path to producing such a value is
+ * narrow; acknowledging it here so future hardening work has a
+ * concrete invariant to target.
  */
 const SPECULATIVE_BASELINE = 2 ** 52;
 

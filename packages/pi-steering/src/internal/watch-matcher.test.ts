@@ -52,8 +52,9 @@ import { matchesWatch } from "./watch-matcher.ts";
 // Synthetic-event constructor
 // ---------------------------------------------------------------------------
 //
-// The exact synthesis the evaluator's `speculativeHappenedAllow` uses
-// for a prior `&&` ref. Kept in lockstep with the real one: if the
+// The exact synthesis the evaluator's speculative-entry producer
+// (see `evaluator-internals/speculative-synthesis.ts`) uses for a
+// prior `&&` ref. Kept in lockstep with the real one: if the
 // evaluator's synthesis grows a field, mirror it here so the test
 // exercises the same shape.
 

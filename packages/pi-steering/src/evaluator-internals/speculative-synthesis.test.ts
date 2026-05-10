@@ -231,7 +231,7 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 	});
 
 	it("baseline is strictly greater than any realistic epoch-ms timestamp", () => {
-		// Date.now() is < 2^48 for any date through 4199 AD. Our
+		// Date.now() is < 2^48 for any date through ~year 10,890 AD. Our
 		// baseline is 2^52. The gap is the headroom that makes
 		// speculative > real trivially.
 		assert.ok(SPEC_BASE > Date.now() * 100);
