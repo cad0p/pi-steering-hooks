@@ -504,3 +504,63 @@ describe("defaults: end-to-end via buildEvaluator", () => {
 		assert.equal(r, undefined);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// disabledPlugins: ["git"] e2e regression fence (D1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin-merger unit test proves that `disabledPlugins` filters by
+ * name against a SYNTHETIC `{ name: "git", ... }` plugin. That's
+ * sufficient for the filter itself, but doesn't prove the REAL git
+ * plugin — the one shipped in {@link DEFAULT_PLUGINS} and the one
+ * users actually opt out of — is fully removed across every surface
+ * the plugin registers (predicates, rules, trackers, tracker
+ * extensions). A regression that merged the real plugin in through a
+ * second code path would escape the synthetic test entirely.
+ *
+ * One e2e smoke guard here is enough: drive `resolvePlugins` over
+ * the real default plugin list with `disabledPlugins: ["git"]` and
+ * assert every surface the git plugin ships is absent from the
+ * resolved state.
+ */
+describe("defaults: disabledPlugins: [\"git\"] opts out of the real git plugin", () => {
+	it("removes no-main-commit rule, branch predicate, and cwd.git tracker extension", () => {
+		const resolved = resolvePlugins(DEFAULT_PLUGINS, {
+			disabledPlugins: ["git"],
+		});
+
+		// Rule surface: `no-main-commit` (the rule the git plugin ships)
+		// must not appear in the resolved rule list.
+		const ruleNames = resolved.rules.map((r) => r.name);
+		assert.ok(
+			!ruleNames.includes("no-main-commit"),
+			`no-main-commit leaked past disabledPlugins: ["git"]; rules: ${ruleNames.join(", ")}`,
+		);
+
+		// Predicate surface: `branch` (canonical git predicate) must not
+		// be registered. Spot-checking one predicate is enough — if the
+		// plugin's predicate bundle was registered at all, `branch` would
+		// be present.
+		assert.ok(
+			!("branch" in resolved.predicates),
+			"branch predicate leaked past disabledPlugins: [\"git\"]",
+		);
+
+		// Tracker-extension surface: `cwd.git` (the --git-dir / --work-tree
+		// parser layered on the core cwd tracker) must not be registered.
+		const cwdExts = resolved.trackerModifiers["cwd"];
+		assert.ok(
+			cwdExts === undefined || !("git" in cwdExts),
+			"cwd.git tracker extension leaked past disabledPlugins: [\"git\"]",
+		);
+
+		// Plugin-merger emits a warning for every opted-out plugin; the
+		// CLI surfaces these in `list`. Spot-check that the warning fires
+		// here too, so a regression that silently accepts an unknown name
+		// also trips this test.
+		const warn = resolved.warnings.find((w) => w.kind === "plugin-disabled");
+		assert.ok(warn, "expected plugin-disabled warning for git");
+		assert.match(warn?.message ?? "", /"git"/);
+	});
+});

@@ -25,6 +25,7 @@ import {
 	isClean,
 	remote,
 	upstream,
+	walkerString,
 } from "./predicates.ts";
 
 // ---------------------------------------------------------------------------
@@ -625,6 +626,31 @@ describe("predicates: explicit onUnknown:block form", () => {
 		assert.equal(
 			await remote({ pattern: /my-org/, onUnknown: "block" }, ctx),
 			true,
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// walkerString: tracker contract assertion
+// ---------------------------------------------------------------------------
+
+describe("walkerString: rejects initialSentinel === \"unknown\"", () => {
+	// Future tracker authors MUST NOT pass `"unknown"` as the
+	// `initialSentinel` argument: that sentinel is reserved for the
+	// dynamic-unresolvable signal, and overloading it collapses the
+	// three-way discrimination (value / unknown / missing) back to the
+	// pre-U1 two-step bug. The function's JSDoc flagged this; the
+	// assertion makes the contract un-foot-shootable.
+	it("throws a targeted error when called with initialSentinel === \"unknown\"", () => {
+		const { ctx } = makeCtx([]);
+		assert.throws(
+			() => walkerString(ctx, "branch", "unknown"),
+			(err: unknown) => {
+				assert.ok(err instanceof Error);
+				assert.match(err.message, /initialSentinel cannot be/);
+				assert.match(err.message, /"unknown"/);
+				return true;
+			},
 		);
 	});
 });

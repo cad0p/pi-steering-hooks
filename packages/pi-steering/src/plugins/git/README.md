@@ -94,15 +94,27 @@ when: { branch: "^feat-" }                             // string = regex source
 when: { branch: { pattern: /^main$/, onUnknown: "allow" } }
 ```
 
-Resolution order:
-1. `ctx.walkerState.branch` — set by the branch tracker when the
-   current bash chain contains `git checkout` / `git switch`. This is
-   what makes `git checkout main && git commit` evaluate against
-   `main` (not the pre-chain branch).
-2. `git branch --show-current` in `ctx.cwd`.
+Resolution is a three-way discrimination on what the branch tracker
+knows about the current `tool_call` chain:
 
-`onUnknown` defaults to `"block"` (fail-closed) — if neither source
-resolves, the predicate reports "match" so the rule fires.
+1. **value** — the tracker observed an in-chain `git checkout <X>` /
+   `git switch <X>` with a statically-resolvable target. Match the
+   pattern against `X`. This is what makes
+   `git checkout main && git commit` evaluate against `main`, not
+   the pre-chain branch.
+2. **unknown** — the tracker observed a checkout but couldn't
+   resolve the target (e.g. `git checkout $VAR`). Apply `onUnknown`
+   policy WITHOUT shelling out: `git branch --show-current` here
+   would return the PRE-checkout branch and silently defeat the
+   walker — exactly the case the tracker exists to catch.
+3. **missing** — no branch-changing command fired in the current
+   chain. Shell out via `git branch --show-current` in `ctx.cwd`;
+   the shell's current state is the answer the predicate wants.
+
+`onUnknown` defaults to `"block"` (fail-closed) — if the branch
+can't be determined (dynamic checkout, exec failure, detached HEAD
+in the missing case), the predicate reports "match" so the rule
+still fires.
 
 ### `upstream`
 

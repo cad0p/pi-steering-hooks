@@ -183,11 +183,27 @@ type WalkerStringResult =
  * sentinel, the result is `missing` - no modifier fired for this
  * dimension in this ref's scope.
  */
-function walkerString(
+export function walkerString(
 	ctx: PredicateContext,
 	key: string,
 	initialSentinel: string,
 ): WalkerStringResult {
+	// Guard against a tracker that reuses `"unknown"` as its initial
+	// sentinel. Accepting such a value here would silently collapse the
+	// three-way discrimination back into the pre-U1 two-step: the
+	// `missing` branch would swallow genuine dynamic-checkout signals
+	// and the predicate would exec-fallback onto the PRE-checkout
+	// branch — exactly the bug U1 exists to prevent. The JSDoc on
+	// WalkerStringResult documents this; the assertion makes the
+	// contract un-foot-shootable for new tracker authors.
+	if (initialSentinel === "unknown") {
+		throw new Error(
+			`[pi-steering/git] walkerString: tracker initialSentinel cannot be ` +
+				`"unknown" — it's reserved for the unresolvable-dynamic-value ` +
+				`signal. Use a distinct initial value (e.g. "" or a sentinel ` +
+				`like NO_CHECKOUT_IN_CHAIN). See WalkerStringResult JSDoc.`,
+		);
+	}
 	const v = ctx.walkerState?.[key];
 	if (typeof v !== "string") return { kind: "missing" };
 	if (v === initialSentinel) return { kind: "missing" };
