@@ -49,7 +49,7 @@ import type {
 	Pattern,
 	PredicateContext,
 	PredicateHandler,
-} from "../../index.ts";
+} from "../../schema.ts";
 import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
 
 // ---------------------------------------------------------------------------

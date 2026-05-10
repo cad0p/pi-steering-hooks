@@ -54,10 +54,8 @@ Create `.pi/steering/index.ts` at your project root:
 
 ```ts
 import { defineConfig } from "pi-steering";
-import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
-  plugins: [gitPlugin],
   rules: [
     {
       name: "no-force-push",
@@ -70,18 +68,37 @@ export default defineConfig({
       reason: "Force-push rewrites history. Use --force-with-lease if needed.",
     },
   ],
-  // Compile-time safety: typo in a rule name below is a TS error.
-  // Try changing "no-main-commit" to "no-main-commito" — tsc will reject it.
-  disabledRules: ["no-main-commit"],
 });
 ```
 
 With this config:
 
-- `git push --force`, `sh -c 'git push --force'`, and `cd /repo && git push --force` all block.
+- `git push --force`, `sh -c 'git push --force'`, and `cd /repo && git push --force` all block via your rule.
 - `git push --force-with-lease` is not matched.
-- The git plugin's `no-main-commit` rule is disabled (you opted out).
+- `git commit` on `main` / `master` / `mainline` / `trunk` blocks via the git plugin's `no-main-commit` rule (default-on — see [Defaults](#defaults) below).
 - `echo 'git push --force'` correctly does not block — the AST extraction anchors patterns on real command refs, not substrings of arguments.
+
+## Defaults
+
+Two default bundles ship with the package and are layered onto every config automatically:
+
+- **`DEFAULT_RULES`** — `no-force-push`, `no-hard-reset`, `no-rm-rf-slash`, `no-long-running-commands`. Domain-agnostic safety rails. See [`src/defaults.ts`](./src/defaults.ts) for the exact patterns.
+- **`DEFAULT_PLUGINS`** — the [git plugin](./src/plugins/git/README.md). Contributes the `branch` / `upstream` / `commitsAhead` / `hasStagedChanges` / `isClean` / `remote` predicates, the `no-main-commit` rule (overridable per commit via `# steering-override: no-main-commit — <reason>`), the branch tracker (in-chain `git checkout` awareness), and the `cwd.git` tracker extension (`--git-dir=` / `--work-tree=` parsing).
+
+Opt-out paths:
+
+```ts
+// Drop the shipped rule but keep the git predicates + tracker:
+defineConfig({ disabledRules: ["no-main-commit"] });
+
+// Drop the whole git plugin (predicates, tracker, rule):
+defineConfig({ disabledPlugins: ["git"] });
+
+// Drop EVERYTHING shipped — DEFAULT_RULES and DEFAULT_PLUGINS:
+defineConfig({ disableDefaults: true });
+```
+
+All three fields are typo-checked by `defineConfig`'s generics (see [Compile-time safety](#compile-time-safety-via-defineconfig)).
 
 **Typecheck payoff.** Declare anything that should be typo-checked:
 

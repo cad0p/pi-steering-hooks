@@ -26,7 +26,7 @@
  * commit, so the rule still fires.
  */
 
-import type { Rule } from "../../index.ts";
+import type { Rule } from "../../schema.ts";
 
 /**
  * `no-main-commit` - block direct commits to a protected branch

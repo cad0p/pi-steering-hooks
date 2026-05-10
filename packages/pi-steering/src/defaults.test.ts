@@ -103,11 +103,24 @@ describe("defaults: DEFAULT_RULES shape", () => {
 });
 
 describe("defaults: DEFAULT_PLUGINS shape", () => {
-	it("is empty by default (Phase 3 ships no built-in plugins)", () => {
-		// Phase 4 will add the git plugin. When that lands this test flips
-		// to assert the expected plugin list — keeping a count lock so the
-		// ship-surface stays deliberate.
-		assert.deepEqual(DEFAULT_PLUGINS, []);
+	it("ships the git plugin default-on", () => {
+		// D1 (v0.1.0 release gate): the git plugin is promoted into
+		// DEFAULT_PLUGINS so new consumers get the `branch` predicate,
+		// the `no-main-commit` rule, and the branch tracker + git cwd
+		// extensions without explicit import. Users opt out via
+		// `disabledPlugins: ["git"]` or `disableDefaults: true` - see
+		// the `defaults.ts` JSDoc for the opt-out paths.
+		//
+		// This test is the count lock: any addition to the default
+		// plugin list is a deliberate ship-surface change and must
+		// update this assertion explicitly.
+		assert.equal(
+			DEFAULT_PLUGINS.length,
+			1,
+			"DEFAULT_PLUGINS should ship exactly the git plugin; adding more is a ship-surface change",
+		);
+		const names = DEFAULT_PLUGINS.map((p) => p.name);
+		assert.deepEqual(names, ["git"]);
 	});
 });
 

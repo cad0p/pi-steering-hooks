@@ -23,21 +23,13 @@
  *                              parser layered on the core cwd tracker.
  *                              See `./cwd-extensions.ts`.
  *
- * Not registered by default. Users opt in:
+ * Default-on as of v0.1.0. Registered automatically via
+ * {@link DEFAULT_PLUGINS}; users do not need to import and register
+ * explicitly. Opt out via `disabledPlugins: ["git"]` or
+ * `disableDefaults: true`.
  *
- *   ```ts
- *   import { defineConfig } from "pi-steering";
- *   import gitPlugin from "pi-steering/plugins/git";
- *
- *   export default defineConfig({
- *     plugins: [gitPlugin],
- *     rules: [...],
- *   });
- *   ```
- *
- * Phase 5+ may promote the git plugin into `DEFAULT_PLUGINS` once the
- * API surface stabilises; for Phase 4 the explicit opt-in keeps the
- * engine domain-agnostic.
+ * Explicit registration is still supported and canonical in tests
+ * that build a config via `loadHarness({ includeDefaults: false })`.
  *
  * ## Note for plugin authors
  *
@@ -47,7 +39,8 @@
  * them. Copy-adapt liberally.
  */
 
-import type { Plugin, Tracker } from "../../index.ts";
+import type { Plugin } from "../../schema.ts";
+import type { Tracker } from "unbash-walker";
 import { branchTracker } from "./branch-tracker.ts";
 import { gitCwdExtensions } from "./cwd-extensions.ts";
 import { predicates } from "./predicates.ts";
