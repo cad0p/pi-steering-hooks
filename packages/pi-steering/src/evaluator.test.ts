@@ -1683,6 +1683,74 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 			"synthetic X present + Y absent → simple-presence → rule does NOT fire",
 		);
 	});
+
+	it("allows `B && A && cr` (AST-reversed): X newer than Y does NOT fire", async () => {
+		// Mirror of the blocks-case above. Same observers, same rule, but
+		// the command chain is AST-REVERSED: Y-writer first, X-writer second.
+		// Synthetic Y at ts=baseline+1, synthetic X at ts=baseline+2 → X is
+		// AST-newer than Y → `happened: { event: X, since: Y }` reads X as
+		// FRESH (written after the since-invalidator) → rule does NOT fire.
+		//
+		// This case is the integration-layer guard for the strict-ordering
+		// property of speculative timestamps. Under a mutation that ties all
+		// speculative timestamps (e.g., every speculative at baseline+1),
+		// `eventLatest <= sinceLatest` would flip to true (tie case), the
+		// rule would incorrectly fire, and this test would fail. The paired
+		// blocks-case above passes under that mutation because a tie still
+		// satisfies `<=` → the fix is guarded on both sides only when this
+		// test is present.
+		const EVENT_X = "chain-reversed-x" as const;
+		const EVENT_Y = "chain-reversed-y" as const;
+		const aObserver: Observer = {
+			name: "a-writer-reversed",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObserver: Observer = {
+			name: "b-writer-reversed",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-y-allows-reversed",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver, bObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("bravo && alpha && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"AST-reversed: synthetic X newer than synthetic Y → X is fresh → rule does NOT fire",
+		);
+	});
 });
 
 describe("buildEvaluator: when.not + when.condition", () => {
