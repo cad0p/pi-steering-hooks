@@ -36,14 +36,27 @@
  * subshell has no effect on the parent's working tree state for this
  * dimension).
  *
- * `initial: "unknown"` because the plugin cannot synchronously know the
- * session's current branch at construction time. For predicates that
- * need the REAL branch (no in-chain checkout to refine it), the
- * `branch` predicate handler falls back to `ctx.exec("git", ["branch",
- * "--show-current"])`. Wiring a session-start prefetch (populate the
- * initial value via a one-shot git query) is a reasonable Phase-5
- * optimization but is explicitly out of scope for Phase 4: the tests
- * here pin the tracker's modifier arithmetic, not the initial seed.
+ * The tracker distinguishes two "I don't know the branch" states so
+ * predicates can apply the correct policy:
+ *
+ *   - `initial: NO_CHECKOUT_IN_CHAIN` - no branch-changing modifier
+ *     has fired in this ref's scope. The plugin cannot synchronously
+ *     know the session's current branch at construction time; the
+ *     `branch` predicate handler shells out via `ctx.exec("git",
+ *     ["branch", "--show-current"])` to learn it. (A session-start
+ *     prefetch is a reasonable future optimization but out of scope
+ *     here.)
+ *   - `unknown: "unknown"` - a modifier FIRED but couldn't resolve
+ *     statically (e.g. `git checkout $VAR`). The predicate must NOT
+ *     shell out in this case: `git branch --show-current` would
+ *     return the PRE-checkout branch and silently defeat the
+ *     walker's tracking. Predicates apply their `onUnknown` policy
+ *     instead (default `"block"` -> fail-closed).
+ *
+ * The `NO_CHECKOUT_IN_CHAIN` sentinel is chosen to be a string that
+ * cannot occur as a real git branch name (git refuses refs containing
+ * `:`). Exported so tests and plugin authors can reference it; it
+ * should never be constructed ad-hoc.
  *
  * ## Note for plugin authors
  *
@@ -58,6 +71,17 @@ import {
 	type Modifier,
 	type Tracker,
 } from "../../index.ts";
+
+/**
+ * Sentinel value for `branchTracker.initial` - marks "no branch-
+ * changing modifier has fired in this ref's scope yet". Distinct
+ * from the `"unknown"` sentinel (which marks "a modifier DID fire
+ * but couldn't resolve statically"). See the file JSDoc for why the
+ * distinction matters to the `branch` predicate's exec fallback
+ * decision. The colon is chosen because git rejects it in branch
+ * names, so this value cannot collide with a real branch.
+ */
+export const NO_CHECKOUT_IN_CHAIN = "pi-steering:no-checkout-in-chain";
 
 /** Branch-changing git subcommands. */
 const CHECKOUT_SUBCOMMANDS = new Set(["checkout", "switch"]);
@@ -154,7 +178,7 @@ const gitBranchModifier: Modifier<string> = {
  * plugin - name collisions are a hard error per the plugin-merger).
  */
 export const branchTracker: Tracker<string> = {
-	initial: "unknown",
+	initial: NO_CHECKOUT_IN_CHAIN,
 	unknown: "unknown",
 	modifiers: {
 		git: gitBranchModifier,

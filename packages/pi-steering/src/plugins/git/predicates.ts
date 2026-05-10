@@ -12,8 +12,18 @@
  * Evaluation strategy:
  *
  *   - `branch`           - read `ctx.walkerState.branch` first (set by
- *                           the branch tracker on in-chain checkouts);
- *                           otherwise shell out via `git branch
+ *                           the branch tracker on in-chain checkouts).
+ *                           If the tracker resolved statically, use
+ *                           that value. If the tracker reports
+ *                           `"unknown"` (dynamic checkout like
+ *                           `git checkout $VAR` that the walker
+ *                           couldn't resolve), apply `onUnknown`
+ *                           policy without falling back to `exec` -
+ *                           a `git branch --show-current` call would
+ *                           return the PRE-checkout branch and
+ *                           silently defeat the walker. If no
+ *                           tracker state exists (no checkout in
+ *                           chain), shell out via `git branch
  *                           --show-current`.
  *   - `upstream`         - no tracker today; always shell out via
  *                           `git rev-parse --abbrev-ref @{upstream}`.
@@ -40,6 +50,7 @@ import type {
 	PredicateContext,
 	PredicateHandler,
 } from "../../index.ts";
+import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -127,18 +138,61 @@ async function tryExec(
 }
 
 /**
- * Resolve a string tracker value from `ctx.walkerState[key]`, treating
- * the tracker's `"unknown"` sentinel and any non-string value as
- * "absent".
+ * Resolved outcome of reading a string tracker value from
+ * `ctx.walkerState[key]`. Callers MUST distinguish the three cases:
+ *
+ *   - `value`   - the tracker resolved the value statically for this
+ *                  command ref. Use it directly.
+ *   - `unknown` - the tracker observed a write it couldn't resolve
+ *                  statically (e.g. `git checkout $VAR`). The walker
+ *                  deliberately surfaces this to signal "a change
+ *                  happened but I can't name the new value". Falling
+ *                  through to `exec` would return the PRE-write
+ *                  value and silently defeat the walker's static
+ *                  tracking - exactly the case it exists for.
+ *                  Callers must apply their `onUnknown` policy.
+ *   - `missing` - no tracker modifier fired for this dimension in
+ *                  this ref's scope (the walker threaded the
+ *                  tracker's initial sentinel, or `walkerState` has
+ *                  no key for this tracker at all). `exec` fallback
+ *                  is correct here: the shell's current state is the
+ *                  value the predicate wants.
+ *
+ * The three-way split requires cooperation from the tracker: its
+ * `initial` value must be distinct from its `unknown` sentinel, so
+ * the predicate can tell "no modifier fired" apart from "modifier
+ * fired and couldn't resolve". `branchTracker` does this via
+ * {@link NO_CHECKOUT_IN_CHAIN}. A tracker that reuses `"unknown"`
+ * for both initial and unknown would collapse these two cases -
+ * preserved here as `missing` for backward compatibility (the
+ * predicate then behaves as it did pre-U1, shelling out on any
+ * unknown).
+ */
+type WalkerStringResult =
+	| { kind: "value"; value: string }
+	| { kind: "unknown" }
+	| { kind: "missing" };
+
+/**
+ * Resolve a string tracker value from `ctx.walkerState[key]` into a
+ * three-state discriminated result. See {@link WalkerStringResult}
+ * for why callers must not conflate `unknown` with `missing`.
+ *
+ * `initialSentinel` is the tracker's initial value (distinct from
+ * its `unknown` sentinel). When `walkerState[key]` equals this
+ * sentinel, the result is `missing` - no modifier fired for this
+ * dimension in this ref's scope.
  */
 function walkerString(
 	ctx: PredicateContext,
 	key: string,
-): string | null {
+	initialSentinel: string,
+): WalkerStringResult {
 	const v = ctx.walkerState?.[key];
-	if (typeof v !== "string") return null;
-	if (v === "unknown") return null;
-	return v;
+	if (typeof v !== "string") return { kind: "missing" };
+	if (v === initialSentinel) return { kind: "missing" };
+	if (v === "unknown") return { kind: "unknown" };
+	return { kind: "value", value: v };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,9 +212,16 @@ function walkerString(
  *
  * Resolution order:
  *   1. `ctx.walkerState.branch` - set by the branch tracker when the
- *       current bash chain contains `git checkout` / `git switch`. If
- *       this is the tracker's `"unknown"` sentinel or missing, fall
- *       through.
+ *       current bash chain contains `git checkout` / `git switch`.
+ *       Three outcomes:
+ *         - value resolved statically (e.g. `git checkout main`) ->
+ *           match the pattern against it.
+ *         - `"unknown"` sentinel (dynamic checkout like `git checkout
+ *           $VAR`) -> apply `onUnknown` policy. Do NOT fall through
+ *           to exec: a `git branch --show-current` call here would
+ *           return the PRE-checkout branch (the walker exists to
+ *           track exactly this kind of in-chain change statically).
+ *         - missing (no checkout in chain) -> fall through to exec.
  *   2. `git branch --show-current` in `ctx.cwd`. Empty stdout is
  *       treated as "no branch" (detached HEAD) - the predicate falls
  *       back to `onUnknown`.
@@ -174,12 +235,18 @@ export const branch: PredicateHandler = async (value, ctx) => {
 	if (arg === null) return false;
 
 	// 1. Walker state (tracker-resolved mid-command).
-	const fromWalker = walkerString(ctx, "branch");
-	if (fromWalker !== null) {
-		return matchPattern(arg.pattern, fromWalker);
+	const fromWalker = walkerString(ctx, "branch", NO_CHECKOUT_IN_CHAIN);
+	if (fromWalker.kind === "value") {
+		return matchPattern(arg.pattern, fromWalker.value);
+	}
+	if (fromWalker.kind === "unknown") {
+		// Dynamic in-chain checkout. Exec would return the PRE-checkout
+		// branch, which is the case the walker exists to catch. Apply
+		// the predicate's `onUnknown` policy instead of falling through.
+		return unknownVerdict(arg.onUnknown);
 	}
 
-	// 2. Shell out.
+	// 2. Shell out (tracker saw no in-chain checkout).
 	const out = await tryExec(ctx, "git", ["branch", "--show-current"], ctx.cwd);
 	if (out === null || out.length === 0) return unknownVerdict(arg.onUnknown);
 	return matchPattern(arg.pattern, out);

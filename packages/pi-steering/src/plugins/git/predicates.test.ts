@@ -120,16 +120,47 @@ describe("predicate: branch", () => {
 		assert.equal(execCalls[0]!.cwd, "/repo");
 	});
 
-	it("walkerState value `\"unknown\"` triggers exec fallback (tracker sentinel treated as absent)", async () => {
-		const { ctx, execCalls } = makeCtx(
-			[
-				{
-					match: (cmd, args) => cmd === "git" && args[0] === "branch",
-					result: execOk("trunk\n"),
-				},
-			],
-			{ walkerState: { branch: "unknown" } },
+	it("walkerState value `\"unknown\"` (dynamic checkout) short-circuits: default onUnknown=block fires, no exec fallback", async () => {
+		// The walker saw something like `git checkout $VAR` - a write
+		// happened but the target branch can't be resolved statically.
+		// Falling through to `git branch --show-current` would return
+		// the PRE-checkout branch and silently defeat the walker's
+		// whole purpose. Predicate must apply onUnknown without exec.
+		const { ctx, execCalls } = makeCtx([], {
+			walkerState: { branch: "unknown" },
+		});
+		const matches = await branch(/^main$/, ctx);
+		assert.equal(matches, true);
+		assert.equal(
+			execCalls.length,
+			0,
+			"exec must not be called when walker reports unknown",
 		);
+	});
+
+	it("walkerState value `\"unknown\"` with onUnknown: \"allow\" - rule skips, still no exec", async () => {
+		const { ctx, execCalls } = makeCtx([], {
+			walkerState: { branch: "unknown" },
+		});
+		const matches = await branch(
+			{ pattern: /^main$/, onUnknown: "allow" },
+			ctx,
+		);
+		assert.equal(matches, false);
+		assert.equal(execCalls.length, 0);
+	});
+
+	it("walkerState missing entirely (no in-chain checkout) -> exec fallback", async () => {
+		// No `walkerState` on ctx at all: the tracker observed no git
+		// checkout in this chain, so the current shell-level branch
+		// value IS the predicate's answer. Exec is the right path.
+		const { ctx, execCalls } = makeCtx([
+			{
+				match: (cmd, args) =>
+					cmd === "git" && args[0] === "branch" && args[1] === "--show-current",
+				result: execOk("trunk\n"),
+			},
+		]);
 		const matches = await branch(/^trunk$/, ctx);
 		assert.equal(matches, true);
 		assert.equal(execCalls.length, 1);
