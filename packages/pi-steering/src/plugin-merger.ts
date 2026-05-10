@@ -299,13 +299,9 @@ export function resolvePlugins(
 	for (const plugin of activePlugins) {
 		if (!plugin.trackers) continue;
 		for (const [name, tracker] of Object.entries(plugin.trackers)) {
-			// Reserved key: the evaluator merges synthesized speculative
-			// entries into each ref's walkerState under `events` (see
-			// evaluator.ts `prepareBashState`). Letting a plugin claim the
-			// name would silently clobber the synthesis output at merge
-			// time, breaking chain-aware `when.happened`. Rejecting here
-			// keeps the JSDoc promise on `PredicateContext.walkerState`
-			// honest.
+			// Reserved key: plugin-registered trackers may not claim `events`;
+			// the evaluator merges synthesized speculative entries under that
+			// name (see schema.ts `PredicateContext.walkerState` JSDoc).
 			if (name === "events") {
 				throw new Error(
 					`[pi-steering] tracker name "events" is reserved: ` +

@@ -21,6 +21,7 @@ import {
 } from "unbash-walker";
 import {
 	synthesizeSpeculativeEntries,
+	SPECULATIVE_BASELINE,
 	type SyntheticEntry,
 } from "./speculative-synthesis.ts";
 import type { Observer } from "../schema.ts";
@@ -33,9 +34,6 @@ function refsFor(command: string): readonly CommandRef[] {
 
 const SYNC_DONE = "sync-done" as const;
 const UPSTREAM_FAILED = "upstream-failed" as const;
-
-/** Reserved speculative baseline — keep in sync with SPECULATIVE_BASELINE. */
-const SPEC_BASE = 2 ** 52;
 
 function syncObserver(
 	overrides: Partial<Observer> = {},
@@ -69,7 +67,7 @@ describe("synthesizeSpeculativeEntries: joiner reachability", () => {
 		assert.equal(crView[SYNC_DONE].length, 1);
 		assert.deepEqual(crView[SYNC_DONE][0], {
 			data: {},
-			timestamp: SPEC_BASE + 1, // baseline + 1 + ref index 0
+			timestamp: SPECULATIVE_BASELINE + 1, // baseline + 1 + ref index 0
 			speculative: true,
 		});
 	});
@@ -227,14 +225,14 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const entry = out.get(refs[1]!)?.[SYNC_DONE]?.[0];
 		// sync is at index 0, baseline + 1 + 0
-		assert.equal(entry?.timestamp, SPEC_BASE + 1);
+		assert.equal(entry?.timestamp, SPECULATIVE_BASELINE + 1);
 	});
 
 	it("baseline is strictly greater than any realistic epoch-ms timestamp", () => {
 		// Date.now() is < 2^48 for any date through ~year 10,890 AD. Our
 		// baseline is 2^52. The gap is the headroom that makes
 		// speculative > real trivially.
-		assert.ok(SPEC_BASE > Date.now() * 100);
+		assert.ok(SPECULATIVE_BASELINE > Date.now() * 100);
 	});
 
 	it("AST-order monotonic — later ref has later speculative timestamp", () => {
@@ -243,12 +241,12 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 		const refs = refsFor("echo foo && sync && cr --review");
 		const out = synthesizeSpeculativeEntries(refs, [syncObserver()]);
 		const entry = out.get(refs[2]!)?.[SYNC_DONE]?.[0];
-		assert.equal(entry?.timestamp, SPEC_BASE + 2);
+		assert.equal(entry?.timestamp, SPECULATIVE_BASELINE + 2);
 	});
 
 	it("two speculative writes in same chain — later ref has later timestamp", () => {
 		// `A && B && cr` where A writes X and B writes Y. AST order:
-		// A.idx=0, B.idx=1. Timestamps: X=SPEC_BASE+1, Y=SPEC_BASE+2.
+		// A.idx=0, B.idx=1. Timestamps: X=SPECULATIVE_BASELINE+1, Y=SPECULATIVE_BASELINE+2.
 		// Downstream `when.happened: { event: X, since: Y }` reads X
 		// as stale — the two-speculative-writes-with-since-invalidator
 		// correctness case.
@@ -277,12 +275,12 @@ describe("synthesizeSpeculativeEntries: timestamp convention", () => {
 		const crView = out.get(refs[2]!);
 		assert.equal(
 			crView?.[EVENT_X]?.[0]?.timestamp,
-			SPEC_BASE + 1,
+			SPECULATIVE_BASELINE + 1,
 			"X ts = baseline + 1 + 0",
 		);
 		assert.equal(
 			crView?.[EVENT_Y]?.[0]?.timestamp,
-			SPEC_BASE + 2,
+			SPECULATIVE_BASELINE + 2,
 			"Y ts = baseline + 1 + 1",
 		);
 		// Invariant: X older than Y in the speculative timeline.

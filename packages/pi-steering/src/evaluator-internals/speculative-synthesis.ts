@@ -65,26 +65,22 @@
  * @internal — not part of the public pi-steering surface.
  */
 
-import { getBasename, getCommandArgs, type CommandRef } from "unbash-walker";
+import type { CommandRef } from "unbash-walker";
 import type { Observer } from "../schema.ts";
+import { refToText } from "../internal/ref-text.ts";
 import { matchesWatch } from "../internal/watch-matcher.ts";
 
 /**
- * Reserved timestamp baseline for speculative entries. Chosen far
- * above any realistic epoch-ms value (`Date.now()` < 2^48 for any
- * date through ~year 10,890 AD); 2^52 itself maps to ~year 144,700
- * AD and sits comfortably under `Number.MAX_SAFE_INTEGER` (2^53 - 1).
+ * Speculative baseline timestamp. All synthetic entries carry
+ * `SPECULATIVE_BASELINE + 1 + astIndex` so they order strictly above
+ * any real entry's `timestamp` (real entries are epoch-ms from
+ * `Date.now()`, well under `2^48` for any realistic date). See the
+ * file-level JSDoc's "Timestamp convention" section for the full
+ * rationale and the acknowledged numerical-convention caveat.
  *
- * Note: "strictly greater than every real entry" is a numerical
- * convention rather than a type-level guarantee. A malformed or
- * attacker-constructed session entry with `timestamp > 2^52` would
- * silently defeat chain-aware speculative allow by ordering newer
- * than the synthetic entries. Real entries go through `Date.parse`
- * with NaN → 0 clamping, so the path to producing such a value is
- * narrow; acknowledging it here so future hardening work has a
- * concrete invariant to target.
+ * @internal
  */
-const SPECULATIVE_BASELINE = 2 ** 52;
+export const SPECULATIVE_BASELINE = 2 ** 52;
 
 /**
  * Speculative session entry. Structurally a superset of real entries
@@ -102,7 +98,7 @@ export interface SyntheticEntry<T = unknown> {
 }
 
 /** Per-ref view: `walkerState.events[customType] → SyntheticEntry[]`. */
-export type SyntheticEventsByType = Readonly<
+type SyntheticEventsByType = Readonly<
 	Record<string, readonly SyntheticEntry[]>
 >;
 
@@ -144,13 +140,8 @@ export function synthesizeSpeculativeEntries(
 		return result;
 	}
 
-	// Single left-to-right pass over the refs. `chainEvents` holds
-	// speculative entries from the active `&&` chain; each consumer
-	// ref sees the current snapshot. After attribution, an eligible
-	// ref (joiner `&&` on a reachable segment) appends its produced
-	// events to the chain for later consumers. `&&` extends the chain;
-	// `;` resets the chain and the reachability flag; anything else
-	// (`||`, `|`, undefined) clears the chain for subsequent refs.
+	// Single left-to-right walk. Each ref sees the active `&&`-chain's
+	// speculative events; the switch below carries the joiner semantics.
 	let chainEvents: Record<string, readonly SyntheticEntry[]> = {};
 	let reachable = true;
 	for (let i = 0; i < refs.length; i++) {
@@ -177,8 +168,7 @@ export function synthesizeSpeculativeEntries(
 		// is redundant for `happened`'s presence + latest-timestamp
 		// verdict. Clone the chain before extending: earlier consumer
 		// refs hold frozen references to the old map.
-		const refText =
-			`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim();
+		const refText = refToText(ref);
 		let next: Record<string, readonly SyntheticEntry[]> | null = null;
 		for (const [customType, observersForType] of observersByWrite) {
 			for (const obs of observersForType) {

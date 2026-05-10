@@ -35,11 +35,10 @@
 import {
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
-	getBasename,
-	getCommandArgs,
 	parse as parseBash,
 } from "unbash-walker";
 import { matchesPattern } from "../evaluator-internals/predicates.ts";
+import { refToText } from "./ref-text.ts";
 import type {
 	ObserverWatch,
 	Pattern,
@@ -181,9 +180,7 @@ export function extractRefTextsForBash(
 		const script = parseBash(command);
 		const extracted = extractAllCommandsFromAST(script, command);
 		const { commands: refs } = expandWrapperCommands(extracted);
-		return refs.map((ref) =>
-			`${getBasename(ref)} ${getCommandArgs(ref).join(" ")}`.trim(),
-		);
+		return refs.map(refToText);
 	} catch {
 		// Don't let a parse error take down dispatch — a malformed
 		// command still deserves a raw-match chance. Returning null
