@@ -48,10 +48,9 @@
  * ## Safety
  *
  * **Chain reachability**: only refs with joiner `&&` in an
- * unconditionally-reached segment qualify as eligible producers.
- * Mirrors {@link computePriorAndChains}'s eligibility — the `&&`
- * short-circuit guarantees any later ref that runs saw the producer
- * complete successfully first.
+ * unconditionally-reached segment qualify as eligible producers. The
+ * `&&` short-circuit guarantees any later ref that runs saw the
+ * producer complete successfully first.
  *
  * **Observer eligibility**: observers must declare
  * `watch.inputMatches.command`. Any-bash-event observers would grant
@@ -135,12 +134,13 @@ export function synthesizeSpeculativeEntries(
 		return result;
 	}
 
-	// Single left-to-right pass mirroring `computePriorAndChains`.
-	// `chainEvents` holds speculative entries from the active `&&`
-	// chain; each consumer ref sees the current snapshot. After
-	// attribution, an eligible ref (joiner `&&` on a reachable
-	// segment) appends its produced events to the chain for later
-	// consumers.
+	// Single left-to-right pass over the refs. `chainEvents` holds
+	// speculative entries from the active `&&` chain; each consumer
+	// ref sees the current snapshot. After attribution, an eligible
+	// ref (joiner `&&` on a reachable segment) appends its produced
+	// events to the chain for later consumers. `&&` extends the chain;
+	// `;` resets the chain and the reachability flag; anything else
+	// (`||`, `|`, undefined) clears the chain for subsequent refs.
 	let chainEvents: Record<string, readonly SyntheticEntry[]> = {};
 	let reachable = true;
 	for (let i = 0; i < refs.length; i++) {

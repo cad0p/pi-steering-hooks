@@ -1528,14 +1528,15 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 	});
 
 	it("conservative-under: `foo && (bar ; sync) && cr` — only sync in prior, foo is dropped at `;`", async () => {
-		// GAP-02 regression fence. The walker flattens to
+		// `&&` joiner flattening visibility. The walker flattens to
 		// `foo.joiner='&&', bar.joiner=';', sync.joiner='&&',
 		// cr.joiner=undefined`. The `;` inside the subshell clears the
 		// prior chain, so cr's prior set is `[sync]` only — NOT
 		// `[foo, sync]`. This is the intentional conservative-under trade-
-		// off documented on `computePriorAndChains`; pin it so a future
-		// walker change that treats the outer `&&` as bridging across the
-		// `;` doesn't silently flip to an over-allow.
+		// off of the chain-reachability walk in
+		// `evaluator-internals/speculative-synthesis.ts`; pin it so a
+		// future walker change that treats the outer `&&` as bridging
+		// across the `;` doesn't silently flip to an over-allow.
 		//
 		// We prove it with an observer that matches ONLY `foo` (not sync).
 		// If foo were in cr's prior chain the rule would wrongly

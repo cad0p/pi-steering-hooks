@@ -61,7 +61,7 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { refToText } from "./evaluator-internals/chain.ts";
+import { refToText } from "./internal/ref-text.ts";
 import {
 	createAppendEntry,
 	createExecCache,
