@@ -336,8 +336,12 @@ function unwrapOnUnknown(value: unknown): {
  * Walker state consumed by `when` evaluation. Today just the per-ref
  * cwd; the shape is open for future built-ins (e.g. branch) to pull
  * their own fields from the same snapshot.
+ *
+ * @internal — not a plugin-author surface. Plugin predicates consume
+ * `ctx.walkerState` (the public `Readonly<Record<string, unknown>>`
+ * on {@link PredicateContext}) instead.
  */
-export interface WhenWalkerState {
+interface WhenWalkerState {
 	readonly cwd: string;
 }
 
