@@ -729,7 +729,7 @@ describe("buildEvaluator: when.happened", () => {
 			assert.equal(result, undefined);
 			assert.ok(
 				warnings.some((w) =>
-					/predicate threw for rule "typo"@user.*when\.happened\.in must be.*"agent_loop" or "session"/.test(
+					/predicate threw for rule "typo"@user.*when\.happened\.in must be.*"agent_loop", "session", or "tool_call"/.test(
 						w,
 					),
 				),
@@ -1750,6 +1750,192 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 			res,
 			undefined,
 			"AST-reversed: synthetic X newer than synthetic Y → X is fresh → rule does NOT fire",
+		);
+	});
+});
+
+describe("buildEvaluator: when.happened with in='tool_call'", () => {
+	// `tool_call` scope narrows `happened` to the speculative-only
+	// timeline: real (session-persisted) entries are ignored entirely.
+	// Fires when the speculative event is absent from THIS tool_call's
+	// `&&`-chain; does NOT fire when a prior chained ref writes the
+	// event. Use for "must be chained directly before" semantics, vs
+	// `agent_loop`'s "must have happened anywhere this loop".
+
+	it("event in chain: `sync && cr` — synthetic write satisfies tool_call presence", async () => {
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"speculative sync in chain → tool_call happened → rule does NOT fire",
+		);
+	});
+
+	it("event absent from chain: bare `cr` — no speculative write → rule fires", async () => {
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"bare cr, no sync in chain → tool_call presence check fails → rule fires",
+		);
+	});
+
+	it("ignores real entries: `sync` ran in prior tool_call, now bare `cr` — rule still fires", async () => {
+		// The defining characteristic of tool_call vs agent_loop:
+		// real (persisted) entries from PRIOR tool_calls are ignored.
+		// With in: "agent_loop" the same fixture would NOT fire because
+		// sync already happened this loop. With in: "tool_call", only
+		// speculative entries in the CURRENT chain count.
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const host = makeHost();
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			host,
+		);
+		// Pre-seed a real entry simulating a prior successful sync in
+		// this agent loop (what agent_loop scope would satisfy).
+		host.appendEntry(EVENT, { _agentLoopIndex: 0, priorRun: true });
+		const res = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(
+			res && res.block === true,
+			"real prior-tool_call sync entry is ignored under in='tool_call' → rule fires",
+		);
+	});
+
+	it("tool_call + since: in-chain invalidator stales the in-chain event", async () => {
+		// `alpha && bravo && cr` where alpha writes X and bravo writes Y.
+		// Y is the since-invalidator for X. Under tool_call scope, both
+		// X and Y are speculative-only; AST ordering gives X.ts < Y.ts
+		// → X is stale → rule fires.
+		const EVENT_X = "tc-since-x" as const;
+		const EVENT_Y = "tc-since-y" as const;
+		const aObs: Observer = {
+			name: "a-writer",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObs: Observer = {
+			name: "b-writer",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-x-since-y-tc",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X stale (Y written after)",
+			when: {
+				happened: { event: EVENT_X, in: "tool_call", since: EVENT_Y },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObs, bObs] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(
+			res && res.block === true,
+			"speculative X older than speculative Y → tool_call: X is stale → rule fires",
 		);
 	});
 });

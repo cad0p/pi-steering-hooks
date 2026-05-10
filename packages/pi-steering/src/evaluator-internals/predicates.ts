@@ -182,7 +182,7 @@ function evaluateHappened(
 	) {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": when.happened ` +
-				`expected { event: string; in: "agent_loop" | "session"; since?: string }; ` +
+				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
@@ -210,10 +210,10 @@ function evaluateHappened(
 				`(see the v0.1.0 migration notes).`,
 		);
 	}
-	if (scope !== "agent_loop" && scope !== "session") {
+	if (scope !== "agent_loop" && scope !== "session" && scope !== "tool_call") {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": ` +
-				`when.happened.in must be "agent_loop" or "session"; ` +
+				`when.happened.in must be "agent_loop", "session", or "tool_call"; ` +
 				`got ${JSON.stringify(scope)}`,
 		);
 	}
@@ -224,8 +224,7 @@ function evaluateHappened(
 				`got ${JSON.stringify(since)}`,
 		);
 	}
-	const inScope = scopeFilter(scope, ctx);
-	const eventLatest = latestTimestamp(event, inScope, ctx);
+	const eventLatest = latestTimestamp(event, scope, ctx);
 	if (eventLatest === null) {
 		// Event absent in unified timeline → rule fires.
 		return true;
@@ -234,7 +233,7 @@ function evaluateHappened(
 		// Simple presence check: event happened → rule does NOT fire.
 		return false;
 	}
-	const sinceLatest = latestTimestamp(since, inScope, ctx);
+	const sinceLatest = latestTimestamp(since, scope, ctx);
 	if (sinceLatest === null) {
 		// Invalidator never written in scope → degrade to simple-
 		// happened semantics (event wins).
@@ -250,19 +249,27 @@ function evaluateHappened(
  * for the given customType. `null` when no entries exist in either
  * the scope-filtered real stream or the speculative stream.
  *
- * Speculative entries bypass the scope filter — see
- * {@link evaluateHappened}'s JSDoc for why the scope subset check
- * adds no signal on "about to happen" entries.
+ * For scope `"tool_call"`, real entries are skipped entirely — only
+ * speculative entries from the current tool_call's chain-aware
+ * synthesis count. That's the whole definition of the scope: "about
+ * to happen in THIS command", not "has happened sometime this loop".
+ *
+ * Speculative entries bypass the scope filter even for `agent_loop`
+ * and `session` — see {@link evaluateHappened}'s JSDoc for why the
+ * scope subset check adds no signal on "about to happen" entries.
  */
 function latestTimestamp(
 	customType: string,
-	inScope: (entry: { data: Record<string, unknown> }) => boolean,
+	scope: "agent_loop" | "session" | "tool_call",
 	ctx: PredicateContext,
 ): number | null {
 	let latest = -Infinity;
-	for (const entry of ctx.findEntries<Record<string, unknown>>(customType)) {
-		if (!inScope(entry)) continue;
-		if (entry.timestamp > latest) latest = entry.timestamp;
+	if (scope !== "tool_call") {
+		const inScope = scopeFilter(scope, ctx);
+		for (const entry of ctx.findEntries<Record<string, unknown>>(customType)) {
+			if (!inScope(entry)) continue;
+			if (entry.timestamp > latest) latest = entry.timestamp;
+		}
 	}
 	const speculative = speculativeEntriesFor(ctx, customType);
 	for (const entry of speculative) {

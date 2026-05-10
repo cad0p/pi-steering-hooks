@@ -135,6 +135,13 @@ export interface WhenClause<Writes extends string = string> {
 	 *     authors don't have to remember to tag manually.
 	 *   - `"session"`    — no scope filter. Any entry of `event` present
 	 *     in the session JSONL satisfies.
+	 *   - `"tool_call"`  — only consider speculative entries synthesized
+	 *     for THIS tool_call's `&&`-chain. Real (persisted) entries are
+	 *     ignored entirely. Use when the rule requires the event to be
+	 *     CHAINED directly before the guarded command (e.g. `sync && cr`)
+	 *     rather than merely "somewhere this agent loop". Pairs naturally
+	 *     with observer `writes:` declarations on chain-eligible
+	 *     observers; no-op when no observer writes the event.
 	 *
 	 * Inversion: place inside `not` to flip —
 	 * `not: { happened: { event, in } }` fires when the event HAS
@@ -161,7 +168,7 @@ export interface WhenClause<Writes extends string = string> {
 	 */
 	happened?: {
 		event: Writes;
-		in: "agent_loop" | "session";
+		in: "agent_loop" | "session" | "tool_call";
 		since?: Writes;
 	};
 
