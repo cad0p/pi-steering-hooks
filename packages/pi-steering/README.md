@@ -830,6 +830,7 @@ Future versions will add a session-manager-side index keyed by `customType`, mov
 
 ## Further reading
 
+- [`examples/`](./examples/) — rule-pack examples (`force-push-strict`, `no-amend`, `draft-prs-only`, `combined-git-discipline`) — copy-paste starting points.
 - [`examples/work-item-plugin/`](./examples/work-item-plugin/) — canonical plugin reference.
 - [`src/plugins/git/`](./src/plugins/git) — production plugin with trackers and tracker extensions.
 - [`../unbash-walker/`](../unbash-walker/) — the AST walker.

@@ -31,6 +31,30 @@ importers:
         specifier: ^5.4.5
         version: 5.9.3
 
+  packages/pi-steering/examples/combined-git-discipline:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../..
+
+  packages/pi-steering/examples/draft-prs-only:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../..
+
+  packages/pi-steering/examples/force-push-strict:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../..
+
+  packages/pi-steering/examples/no-amend:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../..
+
   packages/pi-steering/examples/work-item-plugin:
     devDependencies:
       pi-steering:

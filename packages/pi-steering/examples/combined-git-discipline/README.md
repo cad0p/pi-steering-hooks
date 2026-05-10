@@ -2,6 +2,8 @@
 
 A batteries-included rule pack that stacks the three individual PR/git-hygiene examples plus the upstream safety defaults. Drop-in starting point for teams that want disciplined PR workflows.
 
+> **v0.1.0 TypeScript form:** see [`steering.ts`](./steering.ts) — drop in at `~/.pi/steering.ts` or `<project-root>/.pi/steering.ts`. The JSON form in [`steering.json`](./steering.json) is still supported for v0.0.x configs.
+
 ## What it enforces
 
 From this pack (overrides the default force-push rule):

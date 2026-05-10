@@ -29,6 +29,17 @@ the lease-variant carve-out is an attack surface. This rule pack closes it.
 
 ## Install
 
+Two equivalent forms. Pick whichever matches your setup.
+
+### v0.1.0+ TypeScript form (preferred)
+
+Copy [`steering.ts`](./steering.ts) to `~/.pi/steering.ts` (or
+`<project-root>/.pi/steering.ts`) for a repo-scoped policy. The
+TypeScript form participates in compile-time checking via
+`defineConfig`.
+
+### v0.0.x JSON form (legacy)
+
 Merge this into your `steering.json`. The `disable` entry turns off the built-in `no-force-push`; the new `no-force-push-strict` rule takes its place:
 
 ```json

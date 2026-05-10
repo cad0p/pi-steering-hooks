@@ -1,3 +1,7 @@
 packages:
   - 'packages/*'
+  - 'packages/pi-steering/examples/combined-git-discipline'
+  - 'packages/pi-steering/examples/draft-prs-only'
+  - 'packages/pi-steering/examples/force-push-strict'
+  - 'packages/pi-steering/examples/no-amend'
   - 'packages/pi-steering/examples/work-item-plugin'
