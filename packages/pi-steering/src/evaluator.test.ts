@@ -662,13 +662,10 @@ describe("buildEvaluator: when.happened", () => {
 		}
 	});
 
-	it('isolates the "turn" migration error (S1 × migration)', async () => {
-		// The "turn" → "agent_loop" migration error path is still the
-		// correct thing to throw from inside the predicate (it's how
-		// migrating users get told what to rename). With S1, the throw is
-		// now CAUGHT by the evaluator — the user sees a warning on
-		// startup / first fire and the rule stops firing, rather than the
-		// error leaking back to the LLM via pi's tool-result shim.
+	it('treats legacy "turn" scope as an unknown-scope typo (S1)', async () => {
+		// "turn" was the removed v0.0.0-poc scope name. With v0.1.0 there
+		// is no special-case migration hint — it falls through to the
+		// generic "unknown scope" error, same as any other typo.
 		const rule: Rule = {
 			name: "legacy-turn",
 			tool: "bash",
@@ -693,7 +690,7 @@ describe("buildEvaluator: when.happened", () => {
 			assert.equal(result, undefined);
 			assert.ok(
 				warnings.some((w) =>
-					/predicate threw for rule "legacy-turn"@user.*"turn" is no longer supported/.test(
+					/predicate threw for rule "legacy-turn"@user.*when\.happened\.in must be.*"agent_loop", "session", or "tool_call"/.test(
 						w,
 					),
 				),
@@ -4744,10 +4741,10 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 		await assertWarnMatches(mkBadRule({ since: "x" }), /\.not\.in is required/);
 	});
 
-	it('throws when not.in is "turn" (legacy)', async () => {
+	it('treats legacy "turn" as unknown-scope inside not.in', async () => {
 		await assertWarnMatches(
 			mkBadRule({ in: "turn" }),
-			/"turn" is no longer supported/,
+			/when\.happened\.not\.in must be.*"agent_loop", "session", or "tool_call"/,
 		);
 	});
 

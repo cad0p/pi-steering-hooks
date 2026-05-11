@@ -659,7 +659,7 @@ Grep your config for `turnIndex` and rename every occurrence.
   }
 ```
 
-The engine throws a hard error with a migration hint if `in: "turn"` is seen. Unknown `in` values now throw at eval time with the offending rule name.
+The engine throws at evaluation time if `in: "turn"` is seen (or any other unknown scope value) with the offending rule name.
 
 ### 5. `when.happened.type` → `when.happened.event`
 

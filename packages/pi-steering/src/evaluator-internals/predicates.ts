@@ -199,18 +199,10 @@ function evaluateHappened(
 	};
 	// Validate the scope string. The type system says
 	// `"agent_loop" | "session" | "tool_call"`, but a typo like
-	// `"agentLoop"` or a legacy value slips through TypeScript when the
-	// value arrives from a JSON source (import-json CLI, hand-written
-	// config, etc.). Surface those as loud runtime errors rather than
-	// silent fallthrough.
-	if (scope === "turn") {
-		throw new Error(
-			`[pi-steering] Rule "${ruleName}": ` +
-				`when.happened.in: "turn" is no longer supported in ` +
-				`pi-steering v0.1.0. Use "agent_loop" instead ` +
-				`(see the v0.1.0 migration notes).`,
-		);
-	}
+	// `"agentLoop"` slips through TypeScript when the value arrives
+	// from a JSON source (import-json CLI, hand-written config, etc.).
+	// Surface those as loud runtime errors rather than silent
+	// fallthrough.
 	if (scope !== "agent_loop" && scope !== "session" && scope !== "tool_call") {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": ` +
@@ -227,8 +219,8 @@ function evaluateHappened(
 	}
 
 	// Optional `not`: scope-subtraction modifier. Validated here rather
-	// than at load time to match the existing `turn` / unknown-scope
-	// validation pattern (engine has no schema-level validation pass).
+	// than at load time to match the existing unknown-scope validation
+	// pattern (engine has no schema-level validation pass).
 	let innerScope: "agent_loop" | "session" | "tool_call" | null = null;
 	let innerSince: string | undefined =
 		typeof since === "string" ? since : undefined;
@@ -259,13 +251,6 @@ function evaluateHappened(
 			);
 		}
 		const nInScope = (not as { in: unknown }).in;
-		if (nInScope === "turn") {
-			throw new Error(
-				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.in: "turn" is no longer supported in ` +
-					`pi-steering v0.1.0. Use "agent_loop" instead.`,
-			);
-		}
 		if (
 			nInScope !== "agent_loop" &&
 			nInScope !== "session" &&
