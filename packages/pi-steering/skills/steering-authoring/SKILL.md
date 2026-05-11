@@ -25,8 +25,10 @@ The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi
 | "block X unless `--flag`" | `unless: /--flag\b/`. |
 | "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.happened` gates on it (`{ event, in: "agent_loop" }`). Prefer this to hand-rolled `findEntries` + `agentLoopIndex` comparisons — same semantics, less code. |
 | "add a custom check" | Write a plugin in `.pi/steering/plugins/`, import it into `index.ts`, register it in `plugins: [...]`. |
+| "change the reason on a built-in rule" | Import the original rule from its plugin, spread it with `{ ...original, name: "new-name", reason: "..." }`, and use `disabledRules: ["original-name"]` + add the replacement. Preserves pattern / when / observer. |
 | "test this rule" | Create `steering.test.ts` using `expectBlocks` / `expectAllows` / `loadHarness`. |
 | "migrate my old JSON config" | Run `pi-steering import-json .pi/steering.json -o .pi/steering.ts`. |
+| "publish a pi-steering plugin" | Package as `pi-steering-<domain>` (unscoped) with `keywords: ["pi-package", "pi-steering-package"]` in package.json. peerDep on `pi-steering`. |
 
 ## Minimal config
 

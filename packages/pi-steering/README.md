@@ -109,6 +109,38 @@ disabledRules: ["wrong-name"],
 
 This fails at `tsc --noEmit` time — rule / plugin / observer names are threaded through `defineConfig`'s generics and cross-validated.
 
+## Glossary
+
+Three orthogonal axes, three distinct word families. Keep them straight and the docs / rules / errors all line up.
+
+**Time scope** (`WhenClause.happened.in`):
+
+- **`agent_loop`** — the current user prompt plus every tool call it spawns. Bumped on pi's `agent_start` event. Most common scope for workflow rules.
+- **`session`** — the entire pi session across all agent loops. Persisted in the session JSONL, survives restarts.
+- **`tool_call`** — the current bash tool call only. Considers ONLY speculative entries synthesized from `&&`-reachable observers. Use when the event MUST be chained directly before the guarded command.
+
+**Entry origin** (how a session entry came to exist):
+
+- **Real entry** — persisted in pi's session JSONL via `ctx.appendEntry`. Outlives the current tool call.
+- **Speculative entry** — synthesized by the engine for a `&&`-chain, representing "if this chain runs to completion, this entry WILL be written." Not persisted; exists only for the current evaluation.
+- **Synthesis pass** — walker-level pass that produces speculative entries from observer `writes:` declarations plus `&&`-chain reachability.
+
+**Shell constructs** (what the agent typed):
+
+- **`&&`-chain** — the shell construct `A && B && C`. Legitimate bash terminology throughout these docs; distinct from the retired adjective "chain-aware".
+- **Pipeline** (`|`) — each peer runs in its own subshell; cwd / branch / state effects don't propagate across peers.
+- **Subshell** (`(…)`) — cwd / branch effects are isolated to the subshell's body.
+
+**Hook surfaces** (where code runs):
+
+- **Tracker** — walker-level, static. Models per-ref state (cwd, branch, …) from the bash AST before execution. Plugin authors register under `Plugin.trackers`. See "Walker extensibility".
+- **Observer** — engine-level, dynamic. Watches `tool_result` events and persists session entries via `ctx.appendEntry`. Plugin authors register under `Plugin.observers`. See "Observers".
+
+**Walker terminology** (shell-semantics terms of art):
+
+- **Effective cwd** — the cwd a command runs at, computed statically by the walker from preceding `cd` / `-C` constructs. Always `tool_call`-scoped (fresh per bash invocation).
+- **Command ref** (`CommandRef`) — one extracted command node with its args, per bash tool call. Multiple per `&&`-chain.
+
 ## How it works
 
 Concrete execution trace — what happens when an agent issues `bash("git push --force && cd /tmp && git log")` under the config above:
@@ -497,6 +529,58 @@ export const branch = definePredicate<BranchArgs>(async (args, ctx) => {
 Production plugins in this repo:
 
 - [`src/plugins/git`](./src/plugins/git) — the canonical plugin reference for trackers + tracker extensions. Ships `branch` / `upstream` / `commitsAhead` predicates, a `branchTracker`, a `--git-dir` / `--work-tree` cwd extension, and the `no-main-commit` rule.
+- [`pi-steering-flags`](../pi-steering-flags) — a sibling package in this monorepo; first official external plugin, establishing the precedent for community plugins. Ships `requiresFlag` / `allowlistedFlagsOnly` predicates and helper primitives.
+
+### Ecosystem discovery
+
+Tag your plugin's `package.json` `keywords` with:
+
+```jsonc
+{
+  "keywords": [
+    "pi-package",            // surfaces on pi.dev alongside every pi extension
+    "pi-steering-package"    // surfaces specifically for pi-steering plugins
+    // ...plus any domain tags (cli, git, test-runner, ...)
+  ]
+}
+```
+
+- `pi-package` is pi's ecosystem-wide convention.
+- `pi-steering-package` is the pi-steering plugin-specific tag. Community plugins using it will be surfaced in pi-steering's plugin directory (once one exists) without needing a manual registry.
+
+Publishing conventions:
+
+- **Package name**: `pi-steering-<domain>` (unscoped). Mirrors `pi-steering` core and `pi-steering-flags`. Scoped names (`@org/pi-steering-<x>`) are fine for internal packages.
+- **Peer range**: pin to a major once `pi-steering` is v1+ (`"pi-steering": "^1"`). During the v0.x window, match the release train closely (`"pi-steering": "^0.1.0"`).
+- **License**: MIT by default, matching the core. Amazon-internal / proprietary plugins use their own license; the core has no opinion on this.
+
+### Overriding a built-in rule
+
+Plugin-shipped rules are individually exported from their plugins (see `pi-steering/plugins/git`'s named exports). To tighten a rule's reason message — e.g. pointing your agents at an internal skill or team runbook — disable the original and re-register under a new name:
+
+```ts
+import { defineConfig } from "pi-steering";
+import gitPlugin, { noMainCommit } from "pi-steering/plugins/git";
+
+// Reuse everything about the original, just swap the reason.
+const myNoMainCommit = {
+  ...noMainCommit,
+  name: "myorg-no-main-commit",
+  reason:
+    noMainCommit.reason +
+    "\n\nFor our workflow, see skill `git-discipline@myorg` or run `pi-help git-flow`.",
+} as const satisfies Rule;
+
+export default defineConfig({
+  plugins: [gitPlugin],
+  disabledRules: ["no-main-commit"],  // original off
+  rules: [myNoMainCommit],            // replacement on
+});
+```
+
+`as const satisfies Rule` preserves literal types so `defineConfig`'s cross-reference checks (on `happened.event`, `observer`, etc.) still run on the replacement. No need to restate `pattern` / `when` / `observer` / `onFire` — the spread carries them through.
+
+Changing more than the reason (tightening the pattern, scoping by cwd, swapping the observer) works the same way: spread the original, then override the fields you want to change.
 
 ## Walker extensibility
 

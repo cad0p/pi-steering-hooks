@@ -101,4 +101,4 @@ export {
 	predicates,
 	type CommitsAheadArgs,
 } from "./predicates.ts";
-export { rules } from "./rules.ts";
+export { rules, noMainCommit } from "./rules.ts";

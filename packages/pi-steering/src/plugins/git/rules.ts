@@ -61,7 +61,7 @@ import type { Rule } from "../../schema.ts";
  * rule, not an inherent-destructiveness rule - authors override when
  * the commit is intentional (e.g. release process on `main`).
  */
-const noMainCommit = {
+export const noMainCommit = {
 	name: "no-main-commit",
 	tool: "bash",
 	field: "command",
