@@ -182,7 +182,7 @@ function evaluateHappened(
 	) {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": when.happened ` +
-				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string; not?: { in, since? } }; ` +
+				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string; notIn?: "agent_loop" | "session" | "tool_call" }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
@@ -190,12 +190,12 @@ function evaluateHappened(
 		event,
 		in: scope,
 		since,
-		not,
+		notIn,
 	} = value as {
 		event: string;
 		in: unknown;
 		since?: unknown;
-		not?: unknown;
+		notIn?: unknown;
 	};
 	// Validate the scope string. The type system says
 	// `"agent_loop" | "session" | "tool_call"`, but a typo like
@@ -218,75 +218,39 @@ function evaluateHappened(
 		);
 	}
 
-	// Optional `not`: scope-subtraction modifier. Validated here rather
-	// than at load time to match the existing unknown-scope validation
-	// pattern (engine has no schema-level validation pass).
+	// Optional `notIn`: scope-subtraction modifier. Flat string — no
+	// nested object shape. Validated here rather than at load time to
+	// match the existing unknown-scope validation pattern (engine has no
+	// schema-level validation pass).
 	let innerScope: "agent_loop" | "session" | "tool_call" | null = null;
-	let innerSince: string | undefined =
-		typeof since === "string" ? since : undefined;
-	if (not !== undefined) {
-		if (not === null || typeof not !== "object") {
-			throw new Error(
-				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not must be an object if present; ` +
-					`got ${JSON.stringify(not)}`,
-			);
-		}
-		if ("event" in not) {
-			throw new Error(
-				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.event is not allowed; event is inherited from the outer happened.`,
-			);
-		}
-		if ("not" in not) {
-			throw new Error(
-				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.not is not allowed; double-negation collapses to the outer scope. Delete the inner "not".`,
-			);
-		}
-		if (!("in" in not)) {
-			throw new Error(
-				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.in is required.`,
-			);
-		}
-		const nInScope = (not as { in: unknown }).in;
+	if (notIn !== undefined) {
 		if (
-			nInScope !== "agent_loop" &&
-			nInScope !== "session" &&
-			nInScope !== "tool_call"
+			notIn !== "agent_loop" &&
+			notIn !== "session" &&
+			notIn !== "tool_call"
 		) {
 			throw new Error(
 				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.in must be "agent_loop", "session", or "tool_call"; ` +
-					`got ${JSON.stringify(nInScope)}`,
+					`when.happened.notIn must be "agent_loop", "session", or "tool_call"; ` +
+					`got ${JSON.stringify(notIn)}`,
 			);
 		}
-		if (nInScope === scope) {
+		if (notIn === scope) {
 			throw new Error(
 				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.in and when.happened.not.in are identical (${JSON.stringify(scope)}); subtraction is empty. Remove the "not" modifier.`,
+					`when.happened.in and when.happened.notIn are identical (${JSON.stringify(scope)}); subtraction is empty. Remove the "notIn" modifier.`,
 			);
 		}
-		if (SCOPE_ORDER[nInScope] > SCOPE_ORDER[scope]) {
+		if (SCOPE_ORDER[notIn] > SCOPE_ORDER[scope]) {
 			throw new Error(
 				`[pi-steering] Rule "${ruleName}": ` +
-					`when.happened.not.in (${JSON.stringify(nInScope)}) is a superset of when.happened.in (${JSON.stringify(scope)}); subtraction is empty. Adjust the scopes.`,
+					`when.happened.notIn (${JSON.stringify(notIn)}) is a superset of when.happened.in (${JSON.stringify(scope)}); subtraction is empty. Adjust the scopes.`,
 			);
 		}
-		innerScope = nInScope;
-		const nSince = (not as { since?: unknown }).since;
-		if (nSince !== undefined) {
-			if (typeof nSince !== "string") {
-				throw new Error(
-					`[pi-steering] Rule "${ruleName}": ` +
-						`when.happened.not.since must be a string if present; ` +
-						`got ${JSON.stringify(nSince)}`,
-				);
-			}
-			innerSince = nSince;
-		}
+		innerScope = notIn;
 	}
+
+	const sinceValue = typeof since === "string" ? since : undefined;
 
 	const eventLatest = latestTimestampSubtracted(
 		event,
@@ -298,12 +262,12 @@ function evaluateHappened(
 		// Event absent in the (subtracted) timeline → rule fires.
 		return true;
 	}
-	if (innerSince === undefined) {
+	if (sinceValue === undefined) {
 		// Simple presence check: event happened → rule does NOT fire.
 		return false;
 	}
 	const sinceLatest = latestTimestampSubtracted(
-		innerSince,
+		sinceValue,
 		scope,
 		innerScope,
 		ctx,
@@ -398,7 +362,7 @@ function speculativeEntriesFor(
 }
 
 /**
- * Scope nesting order used for superset detection in happened.not
+ * Scope nesting order used for superset detection in happened.notIn
  * validation. `tool_call ⊂ agent_loop ⊂ session`; a higher number
  * means a broader scope.
  */

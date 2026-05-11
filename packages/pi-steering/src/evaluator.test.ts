@@ -4422,7 +4422,7 @@ describe("buildEvaluator: user rule-name validation (S3)", () => {
 	});
 });
 
-describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
+describe("buildEvaluator: when.happened.notIn (scope subtraction)", () => {
 	const sessionEntry = (
 		customType: string,
 		data: Record<string, unknown>,
@@ -4460,7 +4460,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 			happened: {
 				event: DESC_READ_EVENT,
 				in: "agent_loop",
-				not: { in: "tool_call" },
+				notIn: "tool_call",
 			},
 		},
 	};
@@ -4499,7 +4499,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 	});
 
 	it("blocks same-tool_call same-tool_call speculative bypass (diff && cr)", async () => {
-		// WITHOUT `not: { in: "tool_call" }`, the chain would allow via
+		// WITHOUT `notIn: "tool_call"`, the chain would allow via
 		// speculative synthesis. WITH the subtraction, speculative
 		// entries are excluded and the rule fires.
 		const evaluator = buildEvaluator(
@@ -4512,7 +4512,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 			makeCtx("/r"),
 			5,
 		);
-		assert.ok(fires, "same-tool_call speculative entries don't count under not:{in:tool_call}");
+		assert.ok(fires, "same-tool_call speculative entries don't count under notIn:tool_call");
 	});
 
 	it("fires when only entries from a PRIOR agent loop exist", async () => {
@@ -4544,7 +4544,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 			happened: {
 				event: DESC_READ_EVENT,
 				in: "session",
-				not: { in: "agent_loop" },
+				notIn: "agent_loop",
 			},
 		},
 	};
@@ -4585,7 +4585,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 
 	// ----- Group 3: since interaction -----
 
-	it("not:{in:tool_call} with since: real event + real invalidator behave correctly", async () => {
+	it("notIn:tool_call with since: real event + real invalidator behave correctly", async () => {
 		const INVAL = "invalidator";
 		const ruleWithSince: Rule = {
 			name: "cr-desc-check-since",
@@ -4598,7 +4598,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 					event: DESC_READ_EVENT,
 					in: "agent_loop",
 					since: INVAL,
-					not: { in: "tool_call" },
+					notIn: "tool_call",
 				},
 			},
 		};
@@ -4626,53 +4626,12 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 		assert.ok(fires, "event older than invalidator → stale → rule fires");
 	});
 
-	it("inner since overrides outer since", async () => {
-		// Outer since=X (ignored), inner since=Y (applied). Event and Y
-		// both present; event newer → happened → rule does NOT fire.
-		const X = "x-invalidator";
-		const Y = "y-invalidator";
-		const rule: Rule = {
-			name: "inner-since",
-			tool: "bash",
-			field: "command",
-			pattern: /^cr\b/,
-			reason: "",
-			when: {
-				happened: {
-					event: DESC_READ_EVENT,
-					in: "agent_loop",
-					since: X,
-					not: { in: "tool_call", since: Y },
-				},
-			},
-		};
-		// Y older than event → event wins → does NOT fire.
-		// (X not present at all, but inner since Y overrides anyway.)
-		const ctx = makeCtx("/r", [
-			sessionEntry(
-				Y,
-				{ _agentLoopIndex: 5 },
-				"2026-01-01T00:00:00.000Z",
-				"y1",
-			),
-			sessionEntry(
-				DESC_READ_EVENT,
-				{ _agentLoopIndex: 5 },
-				"2026-01-01T00:00:10.000Z",
-				"e1",
-			),
-		]);
-		const ev = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		const skips = await ev.evaluate(bashEvent("cr --review"), ctx, 5);
-		assert.equal(skips, undefined);
-	});
-
 	// ----- Group 4: invalid-shape runtime errors -----
 	// Errors thrown inside predicate evaluation are caught by the
 	// evaluator's per-rule try/catch (so the LLM never sees them).
 	// Tests capture the console.warn to verify the error was surfaced.
 
-	const mkBadRule = (not: unknown): Rule =>
+	const mkBadRule = (notIn: unknown): Rule =>
 		({
 			name: "bad-rule",
 			tool: "bash",
@@ -4683,7 +4642,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 				happened: {
 					event: DESC_READ_EVENT,
 					in: "agent_loop",
-					not: not as never,
+					notIn: notIn as never,
 				},
 			},
 		}) as Rule;
@@ -4714,44 +4673,28 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 		}
 	}
 
-	it("throws when not.in is a superset of in", async () => {
-		// in: agent_loop, not.in: session → session ⊃ agent_loop → error.
-		await assertWarnMatches(mkBadRule({ in: "session" }), /superset/);
+	it("throws when notIn is a superset of in", async () => {
+		// in: agent_loop, notIn: session → session ⊃ agent_loop → error.
+		await assertWarnMatches(mkBadRule("session"), /superset/);
 	});
 
-	it("throws when not.in is identical to in", async () => {
-		await assertWarnMatches(mkBadRule({ in: "agent_loop" }), /identical/);
+	it("throws when notIn is identical to in", async () => {
+		await assertWarnMatches(mkBadRule("agent_loop"), /identical/);
 	});
 
-	it("throws when not.event is specified", async () => {
+	it('treats legacy "turn" as unknown-scope inside notIn', async () => {
 		await assertWarnMatches(
-			mkBadRule({ in: "tool_call", event: "other" }),
-			/event is inherited/,
+			mkBadRule("turn"),
+			/when\.happened\.notIn must be.*"agent_loop", "session", or "tool_call"/,
 		);
 	});
 
-	it("throws when not.not is nested", async () => {
+	it("throws when notIn is a non-string (e.g. JSON config passes an object)", async () => {
+		// Pre-v0.1.0 the rename was `not: { in: "tool_call" }` (nested
+		// object). Authors migrating from that shape get a clear error.
 		await assertWarnMatches(
-			mkBadRule({ in: "tool_call", not: { in: "agent_loop" } }),
-			/double-negation/,
-		);
-	});
-
-	it("throws when not.in is missing", async () => {
-		await assertWarnMatches(mkBadRule({ since: "x" }), /\.not\.in is required/);
-	});
-
-	it('treats legacy "turn" as unknown-scope inside not.in', async () => {
-		await assertWarnMatches(
-			mkBadRule({ in: "turn" }),
-			/when\.happened\.not\.in must be.*"agent_loop", "session", or "tool_call"/,
-		);
-	});
-
-	it("throws when not.since is non-string", async () => {
-		await assertWarnMatches(
-			mkBadRule({ in: "tool_call", since: 42 }),
-			/not\.since must be a string/,
+			mkBadRule({ in: "tool_call" }),
+			/when\.happened\.notIn must be.*"agent_loop", "session", or "tool_call"/,
 		);
 	});
 });
