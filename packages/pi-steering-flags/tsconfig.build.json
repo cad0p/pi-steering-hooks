@@ -1,0 +1,17 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"composite": true,
+		"outDir": "dist",
+		"rootDir": "src",
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true
+	},
+	"include": ["src/**/*"],
+	"exclude": ["**/*.test.ts"],
+	"references": [
+		{ "path": "../pi-steering/tsconfig.build.json" }
+	]
+}
