@@ -76,6 +76,7 @@ import {
 	resolvePlugins,
 	type ResolvedPluginState,
 } from "../plugin-merger.ts";
+import { dropUnusedObservers } from "../internal/drop-unused-observers.ts";
 
 // ---------------------------------------------------------------------------
 // Capture tracking
@@ -226,11 +227,26 @@ export function loadHarness(options: LoadHarnessOptions): Harness {
 		["cwd"],
 	);
 
+	// Mirror session-runtime's unused-observer drop so loadHarness
+	// tests produce the same verdicts as production for rules that
+	// rely on observer writes.
+	const userObservers = filteredConfig.observers ?? [];
+	const allRules = [...(filteredConfig.rules ?? []), ...resolved.rules];
+	const pluginDrop = dropUnusedObservers(resolved.observers, allRules);
+	const userDrop = dropUnusedObservers(userObservers, allRules);
+	for (const d of [...pluginDrop.dropped, ...userDrop.dropped]) {
+		console.info(
+			`[pi-steering] observer '${d.name}' dropped; its writes ` +
+				`(${d.writes.join(", ")}) are not consumed by any rule`,
+		);
+	}
+	const filteredResolved = { ...resolved, observers: [...pluginDrop.kept] };
+
 	const host = options.host ?? defaultHarnessHost();
-	const evaluator = buildEvaluator(filteredConfig, resolved, host);
+	const evaluator = buildEvaluator(filteredConfig, filteredResolved, host);
 	const dispatcher = buildObserverDispatcher(
-		resolved,
-		filteredConfig.observers ?? [],
+		filteredResolved,
+		userDrop.kept,
 		host,
 	);
 
@@ -238,7 +254,7 @@ export function loadHarness(options: LoadHarnessOptions): Harness {
 		evaluate: evaluator.evaluate,
 		dispatch: dispatcher.dispatch,
 		config: filteredConfig,
-		resolved,
+		resolved: filteredResolved,
 	};
 }
 
