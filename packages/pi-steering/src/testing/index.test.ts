@@ -501,10 +501,10 @@ describe("mockContext", () => {
 		]);
 	});
 
-	// ---- syntheticEvents: walkerState.events surface for tool_call-
+	// ---- toolCallEvents: walkerState.events surface for tool_call-
 	// ---- scope `when.happened` and plugin predicates over synthesized entries
 
-	it("syntheticEvents default: walkerState has no `events` key when the option is omitted", () => {
+	it("toolCallEvents default: walkerState has no `events` key when the option is omitted", () => {
 		// Matches the production shape for non-bash candidates or configs
 		// with no eligible observer — the evaluator's synthesis pass runs
 		// only for bash, and mockContext doesn't manufacture one on the
@@ -516,9 +516,9 @@ describe("mockContext", () => {
 		);
 	});
 
-	it("syntheticEvents threads through to ctx.walkerState.events", () => {
+	it("toolCallEvents threads through to ctx.walkerState.events", () => {
 		// Surface-level: plugin authors drive `when.happened` with `in: "tool_call"`
-		// in isolation by passing `syntheticEvents`. The option merges
+		// in isolation by passing `toolCallEvents`. The option merges
 		// into walkerState under the reserved `events` key, same shape
 		// the walker-level synthesis pass produces in production.
 		const events = {
@@ -526,26 +526,26 @@ describe("mockContext", () => {
 				{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
 			],
 		};
-		const ctx = mockContext({ syntheticEvents: events });
+		const ctx = mockContext({ toolCallEvents: events });
 		const got = (ctx.walkerState as Record<string, unknown>)["events"];
 		assert.equal(got, events);
 	});
 
-	it("syntheticEvents overrides an `events` entry placed on walkerState directly", () => {
-		// Explicit option wins: the caller who opts into `syntheticEvents`
+	it("toolCallEvents overrides an `events` entry placed on walkerState directly", () => {
+		// Explicit option wins: the caller who opts into `toolCallEvents`
 		// gets the canonical shape without having to strip their own
 		// `walkerState.events` entry. Mirrors the evaluator's merge order
 		// (`{ ...trackerState, events }`).
 		const override = { X: [{ data: 1, timestamp: 7, speculative: true as const }] };
 		const ctx = mockContext({
 			walkerState: { cwd: "/w", events: { X: [] } },
-			syntheticEvents: override,
+			toolCallEvents: override,
 		});
 		const got = (ctx.walkerState as Record<string, unknown>)["events"];
 		assert.equal(got, override);
 	});
 
-	it("testPredicate forwards syntheticEvents so plugin predicates over walkerState.events can be driven", async () => {
+	it("testPredicate forwards toolCallEvents so plugin predicates over walkerState.events can be driven", async () => {
 		// End-to-end: a plugin predicate introspects walkerState.events,
 		// and testPredicate (which forwards the full options object to
 		// mockContext) lets the caller exercise both branches.
@@ -557,16 +557,16 @@ describe("mockContext", () => {
 		};
 
 		const cold = await testPredicate(fires, "SYNC", {});
-		assert.equal(cold, false, "no syntheticEvents → predicate sees nothing");
+		assert.equal(cold, false, "no toolCallEvents → predicate sees nothing");
 
 		const warm = await testPredicate(fires, "SYNC", {
-			syntheticEvents: {
+			toolCallEvents: {
 				SYNC: [
 					{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
 				],
 			},
 		});
-		assert.equal(warm, true, "syntheticEvents populated → predicate fires");
+		assert.equal(warm, true, "toolCallEvents populated → predicate fires");
 	});
 });
 

@@ -293,7 +293,7 @@ export interface MockEntry {
 }
 
 /**
- * Re-exported for plugin authors constructing `syntheticEvents`
+ * Re-exported for plugin authors constructing `toolCallEvents`
  * fixtures on {@link MockContextOptions}. Structurally `{ data,
  * timestamp, speculative: true }` — the same shape the walker-level
  * speculative-entry synthesis pass produces in production. Plugin
@@ -367,7 +367,7 @@ export interface MockContextOptions {
 	 * matches what the walker-level synthesis pass produces in
 	 * production — `{ data, timestamp, speculative: true }` per entry.
 	 */
-	readonly syntheticEvents?: Readonly<
+	readonly toolCallEvents?: Readonly<
 		Record<string, readonly SyntheticEntry[]>
 	>;
 }
@@ -385,14 +385,14 @@ export function mockContext(
 	const tool = options.tool ?? "bash";
 	const input = options.input ?? defaultInputFor(tool);
 	const baseWalkerState = options.walkerState ?? { cwd };
-	// Fold `syntheticEvents` (option) into `walkerState.events` (ctx
+	// Fold `toolCallEvents` (option) into `walkerState.events` (ctx
 	// shape) the same way the evaluator's `prepareBashState` does —
 	// the caller doesn't have to know the reserved-key convention.
 	// Explicit option wins over any `events` entry the caller placed
 	// directly on `walkerState`.
 	const walkerState: Record<string, unknown> =
-		options.syntheticEvents !== undefined
-			? { ...baseWalkerState, events: options.syntheticEvents }
+		options.toolCallEvents !== undefined
+			? { ...baseWalkerState, events: options.toolCallEvents }
 			: baseWalkerState;
 	const agentLoopIndex = options.agentLoopIndex ?? 0;
 	const buffer: CapturedEntry[] = [];
@@ -451,7 +451,7 @@ function defaultInputFor(
  */
 export type MockObserverContextOptions = Omit<
 	MockContextOptions,
-	"tool" | "input" | "walkerState" | "syntheticEvents"
+	"tool" | "input" | "walkerState" | "toolCallEvents"
 >;
 
 /**
@@ -944,7 +944,7 @@ function resolveToolResultEvent(
  *
  * Chain-aware predicates (e.g. the built-in `happened` with its
  * `&&`-chain speculative allow) read per-ref synthetic events from
- * `ctx.walkerState.events`. Populate `syntheticEvents` (or set
+ * `ctx.walkerState.events`. Populate `toolCallEvents` (or set
  * `walkerState` directly) in {@link MockContextOptions} to simulate
  * that surface in isolation without wiring up `loadHarness` + a
  * full bash event.
