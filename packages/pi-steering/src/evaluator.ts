@@ -291,6 +291,7 @@ interface BashRefState {
 	readonly text: string;
 	readonly basename: string;
 	readonly args: readonly Word[];
+	readonly envAssignments: readonly Word[];
 	readonly walkerState: Record<string, unknown>;
 }
 
@@ -332,6 +333,18 @@ function prepareBashState(
 			// to predicates via PredicateToolInput.args; the walker already
 			// parsed it so we just pass it through.
 			args: ref.node.suffix,
+			// `node.prefix` is unbash's AssignmentPrefix[] (shape:
+			// `{ text, name, value, ... }`). Project into Word[] so
+			// PredicateToolInput.envAssignments lines up with `.args` for
+			// plugin consumers — `.text` preserves the full "KEY=VALUE"
+			// source token (with quoting), and dynamic values like `A=$VAR`
+			// come through visibly in `.text` so callers can detect them.
+			envAssignments: ref.node.prefix.map<Word>((p) => ({
+				text: p.text,
+				value: p.text,
+				pos: p.pos,
+				end: p.end,
+			})),
 			// Merge tracker state with synthesized events so the built-in
 			// `happened` predicate can read `walkerState.events` without
 			// threading a separate context field. Trackers cannot name a
@@ -773,6 +786,10 @@ async function evaluateEventInner(
 					tool: "write",
 					path: event.input.path,
 					content: event.input.content,
+					// Shell env assignments don't apply to file-surface tools;
+					// shape as `[]` rather than `undefined` so plugin authors
+					// can treat the field uniformly across tools.
+					envAssignments: [],
 				},
 				target,
 				// override-comment scanned against content (the natural
@@ -803,6 +820,8 @@ async function evaluateEventInner(
 					tool: "edit",
 					path: editEvent.input.path,
 					edits: editEvent.input.edits,
+					// See the write branch above: `[]` for uniform shape.
+					envAssignments: [],
 				},
 				target,
 				editAllNewText,
@@ -842,6 +861,7 @@ async function evaluateBashRule(
 				command: refState.text,
 				basename: refState.basename,
 				args: refState.args,
+				envAssignments: refState.envAssignments,
 			},
 			overrideCarrier: rawCommand,
 			tool: "bash",

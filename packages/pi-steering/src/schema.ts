@@ -651,6 +651,28 @@ export interface PredicateToolInput {
 	 * Undefined for non-bash tools.
 	 */
 	args?: readonly Word[];
+	/**
+	 * bash: shell env-assignment prefix for the extracted ref —
+	 * `AWS_PROFILE=dev aws s3 ls` exposes `[W("AWS_PROFILE=dev")]`
+	 * here (with `args` still `[W("s3"), W("ls")]`). Multiple
+	 * assignments come through in source order. Enables plugins to
+	 * inspect shell env vars via structured access instead of
+	 * regex-on-raw-command.
+	 *
+	 * Sourced from `CommandRef.node.prefix` via unbash-walker. Each
+	 * prefix element is projected into a `Word` whose `.text` preserves
+	 * the full `KEY=VALUE` source token (with quoting, if any);
+	 * consumers split on `=` to separate key from value. Dynamic
+	 * values like `A=$VAR` come through as-is — the token syntax is
+	 * visible in `.text`, so callers can detect the expansion
+	 * themselves.
+	 *
+	 * Always an empty array for `write` / `edit` tools (shell env
+	 * assignments don't apply to file-surface tools); shaped as
+	 * `[]` rather than `undefined` so plugin authors can treat the
+	 * field uniformly.
+	 */
+	envAssignments?: readonly Word[];
 	/** write / edit: the target path. */
 	path?: string;
 	/** write: the file content being written. */

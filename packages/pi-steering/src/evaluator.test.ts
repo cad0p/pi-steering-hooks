@@ -4037,6 +4037,194 @@ describe("buildEvaluator: PredicateToolInput.basename + args", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PredicateToolInput bash-only field: envAssignments (Phase 1a / I1)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: PredicateToolInput.envAssignments", () => {
+	function captureInput(seen: PredicateContext[]): Rule {
+		return {
+			name: "peek-env",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek-env",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+	}
+
+	it("bash with no env prefix → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.ok(Array.isArray(input.envAssignments));
+		assert.equal(input.envAssignments!.length, 0);
+	});
+
+	it("bash with one env prefix AWS_PROFILE=dev → envAssignments has that word", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("AWS_PROFILE=dev aws s3 ls"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.ok(Array.isArray(input.envAssignments));
+		assert.equal(input.envAssignments!.length, 1);
+		assert.equal(input.envAssignments![0]!.text, "AWS_PROFILE=dev");
+		// args should NOT include the env assignment — only the suffix.
+		assert.equal(input.basename, "aws");
+		const argVals = (
+			input.args as ReadonlyArray<{ value?: string; text?: string }>
+		).map((w) => w.value ?? w.text);
+		assert.deepEqual(argVals, ["s3", "ls"]);
+	});
+
+	it("bash with multiple env prefixes A=1 B=2 → envAssignments preserves order", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=1 B=2 run-me"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.equal(input.envAssignments!.length, 2);
+		assert.equal(input.envAssignments![0]!.text, "A=1");
+		assert.equal(input.envAssignments![1]!.text, "B=2");
+	});
+
+	it("wrapper's own shell prefix stays on the outer ref (A=1 sudo cmd)", async () => {
+		// `A=1 sudo aws s3 ls` — the shell-level prefix `A=1` belongs to
+		// `sudo` (that's where the shell binds env assignments). After
+		// wrapper expansion the walker surfaces both the outer `sudo` ref
+		// AND an inner `aws` ref; envAssignments must reflect the scoping
+		// the shell does — i.e. `A=1` on the outer ref, not smuggled onto
+		// the inner ref.
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=1 sudo aws s3 ls"),
+			makeCtx("/r"),
+			0,
+		);
+		const sudoInput = seen
+			.map((s) => s.input)
+			.find((i) => i.basename === "sudo");
+		const awsInput = seen
+			.map((s) => s.input)
+			.find((i) => i.basename === "aws");
+		assert.ok(sudoInput, "expected a sudo ref");
+		assert.ok(awsInput, "expected an aws ref after wrapper expansion");
+		assert.deepEqual(
+			sudoInput.envAssignments!.map((w) => w.text),
+			["A=1"],
+		);
+		// Inner ref gets its own (empty) prefix — the walker does not
+		// smuggle the outer's shell prefix down to the inner ref.
+		assert.deepEqual(
+			awsInput.envAssignments!.map((w) => w.text),
+			[],
+		);
+	});
+
+	it("dynamic value A=$VAR is preserved verbatim in the Word.text", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=$VAR run-me"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.equal(input.envAssignments!.length, 1);
+		assert.equal(input.envAssignments![0]!.text, "A=$VAR");
+	});
+
+	it("write tool → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const rule: Rule = {
+			name: "w",
+			tool: "write",
+			field: "content",
+			pattern: /./,
+			reason: "w",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			writeEvent("/tmp/x", "hi"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		assert.ok(Array.isArray(seen[0]!.input.envAssignments));
+		assert.equal(seen[0]!.input.envAssignments!.length, 0);
+	});
+
+	it("edit tool → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const rule: Rule = {
+			name: "e",
+			tool: "edit",
+			field: "content",
+			pattern: /./,
+			reason: "e",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			editEvent("/tmp/x", [{ oldText: "a", newText: "b" }]),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		assert.ok(Array.isArray(seen[0]!.input.envAssignments));
+		assert.equal(seen[0]!.input.envAssignments!.length, 0);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // S1: top-level engine fail-closed + per-predicate isolation coverage
 // ---------------------------------------------------------------------------
 
