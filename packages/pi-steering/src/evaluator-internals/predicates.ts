@@ -182,7 +182,7 @@ function evaluateHappened(
 	) {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": when.happened ` +
-				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string }; ` +
+				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string; not?: { in, since? } }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
@@ -190,18 +190,19 @@ function evaluateHappened(
 		event,
 		in: scope,
 		since,
+		not,
 	} = value as {
 		event: string;
 		in: unknown;
 		since?: unknown;
+		not?: unknown;
 	};
 	// Validate the scope string. The type system says
-	// `"agent_loop" | "session"`, but a user migrating from v0.0.0-poc
-	// configs where the scope was called `"turn"` — or anyone with a
-	// typo like `"agentLoop"` — slips through TypeScript when the value
-	// arrives from a JSON source (import-json CLI, hand-written config,
-	// etc.). Surface those as loud runtime errors rather than silent
-	// fallthrough to the else-branch (the agent_loop filter path).
+	// `"agent_loop" | "session" | "tool_call"`, but a typo like
+	// `"agentLoop"` or a legacy value slips through TypeScript when the
+	// value arrives from a JSON source (import-json CLI, hand-written
+	// config, etc.). Surface those as loud runtime errors rather than
+	// silent fallthrough.
 	if (scope === "turn") {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": ` +
@@ -224,57 +225,173 @@ function evaluateHappened(
 				`got ${JSON.stringify(since)}`,
 		);
 	}
-	const eventLatest = latestTimestamp(event, scope, ctx);
+
+	// Optional `not`: scope-subtraction modifier. Validated here rather
+	// than at load time to match the existing `turn` / unknown-scope
+	// validation pattern (engine has no schema-level validation pass).
+	let innerScope: "agent_loop" | "session" | "tool_call" | null = null;
+	let innerSince: string | undefined =
+		typeof since === "string" ? since : undefined;
+	if (not !== undefined) {
+		if (not === null || typeof not !== "object") {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not must be an object if present; ` +
+					`got ${JSON.stringify(not)}`,
+			);
+		}
+		if ("event" in not) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.event is not allowed; event is inherited from the outer happened.`,
+			);
+		}
+		if ("not" in not) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.not is not allowed; double-negation collapses to the outer scope. Delete the inner "not".`,
+			);
+		}
+		if (!("in" in not)) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.in is required.`,
+			);
+		}
+		const nInScope = (not as { in: unknown }).in;
+		if (nInScope === "turn") {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.in: "turn" is no longer supported in ` +
+					`pi-steering v0.1.0. Use "agent_loop" instead.`,
+			);
+		}
+		if (
+			nInScope !== "agent_loop" &&
+			nInScope !== "session" &&
+			nInScope !== "tool_call"
+		) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.in must be "agent_loop", "session", or "tool_call"; ` +
+					`got ${JSON.stringify(nInScope)}`,
+			);
+		}
+		if (nInScope === scope) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.in and when.happened.not.in are identical (${JSON.stringify(scope)}); subtraction is empty. Remove the "not" modifier.`,
+			);
+		}
+		if (SCOPE_ORDER[nInScope] > SCOPE_ORDER[scope]) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.not.in (${JSON.stringify(nInScope)}) is a superset of when.happened.in (${JSON.stringify(scope)}); subtraction is empty. Adjust the scopes.`,
+			);
+		}
+		innerScope = nInScope;
+		const nSince = (not as { since?: unknown }).since;
+		if (nSince !== undefined) {
+			if (typeof nSince !== "string") {
+				throw new Error(
+					`[pi-steering] Rule "${ruleName}": ` +
+						`when.happened.not.since must be a string if present; ` +
+						`got ${JSON.stringify(nSince)}`,
+				);
+			}
+			innerSince = nSince;
+		}
+	}
+
+	const eventLatest = latestTimestampSubtracted(
+		event,
+		scope,
+		innerScope,
+		ctx,
+	);
 	if (eventLatest === null) {
-		// Event absent in unified timeline → rule fires.
+		// Event absent in the (subtracted) timeline → rule fires.
 		return true;
 	}
-	if (since === undefined) {
+	if (innerSince === undefined) {
 		// Simple presence check: event happened → rule does NOT fire.
 		return false;
 	}
-	const sinceLatest = latestTimestamp(since, scope, ctx);
+	const sinceLatest = latestTimestampSubtracted(
+		innerSince,
+		scope,
+		innerScope,
+		ctx,
+	);
 	if (sinceLatest === null) {
-		// Invalidator never written in scope → degrade to simple-
-		// happened semantics (event wins).
+		// Invalidator never written in the (subtracted) timeline →
+		// degrade to simple-happened semantics (event wins).
 		return false;
 	}
 	// Both present. Event counts as happened iff its latest entry
-	// (real or speculative) is strictly newer than the invalidator's.
+	// is strictly newer than the invalidator's.
 	return eventLatest <= sinceLatest;
 }
 
 /**
  * Latest timestamp across the unified real + speculative timeline
- * for the given customType. `null` when no entries exist in either
- * the scope-filtered real stream or the speculative stream.
+ * for the given customType, with optional set-subtraction against an
+ * inner scope. `null` when no entries remain after subtraction.
  *
- * For scope `"tool_call"`, real entries are skipped entirely — only
- * speculative entries from the current tool_call's chain-aware
- * synthesis count. That's the whole definition of the scope: "about
- * to happen in THIS command", not "has happened sometime this loop".
+ * Semantics:
+ *   - Outer scope `"tool_call"`: real entries are skipped entirely
+ *     (real entries are never "within this one bash invocation");
+ *     only speculative entries count. Exactly the existing "about to
+ *     happen in THIS command" semantic.
+ *   - Outer `"agent_loop"`: real entries scope-filtered by
+ *     `_agentLoopIndex`; speculative always included.
+ *   - Outer `"session"`: all real entries; speculative always included.
  *
- * Speculative entries bypass the scope filter even for `agent_loop`
- * and `session` — see {@link evaluateHappened}'s JSDoc for why the
- * scope subset check adds no signal on "about to happen" entries.
+ * When `innerScope` is non-null, the subtraction removes entries that
+ * are in `innerScope` from the entry stream BEFORE the timestamp max.
+ * Since speculative entries are `tool_call`-scope by construction and
+ * `tool_call ⊂ agent_loop ⊂ session`, ANY non-null `innerScope`
+ * subtracts all speculative entries. For real entries, the inner
+ * scope's membership predicate gates which are excluded.
+ *
+ * Invariant (enforced by {@link evaluateHappened}'s validation):
+ * `innerScope === null` OR `SCOPE_ORDER[innerScope] <= SCOPE_ORDER[outer]`
+ * AND `innerScope !== outer`. Callers passing anything else get a
+ * configuration error before arriving here.
  */
-function latestTimestamp(
+function latestTimestampSubtracted(
 	customType: string,
-	scope: "agent_loop" | "session" | "tool_call",
+	outer: "agent_loop" | "session" | "tool_call",
+	innerScope: "agent_loop" | "session" | "tool_call" | null,
 	ctx: PredicateContext,
 ): number | null {
 	let latest = -Infinity;
-	if (scope !== "tool_call") {
-		const inScope = scopeFilter(scope, ctx);
+
+	// Real entries: in outer scope AND NOT in inner scope.
+	// Outer = "tool_call" excludes all real entries outright.
+	if (outer !== "tool_call") {
+		const inOuter = realEntryInScope(outer, ctx);
+		const inInner =
+			innerScope !== null && innerScope !== "tool_call"
+				? realEntryInScope(innerScope, ctx)
+				: null;
 		for (const entry of ctx.findEntries<Record<string, unknown>>(customType)) {
-			if (!inScope(entry)) continue;
+			if (!inOuter(entry)) continue;
+			if (inInner !== null && inInner(entry)) continue;
 			if (entry.timestamp > latest) latest = entry.timestamp;
 		}
 	}
-	const speculative = speculativeEntriesFor(ctx, customType);
-	for (const entry of speculative) {
-		if (entry.timestamp > latest) latest = entry.timestamp;
+
+	// Speculative entries are always `tool_call` scope. Any non-null
+	// inner scope subtracts them (tool_call itself, or a superset that
+	// includes tool_call). When inner is null, keep them.
+	if (innerScope === null) {
+		const speculative = speculativeEntriesFor(ctx, customType);
+		for (const entry of speculative) {
+			if (entry.timestamp > latest) latest = entry.timestamp;
+		}
 	}
+
 	return latest === -Infinity ? null : latest;
 }
 
@@ -296,16 +413,33 @@ function speculativeEntriesFor(
 }
 
 /**
- * Build a per-entry filter for the happened scope. Hoisted out of
- * {@link evaluateHappened} so both the `event` and the optional
- * `since` entry streams share the same predicate.
+ * Scope nesting order used for superset detection in happened.not
+ * validation. `tool_call ⊂ agent_loop ⊂ session`; a higher number
+ * means a broader scope.
  */
-function scopeFilter(
-	scope: "agent_loop" | "session",
+const SCOPE_ORDER = {
+	tool_call: 0,
+	agent_loop: 1,
+	session: 2,
+} as const;
+
+/**
+ * Build a per-entry filter for a scope as it applies to REAL entries
+ * (session JSONL). Speculative entries are filtered elsewhere since
+ * they have their own scope semantics.
+ *
+ * For a scope `tool_call`, real entries never match (no real entry
+ * originates from the current tool_call's speculative view).
+ */
+function realEntryInScope(
+	scope: "agent_loop" | "session" | "tool_call",
 	ctx: PredicateContext,
 ): (entry: { data: Record<string, unknown> }) => boolean {
 	if (scope === "session") {
 		return () => true;
+	}
+	if (scope === "tool_call") {
+		return () => false;
 	}
 	const target = ctx.agentLoopIndex;
 	return (entry) => {

@@ -4425,6 +4425,340 @@ describe("buildEvaluator: user rule-name validation (S3)", () => {
 	});
 });
 
+describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
+	const sessionEntry = (
+		customType: string,
+		data: Record<string, unknown>,
+		ts = "2026-01-01T00:00:00.000Z",
+		id = "e1",
+	) => ({
+		type: "custom" as const,
+		customType,
+		data,
+		timestamp: ts,
+		id,
+		parentId: null,
+	});
+
+	const DESC_READ_EVENT = "desc-read" as const;
+
+	const descObserver: Observer = {
+		name: "desc-reader",
+		writes: [DESC_READ_EVENT],
+		watch: {
+			toolName: "bash",
+			inputMatches: { command: /^diff\b/ },
+			exitCode: "success",
+		},
+		onResult: () => {},
+	};
+
+	const descCheck: Rule = {
+		name: "cr-desc-check",
+		tool: "bash",
+		field: "command",
+		pattern: /^cr\b/,
+		reason: "diff first, in a prior tool_call",
+		when: {
+			happened: {
+				event: DESC_READ_EVENT,
+				in: "agent_loop",
+				not: { in: "tool_call" },
+			},
+		},
+	};
+
+	// ----- Group 1: primary use case (agent_loop \ tool_call) -----
+
+	it("fires when no real entries exist in current agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(fires, "no diff in any prior tool_call → rule fires");
+	});
+
+	it("allows when event happened in a prior tool_call in same agent loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 5 }),
+		]);
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.equal(skips, undefined, "real entry present → rule passes");
+	});
+
+	it("blocks same-tool_call chain-speculative bypass (diff && cr)", async () => {
+		// WITHOUT `not: { in: "tool_call" }`, the chain would allow via
+		// speculative synthesis. WITH the subtraction, speculative
+		// entries are excluded and the rule fires.
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await evaluator.evaluate(
+			bashEvent("diff && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(fires, "chain-speculative entries don't count under not:{in:tool_call}");
+	});
+
+	it("fires when only entries from a PRIOR agent loop exist", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 3 }),
+		]);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires, "real entry from loop 3 != ctx.agentLoopIndex 5 → rule fires");
+	});
+
+	// ----- Group 2: session \ agent_loop (prior-loop filter) -----
+
+	const priorLoopRule: Rule = {
+		name: "prior-loop-needed",
+		tool: "bash",
+		field: "command",
+		pattern: /^cr\b/,
+		reason: "must have happened in a prior loop",
+		when: {
+			happened: {
+				event: DESC_READ_EVENT,
+				in: "session",
+				not: { in: "agent_loop" },
+			},
+		},
+	};
+
+	it("session \\ agent_loop: fires when event only in current agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [priorLoopRule] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 5 }),
+		]);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires, "current-loop entries subtracted → empty → rule fires");
+	});
+
+	it("session \\ agent_loop: allows when event from PRIOR agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [priorLoopRule] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 3 }),
+		]);
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.equal(skips, undefined, "prior-loop real entry present → rule passes");
+	});
+
+	// ----- Group 3: since interaction -----
+
+	it("not:{in:tool_call} with since: real event + real invalidator behave correctly", async () => {
+		const INVAL = "invalidator";
+		const ruleWithSince: Rule = {
+			name: "cr-desc-check-since",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "stale after invalidator",
+			when: {
+				happened: {
+					event: DESC_READ_EVENT,
+					in: "agent_loop",
+					since: INVAL,
+					not: { in: "tool_call" },
+				},
+			},
+		};
+		// Event BEFORE invalidator: event stale → rule fires.
+		const ctxStale = makeCtx("/r", [
+			sessionEntry(
+				DESC_READ_EVENT,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"e1",
+			),
+			sessionEntry(
+				INVAL,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:05.000Z",
+				"i1",
+			),
+		]);
+		const ev = buildEvaluator(
+			{ rules: [ruleWithSince] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await ev.evaluate(bashEvent("cr --review"), ctxStale, 5);
+		assert.ok(fires, "event older than invalidator → stale → rule fires");
+	});
+
+	it("inner since overrides outer since", async () => {
+		// Outer since=X (ignored), inner since=Y (applied). Event and Y
+		// both present; event newer → happened → rule does NOT fire.
+		const X = "x-invalidator";
+		const Y = "y-invalidator";
+		const rule: Rule = {
+			name: "inner-since",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "",
+			when: {
+				happened: {
+					event: DESC_READ_EVENT,
+					in: "agent_loop",
+					since: X,
+					not: { in: "tool_call", since: Y },
+				},
+			},
+		};
+		// Y older than event → event wins → does NOT fire.
+		// (X not present at all, but inner since Y overrides anyway.)
+		const ctx = makeCtx("/r", [
+			sessionEntry(
+				Y,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"y1",
+			),
+			sessionEntry(
+				DESC_READ_EVENT,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:10.000Z",
+				"e1",
+			),
+		]);
+		const ev = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const skips = await ev.evaluate(bashEvent("cr --review"), ctx, 5);
+		assert.equal(skips, undefined);
+	});
+
+	// ----- Group 4: invalid-shape runtime errors -----
+	// Errors thrown inside predicate evaluation are caught by the
+	// evaluator's per-rule try/catch (so the LLM never sees them).
+	// Tests capture the console.warn to verify the error was surfaced.
+
+	const mkBadRule = (not: unknown): Rule =>
+		({
+			name: "bad-rule",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "x",
+			when: {
+				happened: {
+					event: DESC_READ_EVENT,
+					in: "agent_loop",
+					not: not as never,
+				},
+			},
+		}) as Rule;
+
+	async function assertWarnMatches(
+		rule: Rule,
+		pattern: RegExp,
+	): Promise<void> {
+		const warnings = captureWarnings();
+		try {
+			const ev = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+			const res = await ev.evaluate(
+				bashEvent("cr --review"),
+				makeCtx("/r"),
+				5,
+			);
+			assert.equal(
+				res,
+				undefined,
+				"predicate threw → rule does not fire (fail-open)",
+			);
+			assert.ok(
+				warnings.some((w) => pattern.test(w)),
+				`no warning matched ${pattern} in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
+	}
+
+	it("throws when not.in is a superset of in", async () => {
+		// in: agent_loop, not.in: session → session ⊃ agent_loop → error.
+		await assertWarnMatches(mkBadRule({ in: "session" }), /superset/);
+	});
+
+	it("throws when not.in is identical to in", async () => {
+		await assertWarnMatches(mkBadRule({ in: "agent_loop" }), /identical/);
+	});
+
+	it("throws when not.event is specified", async () => {
+		await assertWarnMatches(
+			mkBadRule({ in: "tool_call", event: "other" }),
+			/event is inherited/,
+		);
+	});
+
+	it("throws when not.not is nested", async () => {
+		await assertWarnMatches(
+			mkBadRule({ in: "tool_call", not: { in: "agent_loop" } }),
+			/double-negation/,
+		);
+	});
+
+	it("throws when not.in is missing", async () => {
+		await assertWarnMatches(mkBadRule({ since: "x" }), /\.not\.in is required/);
+	});
+
+	it('throws when not.in is "turn" (legacy)', async () => {
+		await assertWarnMatches(
+			mkBadRule({ in: "turn" }),
+			/"turn" is no longer supported/,
+		);
+	});
+
+	it("throws when not.since is non-string", async () => {
+		await assertWarnMatches(
+			mkBadRule({ in: "tool_call", since: 42 }),
+			/not\.since must be a string/,
+		);
+	});
+});
+
 // Keep `Observer` import referenced — downstream tests in
 // observer-dispatcher.test.ts exercise it directly; keeping the symbol
 // used here avoids "unused import" diagnostics if this file migrates.

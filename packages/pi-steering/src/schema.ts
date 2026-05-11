@@ -107,6 +107,33 @@ export type PredicateHandler<A = unknown> = (
  *
  * See ADR "Design → Rule schema" → WhenClause.
  */
+/**
+ * Inner shape of {@link WhenClause.happened}'s optional `not` modifier
+ * — a scope-subtraction spec.
+ *
+ * `event` is inherited from the outer `happened` (cannot be overridden
+ * inside `not`: a different event would change the entry stream and
+ * break the set-subtraction metaphor). `since` inherits from the outer
+ * unless explicitly set in the inner block. `in` is REQUIRED on the
+ * inner block — the whole point is to name the scope being subtracted.
+ *
+ * Nested `not: { not: { … } }` is rejected at evaluation time (double
+ * negation collapses to the outer scope; if that is what the author
+ * wants, they should delete the nesting).
+ *
+ * Invalid scope combinations are rejected at evaluation time:
+ *   - Supersets (e.g. `in: "agent_loop", not.in: "session"`) — the
+ *     subtraction is always empty.
+ *   - Identicals (`not.in === in`) — the subtraction is always empty.
+ *
+ * See {@link WhenClause.happened} `not` JSDoc for the full semantics
+ * and a usage example.
+ */
+export interface HappenedNotClause<Writes extends string = string> {
+	in: "agent_loop" | "session" | "tool_call";
+	since?: Writes;
+}
+
 export interface WhenClause<Writes extends string = string> {
 	/**
 	 * Constrain the rule to commands whose *effective* cwd matches
@@ -143,7 +170,7 @@ export interface WhenClause<Writes extends string = string> {
 	 *     with observer `writes:` declarations on chain-eligible
 	 *     observers; no-op when no observer writes the event.
 	 *
-	 * Inversion: place inside `not` to flip —
+	 * Inversion: place inside `not` to flip the clause-level boolean —
 	 * `not: { happened: { event, in } }` fires when the event HAS
 	 * happened. See ADR §5.
 	 *
@@ -159,6 +186,22 @@ export interface WhenClause<Writes extends string = string> {
 	 *   `happened: { event: SYNC_DONE_EVENT, in: "agent_loop",
 	 *                since: UPSTREAM_FAILED_EVENT }`.
 	 *
+	 * Optional `not` (set subtraction): when present, entries in
+	 * `not.in` scope are excluded from the `in`-scoped entry stream
+	 * BEFORE the `ts_max` comparison runs. Typical use:
+	 * `happened: { event, in: "agent_loop", not: { in: "tool_call" } }`
+	 * — "happened in a prior tool_call in this agent loop". Excludes
+	 * same-tool_call speculative entries so `someCmd && guardedCmd`
+	 * can't bypass the rule via chain-speculative observation.
+	 *
+	 * This `not` is a DIFFERENT operator from the clause-level
+	 * {@link WhenClause.not} — it means *set subtraction over scopes*,
+	 * not *boolean negation*. `event` is inherited from the outer
+	 * happened (not overridable inside `not`); `since` inherits but
+	 * may be overridden. Invalid combinations (supersets, identical
+	 * scopes, nested `not.not`, `not.event`) throw at evaluation time
+	 * with the rule name prefixed.
+	 *
 	 * Compile-time constraint: inside {@link defineConfig}, both the
 	 * `event` and `since` fields are narrowed to the union of all
 	 * `writes` declared across plugin rules, plugin observers, user
@@ -170,6 +213,7 @@ export interface WhenClause<Writes extends string = string> {
 		event: Writes;
 		in: "agent_loop" | "session" | "tool_call";
 		since?: Writes;
+		not?: HappenedNotClause<Writes>;
 	};
 
 	/**
