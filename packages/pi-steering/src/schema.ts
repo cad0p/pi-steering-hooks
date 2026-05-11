@@ -167,8 +167,9 @@ export interface WhenClause<Writes extends string = string> {
 	 *     ignored entirely. Use when the rule requires the event to be
 	 *     CHAINED directly before the guarded command (e.g. `sync && cr`)
 	 *     rather than merely "somewhere this agent loop". Pairs naturally
-	 *     with observer `writes:` declarations on chain-eligible
-	 *     observers; no-op when no observer writes the event.
+	 *     with observer `writes:` declarations on observers whose
+	 *     watch-matched refs produce speculative entries; no-op when no
+	 *     observer writes the event.
 	 *
 	 * Inversion: place inside `not` to flip the clause-level boolean —
 	 * `not: { happened: { event, in } }` fires when the event HAS
@@ -192,7 +193,7 @@ export interface WhenClause<Writes extends string = string> {
 	 * `happened: { event, in: "agent_loop", not: { in: "tool_call" } }`
 	 * — "happened in a prior tool_call in this agent loop". Excludes
 	 * same-tool_call speculative entries so `someCmd && guardedCmd`
-	 * can't bypass the rule via chain-speculative observation.
+	 * can't bypass the rule via tool_call-scope speculative synthesis.
 	 *
 	 * This `not` is a DIFFERENT operator from the clause-level
 	 * {@link WhenClause.not} — it means *set subtraction over scopes*,

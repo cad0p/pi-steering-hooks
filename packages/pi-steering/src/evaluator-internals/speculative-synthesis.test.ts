@@ -7,7 +7,7 @@
  * Table-driven across (watch, joiner) shapes per PR #5 spec. These
  * tests pin the behaviour the evaluator relies on when threading the
  * synthesis output into `walkerState.events`; the integration-level
- * chain-aware tests in `evaluator.test.ts` still drive end-to-end
+ * `&&`-chain tests in `evaluator.test.ts` still drive end-to-end
  * behaviour through the built-in `happened` predicate.
  */
 

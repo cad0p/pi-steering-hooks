@@ -39,7 +39,7 @@ packages/pi-steering/examples/work-item-plugin/
 | `observers/npm-test-tracker.ts` | Observer encapsulation convention (ADR §14): export `<EVENT>_EVENT` + `mark<Event>(ctx)` helper + the observer. |
 | `observers/retest-required-tracker.ts` | Invalidation-sentinel observer for the `happened.since` pattern. Writes `RETEST_REQUIRED_EVENT` on every successful `git pull`. |
 | `rules/commit-requires-work-item.ts` | Plugin predicate consumed from `when.<key>`. `not:` inversion. |
-| `rules/push-requires-tests.ts` | Observer → rule coupling via shared event constants. `when.happened: { in: "agent_loop", since: ... }` with temporal invalidation. Also demonstrates chain-aware speculative allow for `npm test && git push`. |
+| `rules/push-requires-tests.ts` | Observer → rule coupling via shared event constants. `when.happened: { in: "agent_loop", since: ... }` with temporal invalidation. Also demonstrates `&&`-chain speculative allow for `npm test && git push`. |
 | `rules/commit-description-check.ts` | Self-marking rule with `Rule.onFire` (ADR §6). Constant + helper co-located with the rule when no observer corresponds (ADR §14). |
 | `index.ts` | `as const satisfies Plugin` to preserve literal types for `defineConfig`'s compile-time cross-reference checking (ADR §7). |
 

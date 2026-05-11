@@ -1061,7 +1061,7 @@ describe("buildEvaluator: when.happened.since (temporal ordering)", () => {
 	});
 });
 
-describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () => {
+describe("buildEvaluator: `&&`-chain speculative allow via when.happened", () => {
 	// When the current bash tool_call contains a prior `&&`-chained ref
 	// that matches an observer writing the required event, the engine
 	// speculatively treats the event as "about to happen" and declines
@@ -1461,12 +1461,12 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 
 	// ---- Observer dedup (user wins, matches dispatcher) ----
 
-	it("user observer shadows plugin observer of the same name in chain-aware allow", async () => {
+	it("user observer shadows plugin observer of the same name in speculative allow", async () => {
 		// Plugin ships an observer `chain-sync-tracker` with a LOOSE watch
 		// (`/^sync\b/`) that would match `sync`. User declares their own
 		// observer of the same name with a TIGHT watch (`/^sync --lock\b/`)
 		// that does NOT match bare `sync`. The dispatcher fires only the
-		// user's observer (dedup-by-name, user wins); chain-aware reverse-
+		// user's observer (dedup-by-name, user wins); speculative-synthesis reverse-
 		// index must apply the same semantics or it will grant on a
 		// pattern that never actually produces the event.
 		const userTightObserver: Observer = {
@@ -4498,7 +4498,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 		assert.equal(skips, undefined, "real entry present → rule passes");
 	});
 
-	it("blocks same-tool_call chain-speculative bypass (diff && cr)", async () => {
+	it("blocks same-tool_call same-tool_call speculative bypass (diff && cr)", async () => {
 		// WITHOUT `not: { in: "tool_call" }`, the chain would allow via
 		// speculative synthesis. WITH the subtraction, speculative
 		// entries are excluded and the rule fires.
@@ -4512,7 +4512,7 @@ describe("buildEvaluator: when.happened.not (scope subtraction)", () => {
 			makeCtx("/r"),
 			5,
 		);
-		assert.ok(fires, "chain-speculative entries don't count under not:{in:tool_call}");
+		assert.ok(fires, "same-tool_call speculative entries don't count under not:{in:tool_call}");
 	});
 
 	it("fires when only entries from a PRIOR agent loop exist", async () => {

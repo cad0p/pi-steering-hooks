@@ -135,9 +135,9 @@ export interface EvaluatorRuntime {
  * `walkerState.events`. The built-in `when.happened` predicate merges
  * those with real entries via timestamp ordering. If future versions
  * add a dynamic-reload path (observers added at runtime), this merged
- * list must be rebuilt on change — otherwise chain-aware
- * `when.happened` consults a stale observer list. Today there is no
- * dynamic-reload path.
+ * list must be rebuilt on change — otherwise `when.happened` with
+ * `in: "tool_call"` scope consults a stale observer list. Today
+ * there is no dynamic-reload path.
  */
 export function buildEvaluator(
 	config: SteeringConfig,

@@ -9,20 +9,20 @@
  *
  *   - the observer-dispatcher (production fire path — decides which
  *     observers see a concrete tool_result).
- *   - the evaluator's chain-aware `when.happened` speculative-allow
- *     (synthesizes a minimal successful bash event representing "this
- *     prior `&&` ref is about to run and succeed", then asks the same
- *     question).
+ *   - the evaluator's `when.happened` tool_call-scope speculative-
+ *     allow (synthesizes a minimal successful bash event representing
+ *     "this prior `&&` ref is about to run and succeed", then asks
+ *     the same question).
  *
  * Co-locating the contract here retires a structural fragility PR #4
- * reviewers caught three times: chain-aware speculative-allow used to
+ * reviewers caught three times: the speculative-allow path used to
  * hand-roll a SUBSET of the watch filter (command-pattern only, then
  * patched to also check toolName + exitCode). Each new `watch` field
  * the dispatcher grew would create a fresh drift opportunity.
  *
  * Keeping both callers on this one function guarantees the two paths
- * agree by construction. If the chain-aware path wants to impose a
- * STRICTER gate on top (e.g. "observer must declare
+ * agree by construction. If the speculative-allow path wants to
+ * impose a STRICTER gate on top (e.g. "observer must declare
  * `inputMatches.command`" — an authoring requirement to keep
  * speculative-allow safe), it layers that gate before delegating to
  * {@link matchesWatch} rather than re-implementing the filter body.
@@ -75,8 +75,8 @@ import type {
  * production dispatch path), pass a memoizing `refTextsProvider` to
  * parse the bash command once across observers. Standalone callers
  * (e.g. `testObserver` evaluating one observer in isolation, or the
- * evaluator's chain-aware speculative-allow synthesizing one event per
- * prior ref) can omit it — the default provider parses on demand.
+ * evaluator's speculative-allow synthesizing one event per prior
+ * `&&` ref) can omit it — the default provider parses on demand.
  */
 export function matchesWatch(
 	watch: ObserverWatch | undefined,

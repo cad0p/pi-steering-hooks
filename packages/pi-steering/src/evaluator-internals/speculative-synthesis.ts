@@ -2,11 +2,12 @@
 // Part of pi-steering.
 
 /**
- * Unified speculative-entry synthesis for chain-aware `when.happened`.
+ * Unified speculative-entry synthesis for `when.happened`'s tool_call-
+ * scope speculative allow.
  *
- * Replaces the pre-PR-5 specialized chain-aware speculative-allow path
- * (a pair of helpers on the evaluator that matched observers against
- * prior `&&` refs on a per-call boolean basis). For every bash command
+ * Replaces the pre-PR-5 specialized speculative-allow path (a pair of
+ * helpers on the evaluator that matched observers against prior `&&`
+ * refs on a per-call boolean basis). For every bash command
  * ref in an unconditionally-`&&`-reachable segment, for every observer
  * writing an event AND matching the ref via the shared
  * {@link matchesWatch} contract, we produce a synthetic entry that

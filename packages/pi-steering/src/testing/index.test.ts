@@ -501,8 +501,8 @@ describe("mockContext", () => {
 		]);
 	});
 
-	// ---- syntheticEvents: walkerState.events surface for chain-aware
-	// ---- `when.happened` and plugin predicates over synthesized entries
+	// ---- syntheticEvents: walkerState.events surface for tool_call-
+	// ---- scope `when.happened` and plugin predicates over synthesized entries
 
 	it("syntheticEvents default: walkerState has no `events` key when the option is omitted", () => {
 		// Matches the production shape for non-bash candidates or configs
@@ -517,7 +517,7 @@ describe("mockContext", () => {
 	});
 
 	it("syntheticEvents threads through to ctx.walkerState.events", () => {
-		// Surface-level: plugin authors drive chain-aware `when.happened`
+		// Surface-level: plugin authors drive `when.happened` with `in: "tool_call"`
 		// in isolation by passing `syntheticEvents`. The option merges
 		// into walkerState under the reserved `events` key, same shape
 		// the walker-level synthesis pass produces in production.

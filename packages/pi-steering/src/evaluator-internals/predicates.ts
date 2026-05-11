@@ -147,8 +147,8 @@ function evaluateCwd(
  * happened** — i.e. the rule should fire.
  *
  * Single pipeline: the merge via timestamp ordering collapses the
- * prior two-path structure (specialized chain-aware speculative-allow
- * running only on stale/absent real entries) into one uniform
+ * prior two-path structure (specialized tool_call-scope speculative-
+ * allow running only on stale/absent real entries) into one uniform
  * sort-and-compare. Synthetic entries carry reserved timestamps above
  * all real entries in the same type (see
  * {@link synthesizeSpeculativeEntries}'s timestamp convention); so on
@@ -384,8 +384,8 @@ function latestTimestampSubtracted(
  * Read the speculative-entry slice for `customType` off
  * `ctx.walkerState.events`. Returns an empty array when walkerState
  * is undefined (non-bash candidates) or carries no `events` field
- * (configs with no chain-aware observers → the synthesis pass
- * returned empty views per ref).
+ * (configs with no observers producing synthesis entries for this
+ * event → the synthesis pass returned empty views per ref).
  */
 function speculativeEntriesFor(
 	ctx: PredicateContext,

@@ -361,7 +361,7 @@ export interface MockContextOptions {
 	 * synthetic entries for that type. When provided, overwrites any
 	 * `events` entry on the caller's {@link walkerState}.
 	 *
-	 * Use this to drive chain-aware `when.happened` (or any plugin
+	 * Use this to drive `when.happened` with `in: "tool_call"` (or any plugin
 	 * predicate that introspects `walkerState.events`) in isolation
 	 * without wiring up `loadHarness` + a full bash event. The shape
 	 * matches what the walker-level synthesis pass produces in

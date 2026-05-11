@@ -119,7 +119,7 @@ export function buildObserverDispatcher(
 	// deduped here by first-registered (user takes precedence over a
 	// plugin observer of the same name — matches the "user overrides
 	// plugin by declaring their own" pattern the rule list uses). Shared
-	// with the evaluator's chain-aware reverse-index via
+	// with the evaluator's speculative-synthesis reverse-index via
 	// `mergeObserversUserFirst` so both callers see the same final list.
 	const merged = mergeObserversUserFirst(userObservers, resolved.observers);
 

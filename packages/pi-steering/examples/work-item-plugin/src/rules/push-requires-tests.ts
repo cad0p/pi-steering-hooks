@@ -17,7 +17,7 @@
  *      subsequent pull stale-s the test state — the rule fires again,
  *      forcing a re-run against the updated tree.
  *
- *   3. Chain-aware speculative allow (PR §4). Because the engine
+ *   3. `&&`-chain speculative allow (PR §4). Because the engine
  *      sees `npm-test-tracker`'s `writes: [TEST_PASSED_EVENT]`, it
  *      treats `npm test && git push` as safe: the push is gated on
  *      the prior `&&` ref, and `&&` short-circuits on test failure.

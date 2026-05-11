@@ -83,7 +83,7 @@ With this config:
 Two default bundles ship with the package and are layered onto every config automatically:
 
 - **`DEFAULT_RULES`** — `no-force-push`, `no-hard-reset`, `no-rm-rf-slash`, `no-long-running-commands`. Domain-agnostic safety rails. See [`src/defaults.ts`](./src/defaults.ts) for the exact patterns.
-- **`DEFAULT_PLUGINS`** — the [git plugin](./src/plugins/git/README.md). Contributes the `branch` / `upstream` / `commitsAhead` / `hasStagedChanges` / `isClean` / `remote` predicates, the `no-main-commit` rule (overridable per commit via `# steering-override: no-main-commit — <reason>`), the branch tracker (in-chain `git checkout` awareness), and the `cwd.git` tracker extension (`--git-dir=` / `--work-tree=` parsing).
+- **`DEFAULT_PLUGINS`** — the [git plugin](./src/plugins/git/README.md). Contributes the `branch` / `upstream` / `commitsAhead` / `hasStagedChanges` / `isClean` / `remote` predicates, the `no-main-commit` rule (overridable per commit via `# steering-override: no-main-commit — <reason>`), the branch tracker (tool_call-scoped `git checkout` awareness), and the `cwd.git` tracker extension (`--git-dir=` / `--work-tree=` parsing).
 
 Opt-out paths:
 
@@ -135,8 +135,8 @@ User prompt sent to pi.
         ref#1 at cwd=/original
         ref#2 at cwd=/tmp  (the `cd /tmp` applied)
       Walker-level speculative-entry synthesis runs in the same pass,
-      populating `walkerState.events` per ref (see "Chain-aware
-      `happened`" below).
+      populating `walkerState.events` per ref (see "`&&`-chain
+      speculative allow" below).
    e. For each ref × for each rule, build a Candidate:
         input.command   = ref.text (FLATTENED: "git push --force")
         input.basename  = "git"
@@ -223,7 +223,7 @@ interface WhenClause {
 Built-ins:
 
 - **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
-- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Chain-aware for `&&` bash chains — see "Chain-aware `happened`" below.
+- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Synthesizes speculative entries across `&&` bash chains — see "`&&`-chain speculative allow" below.
 - **`not`** — boolean NOT over a nested clause.
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
 
@@ -343,7 +343,7 @@ Semantics: the event counts as "happened" only if its most-recent entry in scope
 
 Contrast with a hand-rolled `condition:` handler doing the same comparison: `since` is declarative, cross-checked at compile time (both `event` and `since` are constrained to the `Writes` union), and shared across rules without duplicating helper code. Reach for `condition` only when the comparison isn't "my event after their event" — e.g. counting, content matching, or quorum across multiple invalidators.
 
-### Chain-aware `happened`
+### `&&`-chain speculative allow
 
 Agents frequently chain related commands in one tool_call:
 
@@ -366,7 +366,7 @@ pi-steering resolves this via a walker-level **speculative-entry synthesis pass*
 | `A \| B` | ❌ | pipeline, no ordering |
 | `A \|\| B` | ❌ | B runs only if A FAILED |
 
-**Authoring requirement.** Observers participating in chain-aware allow must declare `watch.inputMatches.command`. An observer matching every bash event isn't a strong enough signal to grant the allow.
+**Authoring requirement.** Observers participating in the speculative allow must declare `watch.inputMatches.command`. An observer matching every bash event isn't a strong enough signal to grant the allow.
 
 Worked example:
 
