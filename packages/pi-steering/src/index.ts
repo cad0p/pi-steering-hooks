@@ -161,6 +161,7 @@ export type {
 // unbash-walker extraction.
 export {
 	cwdTracker,
+	envTracker,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	formatCommand,
@@ -169,8 +170,11 @@ export {
 	getCommandName,
 	isStaticallyResolvable,
 	parse,
+	resolveWord,
 	walk,
 } from "unbash-walker";
+
+export type { EnvState } from "unbash-walker";
 
 // Testing primitives — re-exported at the root for discoverability.
 // The canonical import path is `pi-steering/testing`;

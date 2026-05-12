@@ -45,12 +45,14 @@
 
 import {
 	cwdTracker,
+	envTracker,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	getBasename,
 	parse as parseBash,
 	walk,
 	type CommandRef,
+	type EnvState,
 	type Modifier,
 	type Tracker,
 	type Word,
@@ -179,23 +181,34 @@ export function buildEvaluator(
 	}
 
 	// Compose the walker's tracker registry. Must always include `cwd`
-	// so the built-in `when.cwd` predicate can resolve — even if no
-	// plugin ships one. Plugins extending `cwd` with their own modifiers
-	// are honored via `resolved.composedTrackers.cwd` (the plugin
-	// merger already layered extensions on top of the plugin-declared
-	// cwd tracker, if any).
+	// and `env` so the built-in `when.cwd` predicate + cd's env-aware
+	// resolution work — even if no plugin ships them. Plugins extending
+	// these with their own modifiers are honored via
+	// `resolved.composedTrackers.{cwd,env}` (the plugin merger already
+	// layered extensions on top of the plugin-declared trackers, if any).
 	//
 	// When no plugin registers a `cwd` tracker, we fall back to the
 	// built-in `cwdTracker` AND layer any `trackerModifiers.cwd`
 	// extensions onto it (the plugin merger preserves extensions
 	// targeting `"cwd"` on the caller's behalf via the
-	// `knownBuiltinTrackers` hint passed to `resolvePlugins`). This is
-	// how the git plugin's `--git-dir=` / `--work-tree=` modifiers
-	// reach the cwd tracker despite the plugin not owning the tracker
-	// itself.
+	// `knownBuiltinTrackers` hint passed to `resolvePlugins`). Same
+	// pattern for `env` — lets a future plugin add e.g. `.envrc`-style
+	// env loading as a new modifier on the shared tracker without
+	// replacing it.
+	//
+	// Env goes in first so cd's modifier sees the current ref's env via
+	// the `allState` read. Walker iteration is registration-order
+	// stable (Object.keys on an object literal); the ordering is a soft
+	// guarantee good for the built-in composition.
 	const trackers: Record<string, Tracker<unknown>> = {
 		...resolved.composedTrackers,
 	};
+	if (!("env" in trackers)) {
+		const extraEnvModifiers = resolved.trackerModifiers["env"];
+		trackers["env"] = composeBuiltinEnv(
+			extraEnvModifiers,
+		) as Tracker<unknown>;
+	}
 	if (!("cwd" in trackers)) {
 		const extraCwdModifiers = resolved.trackerModifiers["cwd"];
 		trackers["cwd"] = composeBuiltinCwd(
@@ -275,6 +288,43 @@ function composeBuiltinCwd(
 		merged[basename] = [...existingList, ...extrasTyped];
 	}
 	return { ...cwdTracker, modifiers: merged };
+}
+
+/**
+ * Layer a bucket of plugin-provided `{ basename -> Modifier[] }`
+ * extensions on top of the built-in {@link envTracker}, returning a
+ * fresh tracker so the built-in's `modifiers` map is never mutated.
+ *
+ * Parallels {@link composeBuiltinCwd}. Env extensions are a future
+ * surface — no plugin ships one today — but the composition is
+ * symmetric with cwd and costs one helper to keep both paths
+ * consistent when a plugin eventually wants to add e.g. `.envrc`-
+ * style env-loading under the same tracker.
+ */
+function composeBuiltinEnv(
+	extras: Record<string, Modifier<unknown>[]> | undefined,
+): Tracker<EnvState> {
+	if (!extras || Object.keys(extras).length === 0) return envTracker;
+	const merged: Record<string, Modifier<EnvState> | Modifier<EnvState>[]> = {};
+	for (const [basename, mod] of Object.entries(envTracker.modifiers)) {
+		merged[basename] = Array.isArray(mod)
+			? [...(mod as Modifier<EnvState>[])]
+			: mod;
+	}
+	for (const [basename, mods] of Object.entries(extras)) {
+		const existing = merged[basename];
+		const extrasTyped = mods as unknown as Modifier<EnvState>[];
+		if (existing === undefined) {
+			merged[basename] =
+				extrasTyped.length === 1 ? extrasTyped[0]! : [...extrasTyped];
+			continue;
+		}
+		const existingList = Array.isArray(existing)
+			? (existing as Modifier<EnvState>[])
+			: [existing as Modifier<EnvState>];
+		merged[basename] = [...existingList, ...extrasTyped];
+	}
+	return { ...envTracker, modifiers: merged };
 }
 
 /**

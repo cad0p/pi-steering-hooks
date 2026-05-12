@@ -377,27 +377,22 @@ describe("buildEvaluator: when.cwd", () => {
 			when: { cwd: { pattern: "/never-matches/", onUnknown: "block" } },
 		};
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		// `cd $VAR` today returns the current cwd (Phase-1 exception in
-		// cwdTracker). Use a more aggressively non-static form — command
-		// substitution — which cwdTracker's `cdModifier` still treats as
-		// "not static"; the returned value is the pre-cd cwd in v1 but
-		// the test asserts the onUnknown path shouldn't blow up on
-		// resolvable paths either.
-		//
-		// For the *onUnknown* exercise the cleanest surface is plugin
-		// predicates (see the plugin-predicate test below). This test
-		// documents the observable v1 behaviour: cd $(...) does NOT
-		// trigger unknown; cwd stays pre-cd.
+		// Tier B (PR #5): `cd $(pwd)` is statically intractable — the walker
+		// emits the cwdTracker's `unknown` sentinel, and the engine's
+		// `when.cwd` with `onUnknown: 'block'` fires the rule (fail-closed).
+		// This supersedes the pre-Tier-B Phase 1 exception that would have
+		// carried /repo forward silently.
 		const res = await evaluator.evaluate(
 			bashEvent("cd $(pwd) && rm foo"),
 			makeCtx("/repo"),
 			0,
 		);
-		// With Phase-1 exception, cwd remains "/repo", which doesn't
-		// match "/never-matches/" and doesn't flag as unknown — so the
-		// rule doesn't fire. This pins the current behavior and guards
-		// against an accidental change of the exception.
-		assert.equal(res, undefined);
+		assert.ok(res, "rule must fire when cwd is unknown and onUnknown:'block'");
+		assert.match(
+			(res as { reason: string }).reason,
+			/block-unknown-cwd/,
+			"block reason names the firing rule",
+		);
 	});
 
 	it("plugin predicate with onUnknown:'block' fires when handler sees unknown", async () => {

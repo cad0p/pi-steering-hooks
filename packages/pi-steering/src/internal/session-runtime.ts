@@ -89,11 +89,11 @@ export async function buildSessionRuntime(
 	const resolved = resolvePlugins(
 		filteredConfig.plugins ?? [],
 		filteredConfig,
-		// `cwd` is injected by the evaluator (the built-in `cwdTracker`);
-		// extensions targeting it are valid and must not be treated as
-		// orphans. Any other built-in tracker the evaluator introduces
-		// later should be added here.
-		["cwd"],
+		// `cwd` and `env` are injected by the evaluator (built-in
+		// cwdTracker + envTracker); extensions targeting them are valid
+		// and must not be treated as orphans. Any other built-in tracker
+		// the evaluator introduces later should be added here.
+		["cwd", "env"],
 	);
 
 	// Drop observers whose declared writes are unconsumed. Applied
