@@ -234,6 +234,20 @@ describe("envTracker via walk", () => {
 			assert.equal(env.has("FOO"), false);
 		});
 
+		it("`unset -f FOO; cmd` — function-only flag leaves scalar FOO intact (M7)", () => {
+			// Correctness fix M7: bash's `unset -f` clears functions only
+			// and leaves the scalar NAME untouched. Previously the walker
+			// skipped the `-f` flag and still deleted the scalar, silently
+			// dropping FOO. The modifier now short-circuits when -f is
+			// present — functions aren't tracked, nothing to do.
+			const env = finalEnv("FOO=bar; unset -f FOO; cmd");
+			assert.equal(
+				env.get("FOO"),
+				"bar",
+				"scalar FOO must survive `unset -f FOO` — -f targets functions, not scalars",
+			);
+		});
+
 		it("`unset $VAR; cmd` (dynamic name) — no-op for that name", () => {
 			const env = finalEnv("FOO=bar; unset $VAR; cmd");
 			assert.equal(env.get("FOO"), "bar");

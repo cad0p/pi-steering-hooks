@@ -264,22 +264,40 @@ const exportModifier: Modifier<EnvState> = {
 /**
  * `unset NAME [NAME2 ...]`
  *
- * Removes each statically-named var from the env map. `unset -v
- * NAME` and `unset -f NAME` are treated like bare `unset NAME` —
- * we don't model the variable-vs-function distinction, but since
- * we don't track functions at all, `unset -f` is harmless even
- * if it hits. Dynamic names bail on that name only; other names
- * in the same command still apply.
+ * Removes each statically-named var from the env map.
+ *
+ * Flag handling:
+ *   - `-v NAME` (scalar-unset, the default) — skipped as a flag,
+ *     NAME still consumed normally.
+ *   - `-f NAME` (function-unset) — bash clears functions only and
+ *     leaves the scalar NAME untouched. We short-circuit the entire
+ *     modifier invocation on `-f` so the scalar env map survives;
+ *     functions aren't tracked at all, so there's nothing to do.
+ *   - `-x NAME` — bash errors; we accept and still process NAME.
+ *     Fail-open here is consistent with the walker's "over-match on
+ *     error chains is fine" stance for guardrail use.
+ *
+ * Dynamic names bail on that name only; other names in the same
+ * command still apply.
  */
 const unsetModifier: Modifier<EnvState> = {
 	scope: "sequential",
 	apply: (args, current) => {
+		// If any arg is `-f`, bash's function-only unset applies. We
+		// don't track functions — short-circuit so the scalar env is
+		// untouched. This fixes a prior bug where `unset -f FOO` would
+		// delete the scalar FOO alongside a phantom function clear.
+		for (const w of args) {
+			const raw = w.value ?? w.text;
+			if (raw === "-f") return current;
+		}
 		const names: string[] = [];
 		for (const w of args) {
 			const raw = w.value ?? w.text;
 			if (raw === undefined) continue;
 			if (raw === "--") continue;
-			// `-v`, `-f`: skip the flag, keep scanning. No consume-next.
+			// `-v`, `-x`: skip the flag, keep scanning. No consume-next.
+			// `-f` handled above; we never reach this loop when it's present.
 			if (raw.startsWith("-")) continue;
 			// Resolve to reject dynamic names (`unset $VAR`) and single-
 			// quoted forms alike via the shared helper. Double-quoted
