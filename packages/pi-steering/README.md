@@ -222,17 +222,33 @@ interface Rule {
   requires?: Pattern | PredicateFn;             // AND extra
   unless?: Pattern | PredicateFn;               // exemption
   when?: WhenClause;                            // composable predicates
-  reason: string;                               // message to the agent
+  reason: string | ReasonFn;                    // message (or fn) to the agent
   noOverride?: boolean;                         // default: true (fail-closed)
   observer?: Observer | string;                 // name-ref to a shipped observer
   writes?: readonly string[];                   // declared session-entry types
   onFire?: (ctx: PredicateContext) => void;     // side-effect hook on block
 }
+
+type ReasonFn = (ctx: PredicateContext) => string | Promise<string>;
 ```
 
 The **pattern** tests against the flattened `basename + " " + args.join(" ")` of each extracted command ref (bash). Anchor with `^` so substrings of arguments don't accidentally match. For write/edit, the pattern tests `path` or `content` directly.
 
-The **reason** is written for the agent. Include what was blocked and what the safe alternative is — the agent reads it and acts on it.
+The **reason** is written for the agent. Include what was blocked and what the safe alternative is — the agent reads it and acts on it. A plain string is the common case. For dynamic context (the walker-resolved cwd, a count pulled from `findEntries`), pass a function instead:
+
+```ts
+{
+  name: "cr-upstream-mainline",
+  tool: "bash", field: "command",
+  pattern: /^cr\b/,
+  reason: (ctx) =>
+    ctx.walkerState?.cwd === "unknown"
+      ? "Walker could not resolve cwd statically. Retry with a literal path, or run `cr` from inside a package directory."
+      : "Your branch's upstream must track origin/mainline before running `cr`.",
+}
+```
+
+Reason functions are awaited, and the result is prefixed the same way as string reasons (`[steering:<rule>@<source>] …`). If the function throws or rejects, the engine logs the error with `console.warn` and emits a fail-safe fallback body (`(reason failed to format; see log)`) so the block verdict still lands without leaking the raw error to the agent.
 
 ### `WhenClause`
 
@@ -255,7 +271,7 @@ interface WhenClause {
 
 Built-ins:
 
-- **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
+- **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). Dynamic targets — `cd "$WS_DIR/pkg"`, `cd ~/proj` — resolve through the walker's env tracker (seeded from `process.env.{HOME, USER, PWD}` plus any bare assignments, `export`s, or `unset`s in the same chain). Intractable targets (`cd $(pwd)`, `cd $UNDEFINED`) surface as the `"unknown"` sentinel; apply `onUnknown: "allow" | "block"` (default `"block"`, fail-closed) to choose. For write/edit, it's the session cwd.
 - **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL; `"tool_call"` considers only speculative entries synthesized for THIS tool_call's `&&`-chain. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Optional `notIn` subtracts a narrower scope from `in` (e.g. `{ in: "agent_loop", notIn: "tool_call" }` means "happened in a prior tool_call in this loop", blocking the same-tool_call speculative bypass). `notIn` is set subtraction, distinct from the clause-level `not` (boolean negation). Synthesizes speculative entries across `&&` bash chains — see "`&&`-chain speculative allow" below.
 - **`not`** — boolean NOT over a nested clause. Use to invert a sub-clause (e.g. `not: { upstream: /^origin\/main$/ }` fires unless upstream is origin/main).
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
@@ -275,13 +291,32 @@ interface PredicateContext {
   exec: (cmd, args, opts?) => Promise<ExecResult>;  // memoized per (cmd, args, cwd)
   appendEntry<T>(type: string, data?: T): void;
   findEntries<T>(type: string): Array<{ data: T; timestamp: number }>;
-  walkerState?: Record<string, unknown>;        // tracker snapshot
+  walkerState?: Readonly<WhenWalkerState>;      // tracker snapshot (bash only)
+}
+
+interface WhenWalkerState {
+  readonly cwd: string;                          // effective cwd, or "unknown"
+  readonly env: ReadonlyMap<string, string>;     // env map (HOME/USER/PWD + chain writes)
+  readonly [key: string]: unknown;               // plugin trackers (e.g. `branch`)
 }
 ```
 
 `exec` is memoized per `(cmd, args, cwd)` within a single tool_call — two rules reading the same git state don't re-fork git. No cross-call cache.
 
 `PredicateToolInput.args` on bash gives you the `Word[]` suffix — quote-aware; `.value` is the lexical unwrapped value, `.text` is the raw source. Use this when a predicate needs to read `-m "feat: x"` without losing the quoted content.
+
+`walkerState.env` carries the per-ref env map: bare assignments (`FOO=bar`), `export NAME=value`, and `unset NAME` from the same bash chain, plus `HOME`/`USER`/`PWD` seeded from `process.env` at session start. Use it to resolve `$VAR` / `${VAR}` / `~` in user-supplied patterns via the `resolveWord` helper re-exported from the package root:
+
+```ts
+import { resolveWord } from "pi-steering";
+
+const myPredicate: PredicateHandler = (args, ctx) => {
+  const expanded = resolveWord(userWord, ctx.walkerState!.env);
+  return expanded !== undefined && /workspace/.test(expanded);
+};
+```
+
+`resolveWord` returns `undefined` when any part of the word is statically intractable (unknown var, command substitution, arithmetic, parameter-expansion with modifiers). Handle that the same way the built-in `when.cwd` does — via an `onUnknown: "allow" | "block"` policy on your own predicate surface.
 
 ### `onFire`
 
@@ -585,11 +620,36 @@ Changing more than the reason (tightening the pattern, scoping by cwd, swapping 
 
 ## Walker extensibility
 
-Plugin authors who need a new walker state dimension (something beyond `cwd` / `branch`) register a `Tracker<T>` under `Plugin.trackers`. The engine composes trackers at config load and feeds the merged map into unbash-walker's `walk()`.
+Plugin authors who need a new walker state dimension (something beyond `cwd` / `env` / `branch`) register a `Tracker<T>` under `Plugin.trackers`. The engine composes trackers at config load and feeds the merged map into unbash-walker's `walk()`.
 
 Tracker authoring is a larger topic — see the [unbash-walker README](../unbash-walker/) for the full `Tracker<T>` / `Modifier<T>` API. Plugins extend an existing tracker (e.g. layering a `--git-dir=…` parser on the core cwd tracker) via `Plugin.trackerExtensions`. Name collisions on `Plugin.trackers` are a hard error; modifier collisions log a WARN and keep the first-registered.
 
 Most users never need this — plugin-registered predicates alone cover 90% of use cases.
+
+### Shell-var expansion (`envTracker` + `resolveWord`)
+
+The engine ships an `envTracker` alongside the built-in `cwdTracker`. It captures statically-resolvable env mutations from the same bash chain:
+
+- Bare assignments: `WS_DIR=/ws; cd "$WS_DIR/pkg"` → `walkerState.env.get("WS_DIR") === "/ws"` at the `cd`, `walkerState.cwd === "/ws/pkg"` at the following commands.
+- `export NAME=VALUE` and `unset NAME`.
+- Subshell isolation: `(FOO=/s; cd "$FOO"); cmd` — outer `cmd` sees neither `FOO` nor the subshell's `cd`.
+- Seeded from `process.env.{HOME, USER, PWD}` at tracker initialization, so `~` / `$HOME` / `$USER` / `$PWD` expand out of the box.
+
+Out of scope for v0.1.0: `readonly`, `local`, `declare`, `typeset`, `source` / `.`, function-body walking. See `features/pi-infra/open-source-steering-hooks/env-tracker-deferred-scope.md` (upstream ADR) for the list and graduation criteria.
+
+**`resolveWord(word, env)`** — re-exported from the package root — is the shared helper the built-in `cd` modifier uses to resolve a dynamic word (`$VAR`, `${VAR}`, `~`) through an env map. Plugin predicates that want the same semantics on user-supplied args should reuse it:
+
+```ts
+import { resolveWord, type PredicateHandler } from "pi-steering";
+
+export const matchesHome: PredicateHandler = (args, ctx) => {
+  const word = /* one of ctx.input.args */ args as Word;
+  const resolved = resolveWord(word, ctx.walkerState!.env);
+  return resolved !== undefined && resolved.startsWith("/home/");
+};
+```
+
+Returning `undefined` means the word is statically intractable (unknown var, command substitution, arithmetic, parameter-expansion with modifiers). Handle it via an `onUnknown`-style policy on your predicate's option shape.
 
 ## Testing rules
 
