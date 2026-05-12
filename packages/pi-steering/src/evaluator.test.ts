@@ -449,6 +449,74 @@ describe("buildEvaluator: when.cwd", () => {
 			undefined,
 		);
 	});
+
+	// ---------------------------------------------------------------
+	// Tier B / PR #5 — D1/D2 success criteria.
+	//
+	// Pin the end-to-end chain through the real engine (buildEvaluator
+	// wires cwdTracker + envTracker by default). These asserts guard
+	// against future tracker-composition regressions — a change that
+	// drops env tracker registration, or re-introduces the Phase 1
+	// exception, would surface here first.
+	// ---------------------------------------------------------------
+
+	it("chain: `WS=/ws; cd \"$WS/pkg\"; cmd` — rule with when.cwd: /ws\\/pkg/ fires on cmd", async () => {
+		const rule: Rule = {
+			name: "block-rm-in-pkg",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "no rm inside the package",
+			when: { cwd: "/ws/pkg" },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent('WS=/ws; cd "$WS/pkg"; rm foo'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.ok(res, "env-expanded cwd /ws/pkg should match the rule");
+		assert.match((res as { reason: string }).reason, /block-rm-in-pkg/);
+	});
+
+	it("chain: `cd \"$UNDEFINED\"; rm foo` — fail-closed onUnknown:'block' fires rule", async () => {
+		const rule: Rule = {
+			name: "workspace-only",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "only allowed in /workspace",
+			when: { cwd: /\/workspace/ },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent('cd "$UNDEFINED"; rm foo'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.ok(res, "unresolvable cd target must fail-close via onUnknown:'block'");
+		assert.match((res as { reason: string }).reason, /workspace-only/);
+	});
+
+	it("subshell isolation: `(FOO=/s; cd \"$FOO\"); cmd` — outer cmd sees initial cwd, no leaked env", async () => {
+		const rule: Rule = {
+			name: "in-s-only",
+			tool: "bash",
+			field: "command",
+			pattern: "^cmd\\b",
+			reason: "only allowed at /s",
+			when: { cwd: "^/s$" },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		// Outer cmd runs at /start (subshell's cd /s didn't leak out).
+		// The rule wants cwd === /s; it shouldn't fire.
+		const res = await evaluator.evaluate(
+			bashEvent('(FOO=/s; cd "$FOO"); cmd'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.equal(res, undefined, "outer cmd's cwd is /start, not /s — no block");
+	});
 });
 
 describe("buildEvaluator: when.happened", () => {

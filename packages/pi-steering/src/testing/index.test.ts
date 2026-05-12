@@ -576,6 +576,68 @@ describe("mockContext", () => {
 		});
 		assert.equal(warm, true, "toolCallEvents populated → predicate fires");
 	});
+
+	// -------------------------------------------------------------------
+	// Env surface (Tier B / PR #5 — D1)
+	// -------------------------------------------------------------------
+
+	it("default walkerState carries an empty env Map", () => {
+		const ctx = mockContext();
+		const env = ctx.walkerState?.["env"];
+		assert.ok(env instanceof Map, "walkerState.env is a Map");
+		assert.equal((env as Map<string, string>).size, 0);
+	});
+
+	it("walkerState.env override threads through to ctx", () => {
+		const ctx = mockContext({
+			walkerState: {
+				cwd: "/ws/pkg",
+				env: new Map([["WS", "/ws"]]),
+			},
+		});
+		const env = ctx.walkerState?.["env"] as ReadonlyMap<string, string>;
+		assert.equal(env.get("WS"), "/ws");
+		assert.equal(ctx.walkerState?.["cwd"], "/ws/pkg");
+	});
+
+	it("walkerState.cwd === 'unknown' is a legal input (exercises onUnknown branch)", async () => {
+		// Spec requirement: mockContext should accept walkerState.cwd
+		// at the "unknown" sentinel so tests can exercise the
+		// fail-closed `onUnknown: 'block'` path without wiring up a
+		// full walker.
+		const ctx = mockContext({
+			walkerState: { cwd: "unknown", env: new Map() },
+		});
+		assert.equal(ctx.walkerState?.["cwd"], "unknown");
+
+		// Sanity: a plugin predicate reading the sentinel can discriminate.
+		const onUnknownBlock = async (_args: unknown, c: typeof ctx) =>
+			c.walkerState?.["cwd"] === "unknown";
+		assert.equal(await onUnknownBlock(null, ctx), true);
+	});
+
+	it("env is consumable by a ReasonFn-style predicate via testPredicate", async () => {
+		// End-to-end: a plugin reads walkerState.env.get('NAME') and
+		// fires the rule when the var resolves to a specific value.
+		const envGuard: PredicateHandler<string> = async (name, ctx) => {
+			const env = ctx.walkerState?.["env"] as
+				| ReadonlyMap<string, string>
+				| undefined;
+			return env?.get(name) === "/workspace";
+		};
+		const hit = await testPredicate(envGuard, "WS", {
+			walkerState: {
+				cwd: "/start",
+				env: new Map([["WS", "/workspace"]]),
+			},
+		});
+		assert.equal(hit, true);
+
+		const miss = await testPredicate(envGuard, "WS", {
+			walkerState: { cwd: "/start", env: new Map() },
+		});
+		assert.equal(miss, false);
+	});
 });
 
 // ---------------------------------------------------------------------------
