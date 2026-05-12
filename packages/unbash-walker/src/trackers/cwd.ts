@@ -99,7 +99,7 @@ function resolveTarget(current: string, target: string): string {
  */
 const cdModifier: Modifier<string> = {
 	scope: "sequential",
-	apply: (args, current) => {
+	apply: (args, current, _allState) => {
 		const targetWord = args[0];
 
 		// `cd` with no arguments → HOME.
