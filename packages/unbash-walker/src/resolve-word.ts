@@ -1,0 +1,241 @@
+// SPDX-License-Identifier: MIT
+// Part of unbash-walker.
+
+/**
+ * resolveWord — static + env-aware Word resolution.
+ *
+ * Extends {@link isStaticallyResolvable} with env-map lookup: a
+ * `$NAME` / `${NAME}` reference resolves to `env.get("NAME")`, and
+ * `~` at word start resolves to `env.get("HOME")`. Everything else
+ * that isn't a pure literal / single-quoted / double-quoted-with-
+ * resolvable-children is treated as intractable — the function
+ * returns `undefined` and the caller applies its own fallback.
+ *
+ * Typical caller is a walker modifier (`cd` today; future plugin
+ * modifiers) that has access to an env snapshot via the
+ * cross-tracker `allState` protocol (see
+ * {@link import("./tracker.ts").Modifier}). Passing the env map
+ * explicitly keeps the helper pure — no `process.env` reads
+ * inside, so plugin authors can seed their own env state for
+ * testing and sandboxing.
+ *
+ * Scope (v0.1.0 — bundled with the envTracker):
+ *
+ *   - ✅ Literal, SingleQuoted. DoubleQuoted if every inner part
+ *        resolves.
+ *   - ✅ `$NAME` (SimpleExpansion) via env lookup.
+ *   - ✅ `${NAME}` (ParameterExpansion with no operator / index /
+ *        slice / replace / length / indirect) via env lookup.
+ *   - ✅ Leading `~` / `~/…` via `env.get("HOME")`.
+ *   - ❌ `${NAME:-default}`, `${NAME#pattern}`, … (parameter-
+ *        expansion with modifiers) → undefined.
+ *   - ❌ Command substitution, arithmetic expansion, process
+ *        substitution, ext-glob, brace expansion, ANSI-C,
+ *        locale-quoted → undefined.
+ *
+ * Deferred classes are documented at
+ * [[env-tracker-deferred-scope]] and graduate to this helper when
+ * a motivating use case lands. The underlying AST is already
+ * typed, so adding a case is structural (new `WordPart.type` arm
+ * → helper or undefined) — no re-architecture.
+ */
+
+import type { Word, WordPart } from "unbash";
+
+/**
+ * Resolve a {@link Word} to its runtime string value using the
+ * given env snapshot for `$VAR` / `${VAR}` / `~` expansion.
+ *
+ * Returns `undefined` when the word contains any part the helper
+ * cannot statically evaluate (command substitution, parameter
+ * expansion with modifiers, arithmetic, process substitution,
+ * brace expansion, ext-glob, ANSI-C, locale-quoted, or a `$VAR`
+ * whose NAME is absent from `env`).
+ *
+ * This is the exact semantics downstream rules need: a failure
+ * to resolve propagates as `undefined`, which the caller's
+ * modifier converts into the tracker's `unknown` sentinel (see
+ * the {@link Tracker} contract).
+ *
+ * @example
+ *   // `cd "$WS/pkg"` with env = { WS: "/workspace" }
+ *   resolveWord(wordFromTarget, new Map([["WS", "/workspace"]]))
+ *   // → "/workspace/pkg"
+ *
+ *   // `cd "$UNDEFINED/pkg"` with empty env
+ *   resolveWord(wordFromTarget, new Map())
+ *   // → undefined
+ *
+ *   // `cd $(pwd)` — command substitution is never resolvable
+ *   resolveWord(wordFromTarget, env)
+ *   // → undefined
+ */
+export function resolveWord(
+	word: Word,
+	env: ReadonlyMap<string, string>,
+): string | undefined {
+	// No parts: the word is a simple literal. Use `value` (lexical
+	// value, unquoted) if present, otherwise fall back to `text`
+	// (raw source). This matches the fallback path in the walker's
+	// legacy `wordValue` helper.
+	if (!word.parts || word.parts.length === 0) {
+		const bare = word.value ?? word.text;
+		// Tilde expansion at word start: `~`, `~/…`. Only applies when
+		// the token actually starts with `~` in the raw source — if a
+		// user writes `"~"` the parser produces a SingleQuoted /
+		// DoubleQuoted part, not a bare word, so we don't accidentally
+		// expand quoted tildes here.
+		return expandTildeIfLeading(bare, env);
+	}
+
+	let out = "";
+	for (let i = 0; i < word.parts.length; i++) {
+		const part = word.parts[i]!;
+		const resolved = resolvePart(part, env);
+		if (resolved === undefined) return undefined;
+		// Tilde expansion only applies to the very first part AND only
+		// when that part is a bare Literal that starts with `~` — same
+		// semantic rule as bash (quoted `~` is not expanded).
+		if (i === 0 && part.type === "Literal") {
+			out += expandTildeIfLeading(resolved, env);
+		} else {
+			out += resolved;
+		}
+	}
+	return out;
+}
+
+/**
+ * Expand a leading `~` or `~/…` via `env.get("HOME")`.
+ *
+ * Bash rule: `~` at the start of a word expands to `$HOME`,
+ * `~/foo` expands to `$HOME/foo`. Bare `~` with nothing after it
+ * is also `$HOME`. Tildes NOT at the start (`/a/~`) are literal.
+ *
+ * When `env` has no `HOME`, tilde expansion fails: return the
+ * original string unchanged, matching the bash fallback where
+ * `~` stays literal if HOME is unset. Callers that want a
+ * stricter "fail on missing HOME" can set `env.HOME` explicitly
+ * or pre-check.
+ *
+ * Not exported — only internal to `resolveWord`. The function is
+ * defined outside `resolveWord` to keep the hot path inside the
+ * parts-loop short (no closure).
+ */
+function expandTildeIfLeading(
+	s: string,
+	env: ReadonlyMap<string, string>,
+): string {
+	if (s.length === 0) return s;
+	if (s[0] !== "~") return s;
+	if (s === "~") return env.get("HOME") ?? s;
+	if (s.startsWith("~/")) {
+		const home = env.get("HOME");
+		if (home === undefined) return s;
+		return home + s.slice(1);
+	}
+	// `~user` — we don't model arbitrary user HOME directories.
+	return s;
+}
+
+/**
+ * Resolve a single {@link WordPart} against the env map. Returns
+ * the concatenable string slice contributed by this part, or
+ * `undefined` if the part is intractable.
+ */
+function resolvePart(
+	part: WordPart,
+	env: ReadonlyMap<string, string>,
+): string | undefined {
+	switch (part.type) {
+		case "Literal":
+		case "SingleQuoted":
+			return part.value;
+
+		case "DoubleQuoted": {
+			// Double-quoted strings concatenate their inner parts. If ANY
+			// inner part is intractable, the whole word is intractable.
+			let out = "";
+			for (const child of part.parts) {
+				const resolved = resolvePart(child as WordPart, env);
+				if (resolved === undefined) return undefined;
+				out += resolved;
+			}
+			return out;
+		}
+
+		case "SimpleExpansion": {
+			// `$NAME` form. Parser preserves the raw text `$NAME`; the
+			// name is everything after the leading `$`. Special forms
+			// `$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$0`…`$9` are not
+			// modelled — they behave as intractable.
+			const raw = part.text;
+			if (!raw.startsWith("$")) return undefined;
+			const name = raw.slice(1);
+			if (!isIdentifierName(name)) return undefined;
+			return env.get(name);
+		}
+
+		case "ParameterExpansion": {
+			// `${NAME}` form. We accept ONLY the bare shape with none of
+			// bash's parameter-expansion operators. Anything with
+			// `operator` (`:-`, `#`, `%`, `/`, `^`, …), `slice`,
+			// `replace`, `length`, `indirect`, or `index` is deferred
+			// (see env-tracker-deferred-scope.md).
+			if (
+				part.operator !== undefined ||
+				part.slice !== undefined ||
+				part.replace !== undefined ||
+				part.length === true ||
+				part.indirect === true ||
+				part.index !== undefined
+			) {
+				return undefined;
+			}
+			if (!isIdentifierName(part.parameter)) return undefined;
+			return env.get(part.parameter);
+		}
+
+		// Intractable categories — see file-header comment.
+		case "CommandExpansion":
+		case "ArithmeticExpansion":
+		case "ProcessSubstitution":
+		case "ExtendedGlob":
+		case "BraceExpansion":
+		case "AnsiCQuoted":
+		case "LocaleString":
+			return undefined;
+
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Accept only bash-identifier names (`[A-Za-z_][A-Za-z0-9_]*`).
+ * Rejects positional parameters (`1`, `2`, …) and special
+ * parameters (`@`, `*`, `#`, `?`, `$`, `!`, `-`). Those are
+ * intractable for our static-resolution purposes even if the
+ * parser hands them to us under SimpleExpansion / ParameterExpansion.
+ */
+function isIdentifierName(name: string): boolean {
+	if (name.length === 0) return false;
+	const first = name.charCodeAt(0);
+	if (!isIdentStart(first)) return false;
+	for (let i = 1; i < name.length; i++) {
+		if (!isIdentCont(name.charCodeAt(i))) return false;
+	}
+	return true;
+}
+
+function isIdentStart(c: number): boolean {
+	return (
+		(c >= 65 /* A */ && c <= 90 /* Z */) ||
+		(c >= 97 /* a */ && c <= 122 /* z */) ||
+		c === 95 /* _ */
+	);
+}
+
+function isIdentCont(c: number): boolean {
+	return isIdentStart(c) || (c >= 48 /* 0 */ && c <= 57 /* 9 */);
+}
