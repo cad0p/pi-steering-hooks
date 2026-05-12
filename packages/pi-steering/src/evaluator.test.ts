@@ -2469,6 +2469,202 @@ describe("buildEvaluator: Rule.onFire", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rule.reason as a ReasonFn (D3 of Tier B / PR #5)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: Rule.reason function form", () => {
+	it("invokes the function with the PredicateContext and prefixes the result", async () => {
+		let invoked = false;
+		let seenCwd: string | undefined;
+		const rule: Rule = {
+			name: "dyn-reason",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: (ctx) => {
+				invoked = true;
+				seenCwd = ctx.cwd;
+				return `cannot rm at ${ctx.cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/work/proj"),
+			0,
+		);
+		assert.ok(invoked, "reason function must be invoked");
+		assert.equal(seenCwd, "/work/proj", "ctx.cwd passed through");
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:dyn-reason@user] cannot rm at /work/proj",
+		);
+	});
+
+	it("awaits async function reasons", async () => {
+		const rule: Rule = {
+			name: "async-reason",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: async (ctx) => {
+				await new Promise((r) => setTimeout(r, 1));
+				return `async at ${ctx.cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/work"),
+			0,
+		);
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:async-reason@user] async at /work",
+		);
+	});
+
+	it("appends override hint when the rule is overridable", async () => {
+		const rule: Rule = {
+			name: "overridable-dyn",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: () => "dynamic body",
+			noOverride: false,
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/x"),
+			0,
+		);
+		assert.ok(res);
+		const reason = (res as { reason: string }).reason;
+		assert.match(reason, /^\[steering:overridable-dyn@user\] dynamic body/);
+		assert.match(
+			reason,
+			/To override, include a comment: `# steering-override: overridable-dyn/,
+		);
+	});
+
+	it("throwing function: logs console.warn and emits fail-safe fallback", async () => {
+		const warnings = captureWarnings();
+		try {
+			const rule: Rule = {
+				name: "broken-reason",
+				tool: "bash",
+				field: "command",
+				pattern: "^rm\\b",
+				reason: () => {
+					throw new Error("boom");
+				},
+			};
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const res = await evaluator.evaluate(
+				bashEvent("rm foo"),
+				makeCtx("/x"),
+				0,
+			);
+			// Block must still fire — the reason failure doesn't release the
+			// rule's guard.
+			assert.ok(res, "block verdict preserved even when reason fn throws");
+			assert.equal(
+				(res as { reason: string }).reason,
+				"[steering:broken-reason@user] (reason failed to format; see log)",
+			);
+			// Warn message format pinned so tests can detect the throw in CI
+			// output.
+			const hit = warnings.find((w) =>
+				/reason function threw/.test(w),
+			);
+			assert.ok(
+				hit,
+				`expected a 'reason function threw' warning; got: ${warnings.join("\n")}`,
+			);
+			assert.match(
+				hit!,
+				/\[pi-steering\] Rule "broken-reason"@user: reason function threw: boom/,
+			);
+			assert.match(hit!, /at /, "warning includes the stack");
+		} finally {
+			warnings.restore();
+		}
+	});
+
+	it("rejecting async function: also triggers fallback + console.warn", async () => {
+		const warnings = captureWarnings();
+		try {
+			const rule: Rule = {
+				name: "async-broken",
+				tool: "bash",
+				field: "command",
+				pattern: "^rm\\b",
+				reason: async () => {
+					throw new Error("async boom");
+				},
+			};
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const res = await evaluator.evaluate(
+				bashEvent("rm foo"),
+				makeCtx("/x"),
+				0,
+			);
+			assert.ok(res);
+			assert.equal(
+				(res as { reason: string }).reason,
+				"[steering:async-broken@user] (reason failed to format; see log)",
+			);
+			assert.ok(
+				warnings.some((w) => /reason function threw: async boom/.test(w)),
+			);
+		} finally {
+			warnings.restore();
+		}
+	});
+
+	it("reason fn reads ctx.walkerState.cwd — the canonical use case", async () => {
+		// Lock in the RDS-migration-findings workflow: a rule reads the
+		// walker-resolved cwd to produce a contextual block message.
+		// Uses `cd $(pwd)` to push cwd into 'unknown'; reason fn reports
+		// that to the agent so they know the chain was intractable.
+		const rule: Rule = {
+			name: "cwd-reporter",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: (ctx) => {
+				const cwd = ctx.walkerState?.["cwd"] as string;
+				return cwd === "unknown"
+					? "walker could not resolve cwd statically"
+					: `rm blocked at ${cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/orig"),
+			0,
+		);
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:cwd-reporter@user] walker could not resolve cwd statically",
+		);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // Override comments + noOverride
 // ---------------------------------------------------------------------------
 

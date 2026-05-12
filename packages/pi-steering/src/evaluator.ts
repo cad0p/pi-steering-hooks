@@ -441,24 +441,74 @@ function effectiveNoOverride(rule: Rule, defaultNoOverride: boolean): boolean {
  * rules, or `user` for rules declared directly in the user's
  * SteeringConfig.rules.
  *
- * Ported from v1's `formatBlockReason` + `overrideHint` so the
- * message body is otherwise identical across versions.
+ * Rule.reason accepts both a static string and a {@link ReasonFn}
+ * (D3 in pr5-tier-b-shell-var-tracker-spec.md). Function reasons
+ * receive the same {@link PredicateContext} the predicates saw;
+ * async returns are awaited before prefixing. A reason function
+ * that throws or rejects is logged via `console.warn` and replaced
+ * with a fail-safe fallback string — the block verdict still fires.
+ * The exact fallback text is a stable contract rule authors can
+ * detect in tests.
  */
-function formatReason(
+async function formatReason(
 	rule: Rule,
 	tool: "bash" | "write" | "edit",
 	noOverride: boolean,
 	source: string,
-): string {
+	ctx: PredicateContext,
+): Promise<string> {
 	const tag = `[steering:${rule.name}@${source}]`;
-	if (noOverride) {
-		return `${tag} ${rule.reason}`;
-	}
+	const body = await resolveReasonBody(rule, source, ctx);
+	if (noOverride) return `${tag} ${body}`;
 	const leader = tool === "bash" ? "#" : "//";
 	const hint =
 		` To override, include a comment: ` +
 		`\`${leader} steering-override: ${rule.name} — <reason>\`.`;
-	return `${tag} ${rule.reason}${hint}`;
+	return `${tag} ${body}${hint}`;
+}
+
+/**
+ * Resolve the string body of a rule's reason field. Handles both
+ * variants of the discriminated union on {@link Rule.reason}:
+ *
+ *   - `string`        — returned as-is.
+ *   - `ReasonFn`      — invoked with `ctx`, awaited, returned. A
+ *                       synchronous throw or rejected promise is
+ *                       caught, logged to `console.warn` with the
+ *                       rule name + source prefix + error message
+ *                       + stack, and replaced with the fail-safe
+ *                       fallback body `(reason failed to format;
+ *                       see log)`. The wrapping in
+ *                       {@link formatReason} still adds the source
+ *                       tag, so the agent sees
+ *                       `[steering:<rule>@<source>] (reason failed
+ *                       to format; see log)` — an unambiguous
+ *                       signal of a broken reason fn that still
+ *                       doesn't leak the error message.
+ *
+ * The fallback behavior is part of the public contract per spec
+ * D3: a rule author CAN assert the exact text (e.g. in a test
+ * asserting the engine keeps the block verdict alive when the
+ * reason function intentionally throws as a smoke-test).
+ */
+async function resolveReasonBody(
+	rule: Rule,
+	source: string,
+	ctx: PredicateContext,
+): Promise<string> {
+	if (typeof rule.reason === "string") return rule.reason;
+	try {
+		return await rule.reason(ctx);
+	} catch (err) {
+		const msg =
+			err instanceof Error
+				? `${err.message}\n${err.stack ?? ""}`
+				: String(err);
+		console.warn(
+			`[pi-steering] Rule "${rule.name}"@${source}: reason function threw: ${msg}`,
+		);
+		return "(reason failed to format; see log)";
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -714,11 +764,12 @@ async function evaluateCandidate(
 
 	return {
 		block: true,
-		reason: formatReason(
+		reason: await formatReason(
 			rule,
 			cand.tool,
 			noOverride,
 			shared.ruleSources.get(rule) ?? "user",
+			ctx,
 		),
 	};
 }
