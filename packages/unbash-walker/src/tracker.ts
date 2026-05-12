@@ -111,21 +111,28 @@ export type Modifier<
 			/** Propagates to this command AND all subsequent sibling commands.
 			 *  Example: `cd DIR`, `git checkout X`. */
 			scope: "sequential";
-			apply: (
+			// Method syntax (`apply(...)`) keeps TAll BIVARIANT for parameter
+			// type compatibility. Under strict mode an arrow-typed `apply` on
+			// a narrower TAll isn't assignable to a wider TAll, even though the
+			// walker always passes the full outer state object and the narrow
+			// modifier simply reads a subset. Bivariance here matches the
+			// runtime contract — modifiers requesting narrower allState still
+			// satisfy the Tracker.modifiers storage type.
+			apply(
 				args: readonly Word[],
 				current: T,
 				allState: Readonly<TAll>,
-			) => T | undefined;
+			): T | undefined;
 	  }
 	| {
 			/** Applies to this command only; caller's next-command state is unchanged.
 			 *  Example: `git -C DIR subcmd`, `env -C DIR cmd`, `make -C DIR target`. */
 			scope: "per-command";
-			apply: (
+			apply(
 				args: readonly Word[],
 				current: T,
 				allState: Readonly<TAll>,
-			) => T | undefined;
+			): T | undefined;
 	  };
 
 /**

@@ -21,15 +21,21 @@
  *
  *   - `cd ABS` — replace current dir with ABS.
  *   - `cd REL` — join with current dir.
- *   - `cd ~`, `cd ~/x` — expand `~` via `process.env.HOME ?? currentCwd`.
+ *   - `cd ~`, `cd ~/x` — expand `~` via the env tracker's
+ *     `env.get("HOME")`, seeded from `process.env.HOME` at tracker
+ *     initialization. Callers supplying a custom env map
+ *     (`walk(script, { env: myMap }, ...)`) see their HOME instead.
  *   - `cd` with no args — go to `$HOME`.
  *   - `cd -` — no-op (we don't track OLDPWD; errs toward over-matching,
  *     the safer failure mode for a guardrail consumer).
- *   - `cd` with an unresolvable target (parameter expansion, command
- *     substitution, arithmetic expansion, process substitution, etc.) —
- *     returns `undefined`, which the walker translates into the tracker's
- *     `unknown` sentinel (`"unknown"`). Subsequent commands see `unknown`
- *     until some resolvable change overrides it.
+ *   - `cd "$VAR/x"` — resolves via `allState.env` (see D1 in
+ *     pr5-tier-b-shell-var-tracker-spec.md). When the var is set in
+ *     the env tracker's state (bare assignment, `export`, or seeded
+ *     from `process.env`), the full target path resolves. Unknown
+ *     vars / command substitution / arithmetic return `undefined`,
+ *     which the walker surfaces as the `unknown` sentinel and the
+ *     engine's `when.cwd` predicate consumes via its `onUnknown`
+ *     policy (default `'block'`, fail-closed).
  *   - `git -C DIR` — per-command cwd override. Scans pre-subcommand flags
  *     only, stopping at the subcommand token. Composable:
  *     `git -C /a -C b push` records at `/a/b`. Also skips `-c KEY=VAL`.
@@ -51,21 +57,70 @@
 import * as path from "node:path";
 import type { Word } from "unbash";
 import { isStaticallyResolvable, type Modifier, type Tracker } from "../tracker.ts";
+import { resolveWord } from "../resolve-word.ts";
+import type { EnvState } from "./env.ts";
 
 // --------------------------------------------------------------------------
 // cd — sequential modifier
 // --------------------------------------------------------------------------
 
-/** Expand `~` / `~/...` using `process.env.HOME`, falling back to `current`. */
-function resolveHome(current: string): string {
-	return process.env["HOME"] ?? current;
+/**
+ * Fallback env used when the caller registers `cwdTracker` without
+ * `envTracker`. Reads `process.env.{HOME, USER, PWD}` on every
+ * invocation — the same three keys `envTracker`'s default initial
+ * state captures — so `cd ~`, `cd ~/x`, and bare `cd` still expand
+ * to HOME in walker-only (no-env-tracker) usage. Dynamic `$VAR`
+ * targets where the var isn't one of these three still return
+ * `undefined` (walker emits `unknown`), matching the strict Tracker
+ * contract.
+ *
+ * Callers who register `envTracker` override this: the walker threads
+ * its env state through `allState.env`, which takes precedence over
+ * the fallback.
+ *
+ * Per-call evaluation (instead of module-load caching) is deliberate:
+ * tests that mutate `process.env` before each assertion need the
+ * current value, not the value captured at import time. Per-call
+ * cost is O(3) map entries — well within the walker's hot-path
+ * budget.
+ */
+function buildProcessEnvFallback(): EnvState {
+	const out = new Map<string, string>();
+	const { HOME, USER, PWD } = process.env;
+	if (HOME !== undefined) out.set("HOME", HOME);
+	if (USER !== undefined) out.set("USER", USER);
+	if (PWD !== undefined) out.set("PWD", PWD);
+	return out;
+}
+
+/**
+ * Return the effective env map for this cd invocation: the env
+ * tracker's state if registered, otherwise the process-env
+ * fallback. Narrow-type `allState.env` through a soft cast so
+ * walker-only callers who skip env registration don't crash on the
+ * `.get(...)` dereference.
+ */
+function effectiveEnv(allState: Readonly<Record<string, unknown>>): EnvState {
+	const fromAllState = (allState as Readonly<{ env?: EnvState }>).env;
+	return fromAllState ?? buildProcessEnvFallback();
+}
+
+/**
+ * Expand `~` / `~/...` using `env.get('HOME')`. The env map is the
+ * source of truth once seeded by {@link envTracker}; when that
+ * tracker isn't registered we fall back to a process-env snapshot
+ * (see {@link PROCESS_ENV_FALLBACK}) so single-tracker walker users
+ * don't lose tilde expansion.
+ */
+function resolveHome(current: string, env: EnvState): string {
+	return env.get("HOME") ?? current;
 }
 
 /** Compute the cwd resulting from `cd <target>` starting at `current`. */
-function resolveTarget(current: string, target: string): string {
-	if (target === "~") return resolveHome(current);
+function resolveTarget(current: string, target: string, env: EnvState): string {
+	if (target === "~") return resolveHome(current, env);
 	if (target.startsWith("~/")) {
-		return path.join(resolveHome(current), target.slice(2));
+		return path.join(resolveHome(current, env), target.slice(2));
 	}
 	if (path.isAbsolute(target)) return target;
 	return path.join(current, target);
@@ -75,46 +130,52 @@ function resolveTarget(current: string, target: string): string {
  * Sequential modifier for `cd`. Updates the cwd for this command AND
  * subsequent sibling commands.
  *
- * IMPORTANT — Phase 1 exception to the Tracker contract.
+ * Env-aware resolution (Tier B of PR #5):
  *
- * Per the Tracker contract (see tracker.ts), a modifier that can't
- * resolve statically should return `undefined` so the walker emits
- * `tracker.unknown`. For cd with a dynamic target (`cd $VAR`, `cd $(...)`,
- * etc.) we deviate: we return `current` unchanged instead of `undefined`.
+ *   - Static target (`cd /a`, `cd a/b`, `cd ~/subdir`, `cd -`): behave
+ *     as before. `-` is a no-op (we don't track OLDPWD); bare `cd`
+ *     goes to HOME via `env.get('HOME')`.
+ *   - Non-static target: call {@link resolveWord} with the env map
+ *     ({@link effectiveEnv}) to expand `$VAR`, `${VAR}`, `~/...`. If
+ *     the helper returns a string, treat as the static target. If it
+ *     returns `undefined` (dynamic parts the walker can't resolve —
+ *     command substitution, arithmetic, parameter-expansion with
+ *     modifiers, an unknown `$VAR`), return `undefined` so the
+ *     walker emits its `unknown` sentinel. Engine-side `when.cwd`
+ *     applies its `onUnknown: 'allow' | 'block'` policy (default
+ *     `'block'`, fail-closed).
  *
- * Why: the current evaluator's `when.cwd` predicate is a plain regex.
- * If we emitted `"unknown"` here, the regex `^/workplace/` would NOT
- * match the literal string `"unknown"`, so any cd-prefixed dynamic path
- * would bypass cwd-scoped rules. A command like `cd $VAR && rm -rf /x`
- * would silently skip every cwd-scoped guardrail. That's a new silent-
- * bypass class that didn't exist in the pre-generalization walker.
- *
- * The strict Tracker contract only becomes safe once predicates grow
- * an explicit `onUnknown: "allow" | "block"` policy (ADR section 3).
- * Phase 2 lands `onUnknown: "block"` as the default AND converts this
- * modifier to return `undefined`, both together.
- *
- * Handles: absolute paths, relative paths, `..`, `~`, chained cd's.
- * Skips: `cd -` (no-op; we don't track OLDPWD).
+ * This replaces the pre-Tier-B Phase 1 exception that returned
+ * `current` unchanged on dynamic targets — a silent-bypass class
+ * where `cd "\$VAR/protected" && cr` passed cwd-scoped rules
+ * because the regex never saw the "/protected" path.
  */
-const cdModifier: Modifier<string> = {
+const cdModifier: Modifier<string, { env: EnvState }> = {
 	scope: "sequential",
-	apply: (args, current, _allState) => {
+	apply(args, current, allState) {
+		const env = effectiveEnv(allState);
 		const targetWord = args[0];
 
 		// `cd` with no arguments → HOME.
-		if (targetWord === undefined) return resolveHome(current);
+		if (targetWord === undefined) return resolveHome(current, env);
 
-		// Non-static target (e.g. `cd $VAR`, `cd $(pwd)`): see the Phase 1
-		// exception documented in this function's header comment. We return
-		// `current` unchanged instead of `undefined` to avoid a silent
-		// bypass of cwd-scoped predicates whose `when.cwd` is a plain regex.
-		if (!isStaticallyResolvable(targetWord)) return current;
+		let target: string | undefined;
+		if (isStaticallyResolvable(targetWord)) {
+			target = targetWord.value ?? targetWord.text;
+		} else {
+			// Non-static: attempt env-aware resolution. `undefined` means
+			// any part was intractable (unknown var, command substitution,
+			// arithmetic, parameter expansion with modifier). Return
+			// `undefined` so the walker emits the tracker's `unknown`
+			// sentinel and the engine's `when.cwd` fires its `onUnknown`
+			// policy.
+			target = resolveWord(targetWord, env);
+			if (target === undefined) return undefined;
+		}
 
-		const target = targetWord.value ?? targetWord.text;
 		if (target === undefined || target === "-") return current;
 
-		return resolveTarget(current, target);
+		return resolveTarget(current, target, env);
 	},
 };
 
@@ -282,18 +343,26 @@ function applyEnvCwd(args: readonly Word[], current: string): string {
  * `subshellSemantics` is `"isolated"` — real bash semantics: a subshell
  * can `cd` around internally without affecting its parent.
  *
+ * ## Env-aware `cd` resolution
+ *
+ * The `cd` modifier reads `allState.env` via the cross-tracker read
+ * protocol (D1). Targets containing `$VAR` / `${VAR}` / `~` expand
+ * through the env map seeded by {@link envTracker}. Intractable
+ * targets (unknown `$VAR`, command substitution, arithmetic, etc.)
+ * return `undefined`, surfacing the walker's `unknown` sentinel so
+ * the engine's `when.cwd` predicate can apply its `onUnknown`
+ * policy (default fail-closed). Callers MUST register `envTracker`
+ * alongside `cwdTracker` for the expansion to take effect; without
+ * env state, dynamic targets always flow through to `unknown`.
+ *
  * ## Note for plugin authors
  *
- * `cwdTracker` is the reference built-in tracker, but its `cd` modifier
- * is a documented Phase-1 exception to the Tracker contract: it returns
- * `current` instead of `undefined` on unresolvable targets. DO NOT copy
- * this pattern into a new tracker (e.g. a branch tracker, an env tracker).
- *
- * The canonical contract for your own trackers is: if a modifier cannot
- * statically resolve its result, return `undefined`. The walker emits
- * `tracker.unknown` and predicates consuming that tracker apply their
- * `onUnknown: "allow" | "block"` policy (default `"block"` once that
- * schema lands in Phase 2). See `tracker.ts` for the full contract.
+ * A tracker's modifier that can't statically resolve its result
+ * should return `undefined`. The walker emits `tracker.unknown` and
+ * predicates consuming that tracker apply their `onUnknown: "allow" |
+ * "block"` policy (default `"block"`). See `tracker.ts` for the full
+ * contract, and `pr5-tier-b-shell-var-tracker-spec.md` for the
+ * design note explaining how cwd + env compose through `allState`.
  */
 export const cwdTracker: Tracker<string> = {
 	initial: "/",

@@ -14,6 +14,7 @@ import { getBasename, getCommandArgs } from "../resolve.ts";
 import { walk } from "../tracker.ts";
 import { expandWrapperCommands } from "../wrappers.ts";
 import { cwdTracker } from "./cwd.ts";
+import { envTracker, type EnvState } from "./env.ts";
 
 // --------------------------------------------------------------------------
 // Helpers that wrap `walk` so each test reads like the original
@@ -256,20 +257,37 @@ describe("cwdTracker via walk", () => {
 		});
 	});
 
-	describe("unresolvable cd targets", () => {
-		it("`cd $VAR && cmd` — cmd sees initial cwd (parameter expansion)", () => {
+	describe("dynamic cd targets", () => {
+		// Tier B (PR #5): the walker emits the tracker's `unknown` sentinel
+		// when a cd target can't be statically resolved. Dynamic `$VAR`
+		// targets whose var isn't in env fall through to `unknown`; the
+		// engine's `when.cwd` predicate applies its `onUnknown: 'block'`
+		// default to fail-closed. Replaces the pre-Tier-B Phase 1 exception
+		// that returned `current` unchanged (silent-bypass risk for
+		// cwd-scoped rules on a dynamic path).
+		//
+		// When the walker runs with cwdTracker ALONE (no envTracker
+		// registered), cd falls back to `process.env.{HOME, USER, PWD}`
+		// for ~ and $HOME/x expansion so single-tracker users don't lose
+		// tilde expansion. Tests below use that path because they walk
+		// with just `{ cwd: cwdTracker }`.
+
+		it("`cd $VAR && cmd` — cmd sees `unknown` sentinel (unregistered var)", () => {
 			const cwds = cwdByName("cd $VAR && cmd", "/start");
-			assert.equal(cwds["cmd"], "/start");
-			assert.notStrictEqual(
+			assert.equal(
 				cwds["cmd"],
 				cwdTracker.unknown,
-				"Phase 1 preserves prior behavior: cd with dynamic target keeps current cwd, does NOT emit unknown sentinel. Phase 2 flips this simultaneously with onUnknown:block predicate default.",
+				"Tier B flip: dynamic $VAR now surfaces the unknown sentinel instead of silently carrying /start forward",
 			);
 		});
 
-		it('`cd "$HOME/x" && cmd` — cmd sees initial cwd (double-quoted expansion)', () => {
+		it('`cd "$HOME/x" && cmd` — HOME is in the process-env fallback, so cmd sees the expanded path', () => {
 			const cwds = cwdByName('cd "$HOME/x" && cmd', "/start");
-			assert.equal(cwds["cmd"], "/start");
+			assert.equal(
+				cwds["cmd"],
+				"/home/me/x",
+				"HOME comes from the process.env fallback (see cwd.ts effectiveEnv). Tests seed HOME='/home/me' in beforeEach.",
+			);
 		});
 
 		it("`cd 'literal-with-$VAR' && cmd` — single-quoted is statically resolvable", () => {
@@ -277,15 +295,30 @@ describe("cwdTracker via walk", () => {
 			assert.equal(cwds["cmd"], "/start/literal-with-$VAR");
 		});
 
-		it("`cd $(pwd) && cmd` — cmd sees initial cwd (command substitution)", () => {
+		it("`cd $(pwd) && cmd` — cmd sees `unknown` (command substitution is always intractable)", () => {
 			const cwds = cwdByName("cd $(pwd) && cmd", "/start");
-			assert.equal(cwds["cmd"], "/start");
+			assert.equal(cwds["cmd"], cwdTracker.unknown);
 		});
 
 		it("the unresolvable `cd` itself is still recorded at the pre-cd cwd", () => {
+			// Sequential modifiers record the PRE-sequential value for the
+			// command that fires the modifier — preserved by the walker's
+			// recorded/threaded split. The sentinel only lands on SUBSEQUENT
+			// siblings.
 			const ordered = cwdByOrder("cd $VAR && cmd", "/start");
 			const cd = ordered.find(([n]) => n === "cd");
 			assert.equal(cd?.[1], "/start");
+		});
+
+		it("`cd $UNDEFINED; cd /static; cmd` — once unknown, a later static cd re-resolves", () => {
+			// Sanity check the sticky-vs-refreshable semantics. A later
+			// sequential modifier that returns a CONCRETE value replaces the
+			// unknown sentinel for downstream siblings. This matches the
+			// engine's behavior: rule authors write `when.cwd` patterns
+			// assuming cwd is the last known static value; the sentinel only
+			// fires when the CURRENT command's cwd is unresolvable.
+			const cwds = cwdByName("cd $UNDEFINED && cd /static && cmd", "/start");
+			assert.equal(cwds["cmd"], "/static");
 		});
 	});
 
@@ -640,5 +673,155 @@ describe("cwdTracker per-command modifiers (via walk)", () => {
 		it("-- terminates options", () => {
 			assert.equal(singleCmdCwd("env -- cmd -C /z", "/start"), "/start");
 		});
+	});
+});
+
+// --------------------------------------------------------------------------
+// Env-aware cd resolution (Tier B of PR #5).
+//
+// Exercises the cross-tracker `allState` read: cd's modifier receives
+// the current envTracker state via `allState.env`, and `$VAR` / `~`
+// expansion reads from that map. These tests register both trackers
+// together — the end-to-end shape the pi-steering evaluator uses.
+// --------------------------------------------------------------------------
+
+/**
+ * Walk `raw` with BOTH cwd and env trackers, optionally seeded.
+ * Returns per-ref { cwd, env } snapshots for basename lookups.
+ */
+function walkCwdEnv(
+	raw: string,
+	options: { cwd?: string; env?: EnvState } = {},
+) {
+	const ast = parseBash(raw);
+	return walk<{ cwd: string; env: EnvState }>(
+		ast,
+		{
+			cwd: options.cwd ?? "/start",
+			env: options.env ?? new Map(),
+		},
+		{ cwd: cwdTracker, env: envTracker },
+	);
+}
+
+/** Map basename → cwd, preserving first-occurrence wins. */
+function cwdByNameFull(
+	raw: string,
+	options: { cwd?: string; env?: EnvState } = {},
+): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [ref, snap] of walkCwdEnv(raw, options)) {
+		const name = getBasename(ref);
+		if (!(name in out)) out[name] = snap.cwd;
+	}
+	return out;
+}
+
+describe("cwdTracker + envTracker integration (env-aware cd)", () => {
+	it("bare-assignment then cd through $VAR: the RDS-migration-findings workflow", () => {
+		// The canonical Tier B use case: set a workspace dir, cd into a
+		// subpath, run a guarded command. Before Tier B, cmd's cwd was
+		// /start (Phase 1 exception); now it's /ws/pkg, and the engine's
+		// `when.cwd: /workspace/` rules fire correctly.
+		const cwds = cwdByNameFull('WS=/ws; cd "$WS/pkg"; cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], "/ws/pkg");
+	});
+
+	it("export NAME=VALUE also feeds the env map", () => {
+		const cwds = cwdByNameFull('export WS=/ws && cd "$WS/src" && cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], "/ws/src");
+	});
+
+	it("${VAR} brace form resolves the same as $VAR", () => {
+		const cwds = cwdByNameFull('WS=/ws; cd "${WS}/pkg"; cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], "/ws/pkg");
+	});
+
+	it("`cd $UNDEFINED` → walker emits `unknown` sentinel (fail-closed via onUnknown default)", () => {
+		// The spec's success-criteria example. $UNDEFINED is not in env,
+		// resolveWord returns undefined, the walker surfaces the tracker's
+		// unknown sentinel. The engine's `when.cwd` built-in predicate
+		// reads this and applies `onUnknown: 'block'` (fail-closed default)
+		// so rules with `when: { cwd: /\/workspace/ }` fire.
+		const cwds = cwdByNameFull('cd "$UNDEFINED"; cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
+	it("`cd \"$UNDEFINED/x\"` → unknown (partial expansion fails the whole word)", () => {
+		const cwds = cwdByNameFull('cd "$UNDEFINED/x"; cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
+	it("seed env explicitly: HOME override resolves `cd ~/proj`", () => {
+		const cwds = cwdByNameFull("cd ~/proj && cmd", {
+			cwd: "/start",
+			env: new Map([["HOME", "/alt/home"]]),
+		});
+		assert.equal(cwds["cmd"], "/alt/home/proj");
+	});
+
+	it("seed env explicitly: unseeded var falls to unknown", () => {
+		const cwds = cwdByNameFull('cd "$WS" && cmd', {
+			cwd: "/start",
+			env: new Map([["OTHER", "/nope"]]),
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
+	it("subshell isolation: `(FOO=/s; cd \"$FOO\"); cmd` — outer env unchanged, outer cwd unchanged", () => {
+		// Spec success criterion: outer has no FOO, outer cwd returns to initial.
+		const map = walkCwdEnv('(FOO=/s; cd "$FOO"); cmd', { cwd: "/start" });
+		const cmdSnap = Array.from(map).find(([ref]) => getBasename(ref) === "cmd");
+		assert.ok(cmdSnap);
+		assert.equal(
+			cmdSnap[1].cwd,
+			"/start",
+			"subshell's cd didn't leak; outer cmd sees initial",
+		);
+		assert.equal(
+			cmdSnap[1].env.has("FOO"),
+			false,
+			"subshell's env assignment didn't leak",
+		);
+	});
+
+	it("unset then cd via the unset var → unknown", () => {
+		const cwds = cwdByNameFull('WS=/ws; unset WS; cd "$WS"; cmd', {
+			cwd: "/start",
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
+	it("env seed preserved across cd-unknown: later static cd refreshes", () => {
+		// After `cd $UNDEFINED`, cwd is unknown; a later `cd /a` refreshes.
+		// env should NOT get wiped — it's a separate tracker.
+		const map = walkCwdEnv(
+			'WS=/ws; cd "$UNDEFINED"; cd /a; cmd',
+			{ cwd: "/start" },
+		);
+		const cmdSnap = Array.from(map).find(([ref]) => getBasename(ref) === "cmd");
+		assert.ok(cmdSnap);
+		assert.equal(cmdSnap[1].cwd, "/a");
+		assert.equal(cmdSnap[1].env.get("WS"), "/ws");
+	});
+
+	it("chained: `WS=/ws; cd $WS/pkg; cmd` — walkerState.env carries WS + cmd.cwd resolves", () => {
+		// Spec success-criterion example, asserted in walker shape before
+		// the engine round-trip lands in pi-steering.
+		const map = walkCwdEnv('WS="/ws"; cd "$WS/pkg"; cmd');
+		const cmdSnap = Array.from(map).find(([ref]) => getBasename(ref) === "cmd");
+		assert.ok(cmdSnap);
+		assert.equal(cmdSnap[1].cwd, "/ws/pkg");
+		assert.equal(cmdSnap[1].env.get("WS"), "/ws");
 	});
 });
