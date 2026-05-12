@@ -61,7 +61,11 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../defaults.ts";
-import { createAppendEntry } from "../evaluator-internals/context.ts";
+import {
+	AGENT_LOOP_INDEX_KEY,
+	createAppendEntry,
+	isPlainObject,
+} from "../evaluator-internals/context.ts";
 import {
 	buildEvaluator,
 	type EvaluatorHost,
@@ -293,6 +297,79 @@ export interface MockEntry {
 }
 
 /**
+ * Options for {@link priorEntry}.
+ */
+export interface PriorEntryOptions {
+	/**
+	 * Agent-loop index to stamp on the payload. The engine's live
+	 * `appendEntry` wrapper stamps this automatically on every write;
+	 * fixture entries must reproduce the same shape so `when.happened:
+	 * { in: "agent_loop" }` scope filtering works identically whether
+	 * the entry was written at runtime or seeded into the mock.
+	 *
+	 * Defaults to `0`. Set to the value of {@link MockContextOptions.agentLoopIndex}
+	 * to place the entry in the current agent loop; set to a lower
+	 * value (or 0 with `agentLoopIndex: 1+` on the context) to place
+	 * it in a prior agent loop.
+	 */
+	readonly agentLoopIndex?: number;
+
+	/**
+	 * ISO-8601 timestamp string. Defaults to `"2026-01-01T00:00:00.000Z"`.
+	 * Use distinct, monotonically-increasing timestamps when seeding
+	 * multiple entries the `since` invalidation sentinel needs to
+	 * order.
+	 */
+	readonly timestamp?: string;
+}
+
+/**
+ * Build a {@link MockEntry} for {@link MockContextOptions.entries}
+ * (and the observer-context equivalent) with the reserved
+ * `_agentLoopIndex` tag stamped on the payload exactly as the live
+ * engine's `appendEntry` wrapper would.
+ *
+ * The reserved-key name is kept as an internal detail of the engine
+ * so plugin / fixture authors don't have to remember the underscore
+ * prefix. A typo on the `agentLoopIndex` field of {@link PriorEntryOptions}
+ * is a TypeScript compile error; the equivalent typo on a hand-rolled
+ * `data: { agentLoopIndex: 5 }` literal is silent — the entry passes
+ * through `findEntries` but then fails to match the current
+ * agent-loop scope, and the rule under test appears to misbehave.
+ *
+ * Payload shaping mirrors the live `createAppendEntry`:
+ *   - Plain-object `data`: merged as `{ ...data, _agentLoopIndex }`.
+ *   - Anything else (arrays, Date, Map, Set, Error, primitives,
+ *     null, undefined): wrapped as `{ value: data, _agentLoopIndex }`.
+ *
+ * @example
+ *   const ctx = mockContext({
+ *     agentLoopIndex: 5,
+ *     entries: [
+ *       priorEntry("ws-sync-done", {}, { agentLoopIndex: 5 }),
+ *     ],
+ *   });
+ *   // `when.happened: { event: "ws-sync-done", in: "agent_loop" }`
+ *   // now sees the entry as "happened in the current loop".
+ */
+export function priorEntry(
+	customType: string,
+	data?: unknown,
+	opts?: PriorEntryOptions,
+): MockEntry {
+	const agentLoopIndex = opts?.agentLoopIndex ?? 0;
+	const tagged = isPlainObject(data)
+		? { ...data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
+		: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
+	return {
+		type: "custom",
+		customType,
+		timestamp: opts?.timestamp ?? "2026-01-01T00:00:00.000Z",
+		data: tagged,
+	};
+}
+
+/**
  * Re-exported for plugin authors constructing `toolCallEvents`
  * fixtures on {@link MockContextOptions}. Structurally `{ data,
  * timestamp, speculative: true }` — the same shape the walker-level
@@ -350,6 +427,14 @@ export interface MockContextOptions {
 	 * Prior session entries `findEntries` reads from. Filtered by
 	 * customType; timestamps parsed from the ISO string to epoch-ms,
 	 * matching the production shape.
+	 *
+	 * For rules that use `when.happened: { in: "agent_loop" }` (or
+	 * `in: "session"` with the same-loop filter), construct entries
+	 * via {@link priorEntry} so the engine's reserved
+	 * `_agentLoopIndex` tag is stamped correctly — hand-rolled
+	 * literals with a typo (`agentLoopIndex` instead of the underscore
+	 * form) silently fail to match the current agent-loop scope and
+	 * the rule appears to misbehave.
 	 */
 	readonly entries?: ReadonlyArray<MockEntry>;
 

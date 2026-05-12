@@ -138,7 +138,7 @@ export const AGENT_LOOP_INDEX_KEY = "_agentLoopIndex" as const;
  * the array case is the one most likely to hit this wrapper (an
  * observer appending a list of watched paths). Cheap to check twice.
  */
-function isPlainObject(x: unknown): x is Record<string, unknown> {
+export function isPlainObject(x: unknown): x is Record<string, unknown> {
 	if (x === null || typeof x !== "object") return false;
 	if (Array.isArray(x)) return false;
 	if (Object.prototype.toString.call(x) !== "[object Object]") return false;

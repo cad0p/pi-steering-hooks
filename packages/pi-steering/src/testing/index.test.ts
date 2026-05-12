@@ -38,6 +38,7 @@ import {
 	mockContext,
 	mockExtensionContext,
 	mockObserverContext,
+	priorEntry,
 	runMatrix,
 	testObserver,
 	testPredicate,
@@ -1268,5 +1269,70 @@ describe("mockExtensionContext", () => {
 			0,
 		);
 		assert.equal(allowed, undefined);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// priorEntry
+// ---------------------------------------------------------------------------
+
+describe("priorEntry", () => {
+	it("merges _agentLoopIndex into plain-object data", () => {
+		const entry = priorEntry("ws-sync-done", { note: "merged" }, { agentLoopIndex: 5 });
+		assert.deepEqual(entry, {
+			type: "custom",
+			customType: "ws-sync-done",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			data: { note: "merged", _agentLoopIndex: 5 },
+		});
+	});
+
+	it("wraps primitive data as { value, _agentLoopIndex }", () => {
+		const entry = priorEntry("counter", 42, { agentLoopIndex: 2 });
+		assert.deepEqual(entry.data, { value: 42, _agentLoopIndex: 2 });
+	});
+
+	it("wraps array data as { value, _agentLoopIndex } (not merged)", () => {
+		const entry = priorEntry("list", [1, 2, 3], { agentLoopIndex: 1 });
+		assert.deepEqual(entry.data, { value: [1, 2, 3], _agentLoopIndex: 1 });
+	});
+
+	it("wraps undefined data as { value: undefined, _agentLoopIndex }", () => {
+		const entry = priorEntry("flag", undefined, { agentLoopIndex: 3 });
+		assert.deepEqual(entry.data, { value: undefined, _agentLoopIndex: 3 });
+	});
+
+	it("wraps null data as { value: null, _agentLoopIndex } (null is not a plain object)", () => {
+		const entry = priorEntry("sentinel", null, { agentLoopIndex: 0 });
+		assert.deepEqual(entry.data, { value: null, _agentLoopIndex: 0 });
+	});
+
+	it("defaults agentLoopIndex to 0 when opts omitted", () => {
+		const entry = priorEntry("marker", {});
+		assert.deepEqual(entry.data, { _agentLoopIndex: 0 });
+		assert.equal(entry.timestamp, "2026-01-01T00:00:00.000Z");
+		assert.equal(entry.type, "custom");
+		assert.equal(entry.customType, "marker");
+	});
+
+	it("respects custom timestamp when provided", () => {
+		const entry = priorEntry("t", {}, {
+			agentLoopIndex: 0,
+			timestamp: "2026-06-15T12:34:56.789Z",
+		});
+		assert.equal(entry.timestamp, "2026-06-15T12:34:56.789Z");
+	});
+
+	it("round-trip with mockContext: entry is visible to findEntries with scope tag intact", () => {
+		// The entry should flow from `entries` through `findEntries` with
+		// its data shape preserved, INCLUDING the _agentLoopIndex tag —
+		// that's what lets the engine's agent_loop scope filter match it.
+		const ctx = mockContext({
+			agentLoopIndex: 5,
+			entries: [priorEntry("ws-sync-done", {}, { agentLoopIndex: 5 })],
+		});
+		const hits = ctx.findEntries<{ _agentLoopIndex: number }>("ws-sync-done");
+		assert.equal(hits.length, 1);
+		assert.equal(hits[0]?.data._agentLoopIndex, 5);
 	});
 });
