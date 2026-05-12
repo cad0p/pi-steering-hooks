@@ -816,6 +816,19 @@ describe("cwdTracker + envTracker integration (env-aware cd)", () => {
 		assert.equal(cwds["cmd"], cwdTracker.unknown);
 	});
 
+	it("`cd ~` (bare) with HOME absent from env → unknown (fail-closed, not silent no-op)", () => {
+		// Consistency with `cd $HOME` when HOME is unset: the dynamic
+		// expansion path returns undefined → walker emits unknown. Bare
+		// `cd ~` used to silently no-op (stay at current cwd) when HOME
+		// was unresolvable, bypassing onUnknown fail-closed. Now emits
+		// the sentinel so `when.cwd: /\/workspace/` fires as expected.
+		const cwds = cwdByNameFull("cd ~ && cmd", {
+			cwd: "/start",
+			env: new Map(), // HOME explicitly absent
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
 	it("subshell isolation: `(FOO=/s; cd \"$FOO\"); cmd` — outer env unchanged, outer cwd unchanged", () => {
 		// Spec success criterion: outer has no FOO, outer cwd returns to initial.
 		const map = walkCwdEnv('(FOO=/s; cd "$FOO"); cmd', { cwd: "/start" });

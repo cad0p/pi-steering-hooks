@@ -154,9 +154,17 @@ describe("resolveWord", () => {
 			);
 		});
 
-		it("HOME missing → ~ stays literal", () => {
+		it("HOME missing → ~ / ~/... become undefined (fail-closed via walker unknown sentinel)", () => {
+			// Before the cd~-absent-HOME fix, expandTildeIfLeading fell back
+			// to the literal string. Callers then saw `~/proj` as a path,
+			// which silently bypassed `when.cwd` guards. Now resolveWord
+			// returns undefined — the cd modifier propagates, the walker
+			// emits unknown, and engine's onUnknown: "block" fires.
 			const w = wordFromCdArg("~/proj");
-			assert.equal(resolveWord(w, new Map()), "~/proj");
+			assert.equal(resolveWord(w, new Map()), undefined);
+
+			const bare = wordFromCdArg("~");
+			assert.equal(resolveWord(bare, new Map()), undefined);
 		});
 
 		it("quoted tilde is NOT expanded", () => {

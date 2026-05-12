@@ -98,7 +98,9 @@ export function resolveWord(
 		// when that part is a bare Literal that starts with `~` — same
 		// semantic rule as bash (quoted `~` is not expanded).
 		if (i === 0 && part.type === "Literal") {
-			out += expandTildeIfLeading(resolved, env);
+			const expanded = expandTildeIfLeading(resolved, env);
+			if (expanded === undefined) return undefined;
+			out += expanded;
 		} else {
 			out += resolved;
 		}
@@ -123,19 +125,40 @@ export function resolveWord(
  * defined outside `resolveWord` to keep the hot path inside the
  * parts-loop short (no closure).
  */
+/**
+ * Apply tilde expansion to a leading `~` using `env.get("HOME")`.
+ *
+ * Semantics:
+ *   - `~` alone → HOME, or `undefined` if HOME is absent (walker
+ *     emits unknown sentinel → engine fail-closes via `onUnknown`).
+ *   - `~/rest` → `HOME + "/" + rest`, or `undefined` if HOME absent.
+ *   - `~user` / `~user/rest` → returned unchanged (we don't model
+ *     arbitrary user HOME directories; cd would fail at runtime
+ *     on a nonexistent user). Documented known limit — narrow
+ *     enough that flipping it to `undefined` is left as a
+ *     follow-up if it becomes an agent-bypass class.
+ *   - No leading `~` → returns input unchanged.
+ *
+ * Not exported — only internal to `resolveWord`. The function is
+ * defined outside `resolveWord` to keep the hot path inside the
+ * parts-loop short (no closure).
+ */
 function expandTildeIfLeading(
 	s: string,
 	env: ReadonlyMap<string, string>,
-): string {
+): string | undefined {
 	if (s.length === 0) return s;
 	if (s[0] !== "~") return s;
-	if (s === "~") return env.get("HOME") ?? s;
+	if (s === "~") {
+		const home = env.get("HOME");
+		return home ?? undefined;
+	}
 	if (s.startsWith("~/")) {
 		const home = env.get("HOME");
-		if (home === undefined) return s;
+		if (home === undefined) return undefined;
 		return home + s.slice(1);
 	}
-	// `~user` — we don't model arbitrary user HOME directories.
+	// `~user` / `~user/rest` — unsupported; returned unchanged.
 	return s;
 }
 

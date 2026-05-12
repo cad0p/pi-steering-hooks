@@ -108,13 +108,19 @@ function effectiveEnv(allState: Readonly<Record<string, unknown>>): EnvState {
  * (see {@link PROCESS_ENV_FALLBACK}) so single-tracker walker users
  * don't lose tilde expansion.
  *
+ * Returns `undefined` when HOME is absent from both the env map AND
+ * process.env — the cd modifier surfaces this as the walker's
+ * "unknown" sentinel, matching the behavior of `cd $HOME` with
+ * unset HOME (statically unresolvable → emit unknown → engine
+ * fail-closes via `onUnknown: "block"`).
+ *
  * Used by the bare-`cd` code path (no args → HOME). For `cd <target>`,
  * tilde expansion happens inside {@link resolveWord}, which is
  * quote-aware — bare `~/proj` expands, double-quoted `"~/proj"`
  * does not (matching bash).
  */
-function resolveHome(current: string, env: EnvState): string {
-	return env.get("HOME") ?? current;
+function resolveHome(env: EnvState): string | undefined {
+	return env.get("HOME");
 }
 
 /**
@@ -187,7 +193,7 @@ const cdModifier: Modifier<string, { env: EnvState }> = {
 		const targetWord = args[0];
 
 		// `cd` with no arguments → HOME.
-		if (targetWord === undefined) return resolveHome(current, env);
+		if (targetWord === undefined) return resolveHome(env);
 
 		// Route every target — static or dynamic, quoted or unquoted —
 		// through resolveWord so tilde + env expansion are quote-aware
