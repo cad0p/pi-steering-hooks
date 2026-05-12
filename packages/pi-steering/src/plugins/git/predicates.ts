@@ -51,6 +51,13 @@ import type {
 	PredicateHandler,
 } from "../../schema.ts";
 import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
+import {
+	getCommitsAhead,
+	getRemoteUrl,
+	getStagedChanges,
+	getUpstream,
+	getWorkingTreeClean,
+} from "./git-ops.ts";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -113,14 +120,14 @@ function unknownVerdict(onUnknown: "allow" | "block"): boolean {
 }
 
 /**
- * Run a shell command and return its trimmed stdout on exit 0, or
- * `null` on any failure (non-zero exit, spawn error, timeout, ...).
+ * Direct one-shot git exec used only by the `branch` predicate's
+ * tracker-missing fallback (the predicate's three-way tracker
+ * discrimination stays in predicate-land; see the `branch` JSDoc).
+ * Other predicates delegate to helpers in `./git-ops.ts` and don't
+ * need this.
  *
- * Callers map `null` to their `onUnknown` policy. A thrown exception
- * inside `ctx.exec` (e.g. the command path couldn't be resolved) is
- * caught and also returned as `null` - predicates should not surface
- * bespoke errors; "I couldn't learn the answer" is uniformly handled
- * via `onUnknown`.
+ * Mirrors the failure-collapse contract of `tryGit` in git-ops:
+ * non-zero exit, spawn error, or thrown exception → `null`.
  */
 async function tryExec(
 	ctx: PredicateContext,
@@ -292,13 +299,8 @@ export const upstream: PredicateHandler = async (value, ctx) => {
 	const arg = unwrapPatternArg(value);
 	if (arg === null) return false;
 
-	const out = await tryExec(
-		ctx,
-		"git",
-		["rev-parse", "--abbrev-ref", "@{upstream}"],
-		ctx.cwd,
-	);
-	if (out === null || out.length === 0) return unknownVerdict(arg.onUnknown);
+	const out = await getUpstream(ctx);
+	if (out === null) return unknownVerdict(arg.onUnknown);
 	return matchPattern(arg.pattern, out);
 };
 
@@ -360,15 +362,8 @@ export const commitsAhead: PredicateHandler<CommitsAheadArgs> = async (
 		return false;
 	}
 
-	const out = await tryExec(
-		ctx,
-		"git",
-		["rev-list", "--count", `${wrt}..HEAD`],
-		ctx.cwd,
-	);
-	if (out === null) return false;
-	const count = Number.parseInt(out, 10);
-	if (!Number.isFinite(count)) return false;
+	const count = await getCommitsAhead(ctx, wrt);
+	if (count === null) return false;
 
 	if (eq !== undefined && count !== eq) return false;
 	if (gt !== undefined && !(count > gt)) return false;
@@ -398,20 +393,9 @@ export const hasStagedChanges: PredicateHandler<boolean> = async (
 	ctx,
 ) => {
 	if (typeof args !== "boolean") return false;
-	let exitCode: number | null = null;
-	try {
-		const res = await ctx.exec(
-			"git",
-			["diff", "--cached", "--quiet"],
-			{ cwd: ctx.cwd },
-		);
-		exitCode = res.exitCode;
-	} catch {
-		return false;
-	}
-	if (exitCode === 0) return args === false; // no staged changes
-	if (exitCode === 1) return args === true; //   staged changes present
-	return false; // unexpected - don't fire
+	const state = await getStagedChanges(ctx);
+	if (state === null) return false; // unknown — don't fire
+	return args === state;
 };
 
 // ---------------------------------------------------------------------------
@@ -433,9 +417,8 @@ export const hasStagedChanges: PredicateHandler<boolean> = async (
  */
 export const isClean: PredicateHandler<boolean> = async (args, ctx) => {
 	if (typeof args !== "boolean") return false;
-	const out = await tryExec(ctx, "git", ["status", "--porcelain"], ctx.cwd);
-	if (out === null) return false;
-	const clean = out.length === 0;
+	const clean = await getWorkingTreeClean(ctx);
+	if (clean === null) return false;
 	return args === clean;
 };
 
@@ -457,13 +440,8 @@ export const remote: PredicateHandler = async (value, ctx) => {
 	const arg = unwrapPatternArg(value);
 	if (arg === null) return false;
 
-	const out = await tryExec(
-		ctx,
-		"git",
-		["config", "--get", "remote.origin.url"],
-		ctx.cwd,
-	);
-	if (out === null || out.length === 0) return unknownVerdict(arg.onUnknown);
+	const out = await getRemoteUrl(ctx);
+	if (out === null) return unknownVerdict(arg.onUnknown);
 	return matchPattern(arg.pattern, out);
 };
 

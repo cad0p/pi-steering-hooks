@@ -23,6 +23,20 @@
  *                              parser layered on the core cwd tracker.
  *                              See `./cwd-extensions.ts`.
  *
+ * Also re-exported as composable building blocks for downstream
+ * plugins (e.g. RDS-style multi-package `cr --all` scans that need
+ * to query git state per subpackage directory):
+ *
+ *   - `getBranch(ctx, cwd?)`            — current branch or `null`
+ *   - `getUpstream(ctx, cwd?)`          — upstream name or `null`
+ *   - `getCommitsAhead(ctx, wrt?, cwd?)` — commit count or `null`
+ *   - `getStagedChanges(ctx, cwd?)`     — boolean or `null`
+ *   - `getWorkingTreeClean(ctx, cwd?)`  — boolean or `null`
+ *   - `getRemoteUrl(ctx, cwd?)`         — origin URL or `null`
+ *
+ * See `./git-ops.ts` for the helper contract (all collapse failure
+ * modes to `null`; caller decides what to do with it).
+ *
  * Default-on as of v0.1.0. Registered automatically via
  * {@link DEFAULT_PLUGINS}; users do not need to import and register
  * explicitly. Opt out via `disabledPlugins: ["git"]` or
@@ -91,6 +105,14 @@ export default gitPlugin;
 // `branch` predicate without the shipped rule).
 export { branchTracker } from "./branch-tracker.ts";
 export { gitCwdExtensions } from "./cwd-extensions.ts";
+export {
+	getBranch,
+	getCommitsAhead,
+	getRemoteUrl,
+	getStagedChanges,
+	getUpstream,
+	getWorkingTreeClean,
+} from "./git-ops.ts";
 export {
 	branch,
 	upstream,
