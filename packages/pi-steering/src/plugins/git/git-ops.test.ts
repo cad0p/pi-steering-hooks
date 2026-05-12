@@ -118,14 +118,6 @@ describe("getBranch", () => {
 		assert.equal(await getBranch(ctx), null);
 	});
 
-	it("routes to an explicit cwd override when given", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: OK("main") },
-		]);
-		await getBranch(ctx, "/other");
-		assert.equal(execCalls[0]?.cwd, "/other");
-	});
-
 	it("does NOT consult walkerState.branch (predicate-layer concern)", async () => {
 		// Helper always shells out. Walker-state shortcut is the
 		// predicate's responsibility. See git-ops.ts file header.
@@ -159,14 +151,6 @@ describe("getUpstream", () => {
 	it("returns null when no upstream configured (non-zero exit)", async () => {
 		const { ctx } = makeCtx([{ match: () => true, result: EXIT(128) }]);
 		assert.equal(await getUpstream(ctx), null);
-	});
-
-	it("routes to an explicit cwd override", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: OK("origin/main") },
-		]);
-		await getUpstream(ctx, "/repo-b");
-		assert.equal(execCalls[0]?.cwd, "/repo-b");
 	});
 });
 
@@ -210,14 +194,6 @@ describe("getCommitsAhead", () => {
 		]);
 		assert.equal(await getCommitsAhead(ctx), null);
 	});
-
-	it("routes to an explicit cwd override", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: OK("0") },
-		]);
-		await getCommitsAhead(ctx, "origin/main", "/other");
-		assert.equal(execCalls[0]?.cwd, "/other");
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -249,14 +225,6 @@ describe("getStagedChanges", () => {
 		]);
 		assert.equal(await getStagedChanges(ctx), null);
 	});
-
-	it("routes to an explicit cwd override", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: EXIT(0) },
-		]);
-		await getStagedChanges(ctx, "/other");
-		assert.equal(execCalls[0]?.cwd, "/other");
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -282,14 +250,6 @@ describe("getWorkingTreeClean", () => {
 	it("returns null on non-zero exit", async () => {
 		const { ctx } = makeCtx([{ match: () => true, result: EXIT(128) }]);
 		assert.equal(await getWorkingTreeClean(ctx), null);
-	});
-
-	it("routes to an explicit cwd override", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: OK("") },
-		]);
-		await getWorkingTreeClean(ctx, "/other");
-		assert.equal(execCalls[0]?.cwd, "/other");
 	});
 });
 
@@ -325,14 +285,54 @@ describe("getRemoteUrl", () => {
 		const { ctx } = makeCtx([{ match: () => true, result: OK("\n") }]);
 		assert.equal(await getRemoteUrl(ctx), null);
 	});
+});
 
-	it("routes to an explicit cwd override", async () => {
-		const { ctx, execCalls } = makeCtx([
-			{ match: () => true, result: OK("git@github.com:org/repo.git") },
-		]);
-		await getRemoteUrl(ctx, "/other");
-		assert.equal(execCalls[0]?.cwd, "/other");
-	});
+// ---------------------------------------------------------------------------
+// Shared cwd-routing contract (parameterized across all helpers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every helper accepts an optional trailing `cwd` override. When omitted,
+ * it routes to `ctx.cwd`; when passed, it routes to the explicit value.
+ * These two axes used to live as ad-hoc tests inside each helper's
+ * describe block; consolidating here guarantees the contract is uniform
+ * and prevents one helper's routing from drifting silently.
+ */
+const cwdRoutingCases: ReadonlyArray<{
+	name: string;
+	fixture: ExecResult;
+	call: (ctx: PredicateContext, cwd?: string) => Promise<unknown>;
+}> = [
+	{ name: "getBranch", fixture: OK("main"), call: (c, cwd) => getBranch(c, cwd) },
+	{ name: "getUpstream", fixture: OK("origin/main"), call: (c, cwd) => getUpstream(c, cwd) },
+	{
+		name: "getCommitsAhead",
+		fixture: OK("0"),
+		call: (c, cwd) => getCommitsAhead(c, "origin/main", cwd),
+	},
+	{ name: "getStagedChanges", fixture: EXIT(0), call: (c, cwd) => getStagedChanges(c, cwd) },
+	{ name: "getWorkingTreeClean", fixture: OK(""), call: (c, cwd) => getWorkingTreeClean(c, cwd) },
+	{
+		name: "getRemoteUrl",
+		fixture: OK("git@github.com:org/repo.git"),
+		call: (c, cwd) => getRemoteUrl(c, cwd),
+	},
+];
+
+describe("cwd routing (shared across all helpers)", () => {
+	for (const { name, fixture, call } of cwdRoutingCases) {
+		it(`${name}: routes to ctx.cwd by default (omitted cwd arg)`, async () => {
+			const { ctx, execCalls } = makeCtx([{ match: () => true, result: fixture }]);
+			await call(ctx);
+			assert.equal(execCalls[0]?.cwd, "/repo");
+		});
+
+		it(`${name}: routes to an explicit cwd override when given`, async () => {
+			const { ctx, execCalls } = makeCtx([{ match: () => true, result: fixture }]);
+			await call(ctx, "/other");
+			assert.equal(execCalls[0]?.cwd, "/other");
+		});
+	}
 });
 
 // ---------------------------------------------------------------------------
