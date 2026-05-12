@@ -60,15 +60,6 @@ import { seedProcessEnv } from "../internal/seed-process-env.ts";
 export type EnvState = ReadonlyMap<string, string>;
 
 /**
- * Shared empty env passed to {@link resolveWord} for assignment
- * RHS resolution. v0.1.0 doesn't thread the current env map
- * through the assignment modifiers (see D1 deferral note in
- * {@link bareAssignModifier}'s JSDoc); a constant empty map is
- * the right shape to signal "no lookup" to `resolveWord`.
- */
-const EMPTY_ENV: EnvState = new Map();
-
-/**
  * Resolve a synthesized assignment Word (shape: Literal("NAME=") +
  * RHS parts) into `{ name, value }`. Returns `undefined` when:
  *   - the word's RHS isn't statically resolvable (dynamic value),
@@ -169,25 +160,23 @@ function withDelete(current: EnvState, names: readonly string[]): EnvState {
  * here as multiple synthetic Words. We process them in order so
  * both assignments land.
  *
- * Dynamic values like `FOO=$OTHER` are skipped in this pass —
- * `resolveWord` with an empty env returns `undefined` for any
- * parameter expansion / command substitution / arithmetic, which
- * the modifier reads as "not statically known, skip". Cross-reading
- * the current env via `allState.env` to resolve such values is
- * deferred — the canonical Tier B use case is `WS=/ws; cd "$WS/..."`,
- * not `FOO=$BAR; cd "$FOO"`. If agent patterns surface the multi-hop
- * case, a follow-up can read `allState.env` and pass it to
- * `resolveWord` here.
+ * Multi-hop values (`FOO=$BAR` where BAR was set earlier in the chain)
+ * resolve against the modifier's threaded state. `resolveAssignmentWord`
+ * receives the accumulating env (`next`), so each iteration sees
+ * both prior-ref assignments (threaded via `current`) and same-call
+ * prior-assignment effects (threaded via `next`). `A=1; B=$A; cmd`
+ * ends with `env = {A:1, B:"1"}` at cmd.
+ *
+ * Dynamic values that can't be resolved — command substitution
+ * (`FOO=$(pwd)`), arithmetic (`FOO=$((1+2))`), unknown vars
+ * (`FOO=$UNDEFINED`) — produce `undefined` from `resolveWord`, which
+ * the modifier reads as "not statically known, skip". The assignment
+ * is discarded from the env map; env.has(NAME) is false.
  *
  * Double-quoted values (`FOO="some value"`) resolve through
  * `resolveWord` to their unquoted inner string (`"some value"`) —
  * the Word's inner `DoubleQuoted` part concatenates static child
  * parts to the unquoted value, matching the shell's own behavior.
- *
- * Multi-hop values (`FOO=$BAR` where BAR was set earlier in the chain)
- * resolve against the modifier's `current` env state, which is the
- * pre-ref snapshot from prior sibling commands. So `A=1; B=$A; cmd`
- * correctly ends with `env = {A:1, B:"1"}` at cmd.
  */
 const bareAssignModifier: Modifier<EnvState> = {
 	scope: "sequential",

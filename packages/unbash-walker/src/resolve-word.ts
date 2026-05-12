@@ -109,23 +109,6 @@ export function resolveWord(
 }
 
 /**
- * Expand a leading `~` or `~/…` via `env.get("HOME")`.
- *
- * Bash rule: `~` at the start of a word expands to `$HOME`,
- * `~/foo` expands to `$HOME/foo`. Bare `~` with nothing after it
- * is also `$HOME`. Tildes NOT at the start (`/a/~`) are literal.
- *
- * When `env` has no `HOME`, tilde expansion fails: return the
- * original string unchanged, matching the bash fallback where
- * `~` stays literal if HOME is unset. Callers that want a
- * stricter "fail on missing HOME" can set `env.HOME` explicitly
- * or pre-check.
- *
- * Not exported — only internal to `resolveWord`. The function is
- * defined outside `resolveWord` to keep the hot path inside the
- * parts-loop short (no closure).
- */
-/**
  * Apply tilde expansion to a leading `~` using `env.get("HOME")`.
  *
  * Semantics:

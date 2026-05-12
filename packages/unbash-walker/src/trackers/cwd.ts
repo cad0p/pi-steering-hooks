@@ -102,17 +102,19 @@ function effectiveEnv(allState: Readonly<Record<string, unknown>>): EnvState {
 }
 
 /**
- * Expand `~` / `~/...` using `env.get('HOME')`. The env map is the
- * source of truth once seeded by {@link envTracker}; when that
- * tracker isn't registered we fall back to a process-env snapshot
- * (see {@link PROCESS_ENV_FALLBACK}) so single-tracker walker users
- * don't lose tilde expansion.
+ * Resolve bare `cd` (no args) to the env map's HOME value.
  *
- * Returns `undefined` when HOME is absent from both the env map AND
- * process.env — the cd modifier surfaces this as the walker's
- * "unknown" sentinel, matching the behavior of `cd $HOME` with
- * unset HOME (statically unresolvable → emit unknown → engine
- * fail-closes via `onUnknown: "block"`).
+ * Returns `undefined` when HOME is absent from the env map — the
+ * cd modifier surfaces this as the walker's "unknown" sentinel,
+ * matching `cd $HOME` with unset HOME (statically unresolvable →
+ * emit unknown → engine fail-closes via `onUnknown: "block"`).
+ *
+ * The `env` argument is the effective env (from
+ * {@link effectiveEnv}): envTracker's per-ref map when that
+ * tracker is registered, or the process-env fallback when it's
+ * not. This function itself is env-map-only — the upstream
+ * fallback handles the "tracker-absent, seed from process.env"
+ * path.
  *
  * Used by the bare-`cd` code path (no args → HOME). For `cd <target>`,
  * tilde expansion happens inside {@link resolveWord}, which is
