@@ -183,13 +183,18 @@ function withDelete(current: EnvState, names: readonly string[]): EnvState {
  * `resolveWord` to their unquoted inner string (`"some value"`) —
  * the Word's inner `DoubleQuoted` part concatenates static child
  * parts to the unquoted value, matching the shell's own behavior.
+ *
+ * Multi-hop values (`FOO=$BAR` where BAR was set earlier in the chain)
+ * resolve against the modifier's `current` env state, which is the
+ * pre-ref snapshot from prior sibling commands. So `A=1; B=$A; cmd`
+ * correctly ends with `env = {A:1, B:"1"}` at cmd.
  */
 const bareAssignModifier: Modifier<EnvState> = {
 	scope: "sequential",
 	apply: (args, current) => {
 		let next = current;
 		for (const w of args) {
-			const resolved = resolveAssignmentWord(w, EMPTY_ENV);
+			const resolved = resolveAssignmentWord(w, next);
 			if (resolved === undefined) continue;
 			next = withSet(next, resolved.name, resolved.value);
 		}
@@ -233,7 +238,7 @@ const exportModifier: Modifier<EnvState> = {
 			// produces a resolved string with no `=`, which
 			// parseAssignmentToken rejects — matching our "we don't track
 			// the exported-bit attribute" stance.
-			const resolved = resolveAssignmentWord(w, EMPTY_ENV);
+			const resolved = resolveAssignmentWord(w, next);
 			if (resolved === undefined) continue;
 			next = withSet(next, resolved.name, resolved.value);
 		}
@@ -283,7 +288,7 @@ const unsetModifier: Modifier<EnvState> = {
 			// quoted forms alike via the shared helper. Double-quoted
 			// literal names (`unset "FOO"`) unquote to valid identifiers
 			// and are accepted.
-			const resolved = resolveWord(w, EMPTY_ENV);
+			const resolved = resolveWord(w, current);
 			if (resolved === undefined) continue;
 			if (!isIdentifierName(resolved)) continue;
 			names.push(resolved);

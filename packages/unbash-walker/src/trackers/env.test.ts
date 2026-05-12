@@ -85,9 +85,36 @@ describe("envTracker via walk", () => {
 			assert.equal(env.get("FOO"), "");
 		});
 
-		it("dynamic value `FOO=$OTHER` — skipped; FOO not set", () => {
+		it("dynamic value `FOO=$OTHER` with OTHER absent — skipped; FOO not set", () => {
 			const env = finalEnv("FOO=$OTHER; cmd");
 			assert.equal(env.has("FOO"), false);
+		});
+
+		it("multi-hop env: `OTHER=x; FOO=$OTHER; cmd` — FOO resolves to x", () => {
+			// Cross-tracker read via the modifier's `current` param, which is
+			// the envTracker's OWN threaded state from the prior ref. The
+			// `OTHER=x` ref writes to env; the `FOO=$OTHER` ref reads the
+			// updated env when resolving the RHS.
+			const env = finalEnv("OTHER=x; FOO=$OTHER; cmd");
+			assert.equal(env.get("OTHER"), "x");
+			assert.equal(env.get("FOO"), "x");
+		});
+
+		it("multi-hop env: `export A=1; export B=$A; cmd` — B resolves to 1", () => {
+			const env = finalEnv("export A=1; export B=$A; cmd");
+			assert.equal(env.get("A"), "1");
+			assert.equal(env.get("B"), "1");
+		});
+
+		it("multi-hop env: `HOME_DIR=$HOME; cmd` — resolves from pre-seeded env", () => {
+			// Pre-seed HOME via initial state so the test doesn't depend on
+			// process.env at test time. Exercises the same cross-ref read
+			// path; just with a deterministic source.
+			const env = finalEnv(
+				"HOME_DIR=$HOME; cmd",
+				new Map([["HOME", "/home/me"]]),
+			);
+			assert.equal(env.get("HOME_DIR"), "/home/me");
 		});
 
 		it("dynamic value `FOO=$(pwd)` — skipped; FOO not set", () => {
