@@ -95,6 +95,56 @@ describe("envTracker via walk", () => {
 			assert.equal(env.has("FOO"), false);
 		});
 
+		it("compound append `FOO+=append` — skipped; prior FOO unchanged (H2)", () => {
+			// Correctness fix H2: the parser attaches `append: true` to
+			// `AssignmentPrefix` for `FOO+=v`. Before the fix,
+			// synthesizeAssignmentWords ignored the flag and emitted
+			// `FOO=v`, silently REPLACING the existing FOO value. We now
+			// skip append-shape assignments; true append semantics can be
+			// added later once multi-hop env resolution is in scope.
+			const env = finalEnv("FOO=initial; FOO+=append; cmd");
+			assert.equal(
+				env.get("FOO"),
+				"initial",
+				"FOO+=append must not overwrite FOO; compound-append is skipped",
+			);
+		});
+
+		it("compound append `FOO+=append` with no prior FOO — skipped; FOO absent (H2)", () => {
+			// Complement of the prior pin: without a pre-existing FOO,
+			// the skip leaves the env untouched rather than surfacing an
+			// incorrect empty scalar.
+			const env = finalEnv("FOO+=append; cmd");
+			assert.equal(env.has("FOO"), false);
+		});
+
+		it("array init `FOO=(a b c)` — skipped; scalar FOO absent (H3)", () => {
+			// Correctness fix H3: parser emits `p.value === undefined` +
+			// `p.array !== undefined` for array init. Previously the
+			// synthesis produced `{name: "FOO", value: ""}` and stored an
+			// empty scalar, spuriously flipping `env.has("FOO")`
+			// predicates. We don't model bash arrays — skip.
+			const env = finalEnv("FOO=(a b c); cmd");
+			assert.equal(
+				env.has("FOO"),
+				false,
+				"array init must not surface as a scalar; skipped entirely",
+			);
+		});
+
+		it("array-index `FOO[0]=value` — skipped; scalar FOO absent (H4)", () => {
+			// Correctness fix H4: parser emits `p.index === "0"`. Bash
+			// would write to the array slot, leaving the scalar FOO
+			// untouched. Previously the walker wrote to the scalar; we
+			// now skip array-index assignments.
+			const env = finalEnv("FOO[0]=value; cmd");
+			assert.equal(
+				env.has("FOO"),
+				false,
+				"array-index assignment must not overwrite scalar FOO",
+			);
+		});
+
 		it("prefix assignment `A=1 cmd; cmd2` — cmd2 does NOT see A (per-command scope)", () => {
 			// `A=1 cmd` is a prefix assignment on `cmd` (one-shot env for cmd
 			// only). The env tracker must NOT propagate this to cmd2.

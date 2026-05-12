@@ -18,6 +18,14 @@
  *   - ❌ `declare` / `typeset` — attribute semantics deferred.
  *   - ❌ `source` / `.` — opaque file inclusion.
  *   - ❌ Function-body walking — function definitions don't execute.
+ *   - ❌ Compound assignment shapes (skipped at the parser-prefix
+ *        synthesis step in `tracker.ts:synthesizeAssignmentWords`):
+ *        - `FOO+=value` (append) — no-op; a future version may read
+ *          `allState.env` and do `env.set(NAME, old + value)` once
+ *          multi-hop env resolution lands.
+ *        - `FOO=(a b c)` (array init) — we don't track bash arrays;
+ *          skipped so scalar FOO is untouched.
+ *        - `FOO[0]=value` (array-index assignment) — same.
  *
  * See [[env-tracker-deferred-scope]] for the full deferred-scope
  * doc, including the trigger criteria for graduating each class

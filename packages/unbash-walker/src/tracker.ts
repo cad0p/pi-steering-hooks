@@ -572,6 +572,26 @@ function synthesizeAssignmentWords(
 ): readonly Word[] {
 	const out: Word[] = [];
 	for (const p of prefix) {
+		// Skip compound-assignment shapes that the parser flags but the
+		// env tracker doesn't model (Tier B correctness fixes H2/H3/H4):
+		//
+		//   - `FOO+=append` (`p.append === true`) — append op. The
+		//     previous code silently REPLACED FOO with the RHS
+		//     (synthesizing `FOO=append`), losing the existing value.
+		//     Skip for now; a follow-up can handle true append semantics
+		//     by reading `allState.env` once multi-hop env resolution
+		//     lands (v0.2 deferred per env.ts's module header).
+		//   - `FOO=(a b c)` array init (`p.array !== undefined`, `p.value
+		//     === undefined`). Previously surfaced as
+		//     `{name: "FOO", value: ""}` — an empty scalar that spuriously
+		//     flipped `env.has("FOO")` predicates. We don't track bash
+		//     arrays; skip.
+		//   - `FOO[0]=value` array-index assignment (`p.index !== undefined`).
+		//     Previously wrote to the scalar FOO; bash would write to the
+		//     array slot instead. Skip — we don't track arrays.
+		if (p.append === true) continue;
+		if (p.array !== undefined) continue;
+		if (p.index !== undefined) continue;
 		const name = p.name ?? "";
 		const leader: WordPart = {
 			type: "Literal",
