@@ -268,27 +268,7 @@ export function buildEvaluator(
 function composeBuiltinCwd(
 	extras: Record<string, Modifier<unknown>[]> | undefined,
 ): Tracker<string> {
-	if (!extras || Object.keys(extras).length === 0) return cwdTracker;
-	const merged: Record<string, Modifier<string> | Modifier<string>[]> = {};
-	for (const [basename, mod] of Object.entries(cwdTracker.modifiers)) {
-		merged[basename] = Array.isArray(mod)
-			? [...(mod as Modifier<string>[])]
-			: mod;
-	}
-	for (const [basename, mods] of Object.entries(extras)) {
-		const existing = merged[basename];
-		const extrasTyped = mods as unknown as Modifier<string>[];
-		if (existing === undefined) {
-			merged[basename] =
-				extrasTyped.length === 1 ? extrasTyped[0]! : [...extrasTyped];
-			continue;
-		}
-		const existingList = Array.isArray(existing)
-			? (existing as Modifier<string>[])
-			: [existing as Modifier<string>];
-		merged[basename] = [...existingList, ...extrasTyped];
-	}
-	return { ...cwdTracker, modifiers: merged };
+	return composeBuiltin(cwdTracker, extras);
 }
 
 /**
@@ -305,27 +285,53 @@ function composeBuiltinCwd(
 function composeBuiltinEnv(
 	extras: Record<string, Modifier<unknown>[]> | undefined,
 ): Tracker<EnvState> {
-	if (!extras || Object.keys(extras).length === 0) return envTracker;
-	const merged: Record<string, Modifier<EnvState> | Modifier<EnvState>[]> = {};
-	for (const [basename, mod] of Object.entries(envTracker.modifiers)) {
+	return composeBuiltin(envTracker, extras);
+}
+
+/**
+ * Generic tracker-extension compositor. Given a base tracker and a
+ * bucket of plugin-provided `{ basename -> Modifier[] }` extensions,
+ * returns a fresh tracker whose `modifiers` map fuses the two
+ * without mutating the base.
+ *
+ * Resolution rule per basename:
+ *   - Base has none, extras has 1+: extras become the entry
+ *     (unwrapped to a single Modifier when length is 1).
+ *   - Base has one or many, extras has 1+: concatenated into an
+ *     array ordered base-first, extras-after, so per-command
+ *     overrides layer in the expected sequence.
+ *
+ * Used by {@link composeBuiltinCwd} and {@link composeBuiltinEnv}
+ * to fold `trackerExtensions.cwd` / `trackerExtensions.env` from
+ * plugin registrations onto the built-ins. Keeping this helper
+ * internal (not exported) lets the plugin-merger stay agnostic of
+ * which built-in trackers exist.
+ */
+function composeBuiltin<T>(
+	baseTracker: Tracker<T>,
+	extras: Record<string, Modifier<unknown>[]> | undefined,
+): Tracker<T> {
+	if (!extras || Object.keys(extras).length === 0) return baseTracker;
+	const merged: Record<string, Modifier<T> | Modifier<T>[]> = {};
+	for (const [basename, mod] of Object.entries(baseTracker.modifiers)) {
 		merged[basename] = Array.isArray(mod)
-			? [...(mod as Modifier<EnvState>[])]
+			? [...(mod as Modifier<T>[])]
 			: mod;
 	}
 	for (const [basename, mods] of Object.entries(extras)) {
 		const existing = merged[basename];
-		const extrasTyped = mods as unknown as Modifier<EnvState>[];
+		const extrasTyped = mods as unknown as Modifier<T>[];
 		if (existing === undefined) {
 			merged[basename] =
 				extrasTyped.length === 1 ? extrasTyped[0]! : [...extrasTyped];
 			continue;
 		}
 		const existingList = Array.isArray(existing)
-			? (existing as Modifier<EnvState>[])
-			: [existing as Modifier<EnvState>];
+			? (existing as Modifier<T>[])
+			: [existing as Modifier<T>];
 		merged[basename] = [...existingList, ...extrasTyped];
 	}
-	return { ...envTracker, modifiers: merged };
+	return { ...baseTracker, modifiers: merged };
 }
 
 /**
