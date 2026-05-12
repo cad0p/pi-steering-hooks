@@ -27,9 +27,10 @@
  *          skipped so scalar FOO is untouched.
  *        - `FOO[0]=value` (array-index assignment) — same.
  *
- * See [[env-tracker-deferred-scope]] for the full deferred-scope
- * doc, including the trigger criteria for graduating each class
- * out of "deferred" into a future `pi-steering-env` plugin or a
+ * The full deferred-scope rationale lives in the file-level
+ * header above and the per-class notes on each modifier below,
+ * including the trigger criteria for graduating each class out
+ * of "deferred" into a future `pi-steering-env` plugin or a
  * v0.1.x additive extension.
  *
  * Subshell semantics: `"isolated"` — matches bash, where env

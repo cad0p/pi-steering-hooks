@@ -33,11 +33,11 @@
  *        substitution, ext-glob, brace expansion, ANSI-C,
  *        locale-quoted → undefined.
  *
- * Deferred classes are documented at
- * [[env-tracker-deferred-scope]] and graduate to this helper when
- * a motivating use case lands. The underlying AST is already
- * typed, so adding a case is structural (new `WordPart.type` arm
- * → helper or undefined) — no re-architecture.
+ * Deferred classes are documented inline (see the scope list
+ * above) and graduate to this helper when a motivating use case
+ * lands. The underlying AST is already typed, so adding a case is
+ * structural (new `WordPart.type` arm → helper or undefined) —
+ * no re-architecture.
  */
 
 import type { Word, WordPart } from "unbash";

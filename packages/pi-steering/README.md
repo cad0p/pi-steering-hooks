@@ -635,7 +635,7 @@ The engine ships an `envTracker` alongside the built-in `cwdTracker`. It capture
 - Subshell isolation: `(FOO=/s; cd "$FOO"); cmd` — outer `cmd` sees neither `FOO` nor the subshell's `cd`.
 - Seeded from `process.env.{HOME, USER, PWD}` at tracker initialization, so `~` / `$HOME` / `$USER` / `$PWD` expand out of the box.
 
-Out of scope for v0.1.0: `readonly`, `local`, `declare`, `typeset`, `source` / `.`, function-body walking. See `features/pi-infra/open-source-steering-hooks/env-tracker-deferred-scope.md` (upstream ADR) for the list and graduation criteria.
+Out of scope for v0.1.0: `readonly`, `local`, `declare`, `typeset`, `source` / `.`, function-body walking. The envTracker's module-level JSDoc (`packages/unbash-walker/src/trackers/env.ts`) lists the full deferred-scope inventory and graduation criteria.
 
 **`resolveWord(word, env)`** — re-exported from the package root — is the shared helper the built-in `cd` modifier uses to resolve a dynamic word (`$VAR`, `${VAR}`, `~`) through an env map. Plugin predicates that want the same semantics on user-supplied args should reuse it:
 

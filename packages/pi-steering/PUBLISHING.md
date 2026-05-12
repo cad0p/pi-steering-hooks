@@ -32,7 +32,7 @@ These are API-surface decisions to revisit before cutting v1.0 (after shipping a
 
 The `prepareBashContext(command, sessionCwd): BashContext` helper exposes `refs: readonly CommandRef[]` and `cwdMap: ReadonlyMap<CommandRef, string>` in its return type. `CommandRef` is defined in `unbash-walker` and carries unbash's AST node shape. Downstream consumers who keep a `BashContext` across evaluations are transitively coupled to:
 
-- `unbash-walker`'s exported `CommandRef` type (stable within this monorepo today, but `unbash-walker` is slated for extraction into its own package per [[pi-guard-contribution]]).
+- `unbash-walker`'s exported `CommandRef` type (stable within this monorepo today, but `unbash-walker` is slated for extraction into its own package).
 - `unbash`'s `Command` node type inside `CommandRef.node`.
 
 **Why it's in the public API today.** `prepareBashContext` + `evaluateBashRuleWithContext` is the hot-path alternative to `evaluateBashRule` for callers evaluating many rules against one command — the split avoids re-parsing per rule. Exposing the context lets those callers reuse work across rules.
