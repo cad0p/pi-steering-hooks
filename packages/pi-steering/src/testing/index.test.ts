@@ -366,7 +366,14 @@ describe("mockContext", () => {
 		assert.equal(typeof ctx.exec, "function");
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
-		assert.deepEqual(ctx.walkerState, { cwd: "/tmp/test" });
+		// Default walkerState populates cwd + an empty env map (Tier B /
+		// D1: plugin authors reading `walkerState.env.get(...)` get a
+		// well-typed Map even when the test doesn't wire up the env
+		// tracker explicitly).
+		assert.deepEqual(ctx.walkerState, {
+			cwd: "/tmp/test",
+			env: new Map<string, string>(),
+		});
 	});
 
 	it("applies cwd / agentLoopIndex / tool / input / walkerState overrides", () => {

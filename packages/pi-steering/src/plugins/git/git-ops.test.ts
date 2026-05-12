@@ -65,7 +65,7 @@ function makeCtx(
 		},
 		appendEntry: () => {},
 		findEntries: () => [],
-		walkerState: { cwd: opts?.cwd ?? "/repo" },
+		walkerState: { cwd: opts?.cwd ?? "/repo", env: new Map() },
 	};
 	return { ctx, execCalls };
 }
@@ -124,7 +124,7 @@ describe("getBranch", () => {
 		const { ctx, execCalls } = makeCtx([
 			{ match: () => true, result: OK("on-disk") },
 		]);
-		ctx.walkerState = { cwd: "/repo", branch: "walker-says" };
+		ctx.walkerState = { cwd: "/repo", env: new Map(), branch: "walker-says" };
 		const out = await getBranch(ctx);
 		assert.equal(out, "on-disk");
 		assert.equal(execCalls.length, 1);

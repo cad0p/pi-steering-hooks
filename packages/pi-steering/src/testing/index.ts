@@ -52,6 +52,7 @@ import type {
 	PredicateToolInput,
 	SteeringConfig,
 	ToolResultEvent as SchemaToolResultEvent,
+	WhenWalkerState,
 } from "../schema.ts";
 import type { SyntheticEntry } from "../evaluator-internals/speculative-synthesis.ts";
 import type {
@@ -406,11 +407,25 @@ export interface MockContextOptions {
 
 	/**
 	 * Walker-state snapshot the predicate sees via
-	 * {@link PredicateContext.walkerState}. Defaults to
-	 * `{ cwd: options.cwd }` so built-in `when.cwd` reads the right
-	 * effective cwd without any walker having to run.
+	 * {@link PredicateContext.walkerState}.
+	 *
+	 * Defaults to `{ cwd: options.cwd, env: new Map() }` so the
+	 * built-in `when.cwd` predicate and any plugin reading
+	 * `walkerState.env` work without wiring up a full walker. Callers
+	 * who want a specific env map or branch tracker state pass it in
+	 * via this option.
+	 *
+	 * The typed shape is {@link WhenWalkerState} with every field
+	 * optional (partial) so tests that only care about one dimension
+	 * don't have to fill in the others. The engine's production path
+	 * always populates `cwd` + `env`; the mock's default matches.
+	 *
+	 * Note: when you pass an explicit walkerState here, this option
+	 * REPLACES the default (including the env map). If your test
+	 * asserts against `walkerState.env.get(...)`, include env in
+	 * your override.
 	 */
-	readonly walkerState?: Record<string, unknown>;
+	readonly walkerState?: Partial<WhenWalkerState> & Record<string, unknown>;
 
 	/**
 	 * Stub for `ctx.exec`. Defaults to rejecting with a clear error
@@ -470,7 +485,15 @@ export function mockContext(
 	const cwd = options.cwd ?? "/tmp/test";
 	const tool = options.tool ?? "bash";
 	const input = options.input ?? defaultInputFor(tool);
-	const baseWalkerState = options.walkerState ?? { cwd };
+	// Default walker state satisfies the required `cwd` + `env` fields
+	// of {@link WhenWalkerState}. Callers supplying their own
+	// walkerState pass whatever shape their predicate under test reads;
+	// the required fields still type-check because the option is typed
+	// against the interface itself.
+	const baseWalkerState: Record<string, unknown> =
+		options.walkerState !== undefined
+			? (options.walkerState as Record<string, unknown>)
+			: { cwd, env: new Map<string, string>() };
 	// Fold `toolCallEvents` (option) into `walkerState.events` (ctx
 	// shape) the same way the evaluator's `prepareBashState` does —
 	// the caller doesn't have to know the reserved-key convention.
@@ -501,7 +524,15 @@ export function mockContext(
 		exec: buildExec(options.exec, "mockContext"),
 		appendEntry: createAppendEntry(bufferingHost, agentLoopIndex),
 		findEntries: buildFindEntries(options.entries ?? []),
-		walkerState,
+		// Cast: mockContext's walkerState may be a user-supplied `Partial<
+		// WhenWalkerState>`. The default path above fills in cwd + env;
+		// explicit-override callers might omit them intentionally (testing
+		// plugin predicates that don't read cwd / env). The production
+		// evaluator always populates both, so tests that care match that
+		// via the default. The Partial<> option shape signals "bring what
+		// you need"; this cast acknowledges the resulting schema-strict
+		// shape is the mock's responsibility.
+		walkerState: walkerState as Readonly<WhenWalkerState>,
 	};
 
 	appendBuffers.set(ctx, buffer);

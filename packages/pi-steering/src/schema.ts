@@ -25,7 +25,7 @@
  * only defines shapes. Evaluation is Phase 3's concern.
  */
 
-import type { Tracker, Word } from "unbash-walker";
+import type { EnvState, Tracker, Word } from "unbash-walker";
 
 // ---------------------------------------------------------------------------
 // Primitive predicate types
@@ -56,6 +56,26 @@ export type Pattern = string | RegExp;
 export type PredicateFn = (
 	ctx: PredicateContext,
 ) => boolean | Promise<boolean>;
+
+/**
+ * Dynamic block-reason function. When {@link Rule.reason} is a
+ * function, the evaluator invokes it with the same
+ * {@link PredicateContext} the predicates saw and prefixes the
+ * returned string with `[steering:<rule>@<source>] `. Async OK
+ * (evaluator awaits); thrown errors are logged to `console.warn` and
+ * replaced with a fail-safe fallback (`(reason failed to format;
+ * see log)`) so a broken reason doesn't leak its raw error message
+ * to the LLM.
+ *
+ * Use the function form when the block's human-readable context
+ * depends on runtime state — e.g. "Could not verify upstream at
+ * effective cwd \${ctx.walkerState.cwd}". Plain string reasons are
+ * preferred when the reason is static; they avoid the evaluator's
+ * extra  await + try/catch.
+ */
+export type ReasonFn = (
+	ctx: PredicateContext,
+) => string | Promise<string>;
 
 /**
  * Plugin-registered predicate *handler*. Differs from {@link PredicateFn}
@@ -291,8 +311,30 @@ export interface BaseRule<
 	 */
 	when?: WhenClause<Writes>;
 
-	/** Message shown to the agent when blocked. Should be actionable. */
-	reason: string;
+	/**
+	 * Message shown to the agent when blocked.
+	 *
+	 * A plain string is the most common shape and should be actionable
+	 * (e.g. "Use `git commit --no-verify` to bypass"). The evaluator
+	 * prefixes every block reason with `[steering:<rule>@<source>] `
+	 * so the agent sees which rule fired and where it came from
+	 * (ADR §11).
+	 *
+	 * A {@link ReasonFn} is invoked with the same
+	 * {@link PredicateContext} the predicates saw. Use the function
+	 * form when the reason text depends on runtime state — e.g. the
+	 * walker's effective cwd, a resolved branch name, or a count
+	 * pulled from `ctx.findEntries`. The evaluator awaits the return
+	 * and applies the source-tag prefix identically to the string form.
+	 *
+	 * Fail-safe on throw: if the reason function throws synchronously
+	 * or its returned promise rejects, the evaluator logs the error
+	 * with `console.warn` and emits a fallback message
+	 * (`[steering:<rule>@<source>] (reason failed to format; see log)`).
+	 * The block verdict still lands — a broken reason doesn't release
+	 * the rule's guard or leak raw error text to the LLM.
+	 */
+	reason: string | ReasonFn;
 
 	/**
 	 * If `true`, no override escape hatch. If `false`, override always
@@ -728,6 +770,64 @@ export interface ExecResult {
 }
 
 /**
+ * Shape of the walker-state snapshot the evaluator populates on
+ * {@link PredicateContext.walkerState} for bash rules. Consumed by
+ * the built-in `when.cwd` / `when.happened` predicates and by
+ * plugin-authored predicates that read per-ref tracker state.
+ *
+ * All fields are read-only. The evaluator assembles a fresh object
+ * per extracted command ref — mutation has no effect on subsequent
+ * refs or on any persisted state.
+ *
+ * The type is open-ended (`readonly [key: string]: unknown`) because
+ * plugins register new trackers at config-build time; the schema
+ * can't commit to the complete key set. Plugin authors documenting
+ * their own predicates should narrow via their tracker's known
+ * value type (e.g. the git plugin's branch predicate reads
+ * `ctx.walkerState.branch` as a string | "unknown" sentinel).
+ *
+ * For `write` / `edit` rules there's no walker invocation and
+ * {@link PredicateContext.walkerState} is `undefined`. Bash rules
+ * always see at minimum `{ cwd, env, events }`.
+ */
+export interface WhenWalkerState {
+	/**
+	 * Effective cwd at this ref, per the walker's `cwdTracker`. For
+	 * dynamic cd targets the walker couldn't resolve statically
+	 * (unknown `$VAR`, command substitution, arithmetic), this is the
+	 * literal string `"unknown"` — the cwdTracker's sentinel. The
+	 * built-in `when.cwd` predicate applies its `onUnknown: 'allow' |
+	 * 'block'` policy on that sentinel (default `'block'`, fail-
+	 * closed). Plugin predicates reading this field directly should
+	 * check for the sentinel before pattern-matching, or use the
+	 * sugar form `when.cwd: { pattern, onUnknown }` via the engine.
+	 */
+	readonly cwd: string;
+
+	/**
+	 * Env map at this ref, per the walker's `envTracker`. Carries
+	 * statically-resolved bare assignments (`FOO=bar`), `export`
+	 * writes, and `unset` deletions from the current scope, seeded
+	 * from `process.env.{HOME, USER, PWD}` at tracker initialization.
+	 *
+	 * Plugin predicates consume this to expand `$VAR` / `~` in
+	 * user-supplied patterns, or to implement a `when.envVar`-style
+	 * predicate. Read via `ctx.walkerState.env.get("NAME")`. Returns
+	 * `undefined` for any name the walker hasn't seen — callers apply
+	 * their own fallback (or route through the `resolveWord` helper
+	 * re-exported from the package root for word-level resolution).
+	 */
+	readonly env: EnvState;
+
+	/**
+	 * Additional tracker-registered fields (e.g. the git plugin's
+	 * `branch`) and reserved keys (`events`). Indexed loosely so
+	 * plugins adding new trackers don't need a schema amendment.
+	 */
+	readonly [key: string]: unknown;
+}
+
+/**
  * Context passed to a predicate (either {@link PredicateFn} or a
  * plugin's {@link PredicateHandler}).
  *
@@ -797,19 +897,21 @@ export interface PredicateContext {
 	 * Walker state snapshot for the command being evaluated. Populated
 	 * only for bash rules — the walker runs once per tool_call over the
 	 * full command and produces a per-ref snapshot of every registered
-	 * tracker (`cwd`, plugin-registered dimensions like `branch`, …).
-	 * For `write` / `edit` rules there is no walker, so this is
-	 * `undefined`.
+	 * tracker (`cwd`, `env`, plus plugin-registered dimensions like
+	 * `branch`). For `write` / `edit` rules there is no walker, so this
+	 * is `undefined`.
 	 *
 	 * Plugin predicates consult `walkerState[<tracker-name>]` to read
 	 * statically-resolved values (branch after `git checkout X`, cwd
-	 * after `cd /path`, …) without re-running the tracker's work. When
-	 * the tracker can't resolve statically the value is the tracker's
-	 * `unknown` sentinel — handlers apply their `onUnknown` policy.
+	 * after `cd /path`, env after `FOO=bar` / `export FOO=bar`) without
+	 * re-running the tracker's work. When the tracker can't resolve
+	 * statically the value is the tracker's `unknown` sentinel —
+	 * handlers apply their `onUnknown` policy.
 	 *
-	 * Shape is open-ended (`Record<string, unknown>`): the schema does
-	 * not commit to which trackers exist — that's a plugin registration
-	 * concern.
+	 * Typed as {@link WhenWalkerState} (open-ended string-indexed) so
+	 * the schema commits to the two built-in keys (`cwd`, `env`) plus
+	 * the reserved `events` slot while leaving room for plugin
+	 * extensions.
 	 *
 	 * Reserved key `events`: `Record<customType, SyntheticEntry[]>`.
 	 * Populated by the walker-level speculative-entry synthesis pass
@@ -824,7 +926,7 @@ export interface PredicateContext {
 	 * `e.speculative === true`. Trackers cannot claim the `events`
 	 * key — plugin registration rejects it as reserved.
 	 */
-	walkerState?: Readonly<Record<string, unknown>>;
+	walkerState?: Readonly<WhenWalkerState>;
 }
 
 // ---------------------------------------------------------------------------

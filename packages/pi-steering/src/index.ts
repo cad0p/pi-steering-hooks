@@ -133,10 +133,12 @@ export type {
 	PredicateFn,
 	PredicateHandler,
 	PredicateToolInput,
+	ReasonFn,
 	Rule,
 	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
+	WhenWalkerState,
 	WriteRule,
 } from "./schema.ts";
 

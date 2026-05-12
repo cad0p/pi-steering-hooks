@@ -17,6 +17,7 @@ import { describe, it } from "node:test";
 import type {
 	ExecResult,
 	PredicateContext,
+	WhenWalkerState,
 } from "../../index.ts";
 import {
 	branch,
@@ -54,7 +55,7 @@ function makeCtx(
 	}>,
 	opts?: {
 		cwd?: string;
-		walkerState?: Record<string, unknown>;
+		walkerState?: Partial<WhenWalkerState> & Record<string, unknown>;
 	},
 ): { ctx: PredicateContext; execCalls: ExecCall[] } {
 	const execCalls: ExecCall[] = [];
@@ -78,7 +79,7 @@ function makeCtx(
 		appendEntry: () => {},
 		findEntries: () => [],
 		...(opts?.walkerState !== undefined
-			? { walkerState: opts.walkerState }
+			? { walkerState: opts.walkerState as Readonly<WhenWalkerState> }
 			: {}),
 	};
 	return { ctx, execCalls };

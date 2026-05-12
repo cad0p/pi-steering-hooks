@@ -90,6 +90,7 @@ import type {
 	PredicateToolInput,
 	Rule,
 	SteeringConfig,
+	WhenWalkerState,
 } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -342,7 +343,7 @@ interface BashRefState {
 	readonly basename: string;
 	readonly args: readonly Word[];
 	readonly envAssignments: readonly Word[];
-	readonly walkerState: Record<string, unknown>;
+	readonly walkerState: Readonly<WhenWalkerState>;
 }
 
 /**
@@ -373,7 +374,10 @@ function prepareBashState(
 	const speculativeEvents: SpeculativeEventsByRef =
 		synthesizeSpeculativeEntries(refs, observers);
 	return refs.map((ref) => {
-		const trackerState = walkResult.get(ref) ?? { cwd: sessionCwd };
+		const trackerState = walkResult.get(ref) ?? {
+			cwd: sessionCwd,
+			env: new Map<string, string>(),
+		};
 		const events = speculativeEvents.get(ref) ?? {};
 		return {
 			ref,
@@ -401,7 +405,18 @@ function prepareBashState(
 			// dimension `"events"` — the plugin merger rejects that (see
 			// plugin-merger.ts). The merge is a shallow copy so the walker's
 			// state object stays untouched for future evaluations.
-			walkerState: { ...trackerState, events },
+			//
+			// The cast via `unknown` to `Readonly<WhenWalkerState>` is safe:
+			// buildEvaluator always registers `cwd` + `env` trackers, so every
+			// ref the walker yields carries both fields; the fallback literal
+			// above also supplies them. The schema interface's `readonly
+			// [key: string]: unknown` index signature tolerates the `events`
+			// key and any plugin-registered tracker slot. TypeScript's
+			// spread inference over `Record<string, unknown> | { cwd: string;
+			// env: Map<...> }` doesn't preserve the cwd/env shape through
+			// the spread, so the double cast is the minimum TS needs to
+			// accept a structure its inference widens away.
+			walkerState: { ...trackerState, events } as unknown as Readonly<WhenWalkerState>,
 		};
 	});
 }
@@ -523,7 +538,7 @@ interface Candidate {
 	 * synthesis pass); write / edit candidates leave it undefined (no
 	 * walker ran).
 	 */
-	readonly walkerState?: Readonly<Record<string, unknown>>;
+	readonly walkerState?: Readonly<WhenWalkerState>;
 }
 
 /**
