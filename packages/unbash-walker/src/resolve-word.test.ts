@@ -202,6 +202,40 @@ describe("resolveWord", () => {
 			const w = wordFromCdArg("`pwd`");
 			assert.equal(resolveWord(w, new Map()), undefined);
 		});
+
+		it("process substitution <(…)", () => {
+			const w = wordFromCdArg("<(echo /x)");
+			assert.equal(resolveWord(w, new Map()), undefined);
+		});
+
+		it("extended glob @(…)", () => {
+			const w = wordFromCdArg("@(a|b)");
+			assert.equal(resolveWord(w, new Map()), undefined);
+		});
+
+		it("brace expansion {…}", () => {
+			const w = wordFromCdArg("{a,b}");
+			assert.equal(resolveWord(w, new Map()), undefined);
+		});
+
+		it("ANSI-C quoted $'…'", () => {
+			// `$'...'` parses as an AnsiCQuoted part. Could in principle be
+			// resolved statically (the content IS known at parse time, modulo
+			// escape-sequence semantics) but resolveWord treats it as
+			// intractable for v0.1.0 — a rule author who cares about escape-
+			// sequence semantics can extend in a plugin later.
+			const w = wordFromCdArg("$'hello\\n'");
+			assert.equal(resolveWord(w, new Map()), undefined);
+		});
+
+		it('locale-aware string $"…"', () => {
+			// `$"..."` parses as a LocaleString part. Similarly tractable in
+			// principle (the fallback string is static) but treated as
+			// intractable here because localization substitution is runtime-
+			// dependent on `LC_MESSAGES`.
+			const w = wordFromCdArg('$"hello"');
+			assert.equal(resolveWord(w, new Map()), undefined);
+		});
 	});
 
 	describe("empty env", () => {

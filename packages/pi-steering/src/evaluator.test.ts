@@ -4481,6 +4481,77 @@ describe("buildEvaluator: PredicateToolInput.envAssignments", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildEvaluator: PredicateContext.walkerState.env (Tier B end-to-end)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: PredicateContext.walkerState.env", () => {
+	function envCapture(seen: PredicateContext[]): Rule {
+		return {
+			name: "peek-env",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek-env",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false; // never block; we only want to observe ctx
+				},
+			},
+		};
+	}
+
+	it("bare assignment earlier in chain surfaces in walkerState.env on the later ref's condition", async () => {
+		// End-to-end evidence that envTracker + walker + buildEvaluator wire
+		// the env snapshot through to PredicateContext for predicates
+		// (not just the testing mockContext harness).
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [envCapture(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent('WS="/ws"; cmd'),
+			makeCtx("/r"),
+			0,
+		);
+		// The condition fires against every extracted ref; the `cmd` ref is
+		// the one whose walker-state reflects the threaded env from WS="/ws".
+		const cmdCtx = seen.find(
+			(c) => c.input.tool === "bash" && c.input.basename === "cmd",
+		);
+		assert.ok(cmdCtx, "cmd ref should have fired the condition");
+		assert.ok(cmdCtx.walkerState, "walkerState should be populated");
+		assert.ok(cmdCtx.walkerState.env instanceof Map);
+		assert.equal(
+			(cmdCtx.walkerState.env as ReadonlyMap<string, string>).get("WS"),
+			"/ws",
+		);
+	});
+
+	it("walkerState.env is an empty map when no env-modifying commands ran", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [envCapture(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
+		assert.equal(seen.length, 1);
+		const firstCtx = seen[0];
+		assert.ok(firstCtx);
+		assert.ok(firstCtx.walkerState, "walkerState should be populated");
+		const env = firstCtx.walkerState.env as ReadonlyMap<string, string>;
+		assert.ok(env instanceof Map);
+		// Seeded from process.env at module load — may contain HOME/USER/PWD.
+		// Assertion: does NOT contain names that were never assigned.
+		assert.equal(env.get("WS"), undefined);
+		assert.equal(env.get("SOMETHING_UNSET"), undefined);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // S1: top-level engine fail-closed + per-predicate isolation coverage
 // ---------------------------------------------------------------------------
 
