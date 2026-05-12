@@ -241,8 +241,9 @@ interface WhenClause {
   cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
   happened?: {
     event: string;
-    in: "agent_loop" | "session";
+    in: "agent_loop" | "session" | "tool_call";
     since?: string;  // optional invalidation sentinel
+    notIn?: "agent_loop" | "session" | "tool_call";  // scope subtraction
   };
   not?: WhenClause;
   condition?: (ctx: PredicateContext) => boolean | Promise<boolean>;
@@ -255,8 +256,8 @@ interface WhenClause {
 Built-ins:
 
 - **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
-- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Synthesizes speculative entries across `&&` bash chains — see "`&&`-chain speculative allow" below.
-- **`not`** — boolean NOT over a nested clause.
+- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL; `"tool_call"` considers only speculative entries synthesized for THIS tool_call's `&&`-chain. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Optional `notIn` subtracts a narrower scope from `in` (e.g. `{ in: "agent_loop", notIn: "tool_call" }` means "happened in a prior tool_call in this loop", blocking the same-tool_call speculative bypass). `notIn` is set subtraction, distinct from the clause-level `not` (boolean negation). Synthesizes speculative entries across `&&` bash chains — see "`&&`-chain speculative allow" below.
+- **`not`** — boolean NOT over a nested clause. Use to invert a sub-clause (e.g. `not: { upstream: /^origin\/main$/ }` fires unless upstream is origin/main).
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
 
 Plugin predicates fill the `[customKey: string]` slot. `when.branch: /^main$/` is valid only if a plugin registered `branch` under `predicates`.

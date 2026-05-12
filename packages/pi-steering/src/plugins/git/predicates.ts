@@ -122,7 +122,9 @@ function unknownVerdict(onUnknown: "allow" | "block"): boolean {
 /**
  * Direct one-shot git exec used only by the `branch` predicate's
  * tracker-missing fallback (the predicate's three-way tracker
- * discrimination stays in predicate-land; see the `branch` JSDoc).
+ * discrimination stays in predicate-land; see the `branch` JSDoc
+ * below AND `./git-ops.ts` file header "Branch caveat" for why
+ * `getBranch` is NOT called here).
  * Other predicates delegate to helpers in `./git-ops.ts` and don't
  * need this.
  *

@@ -249,6 +249,14 @@ describe("getStagedChanges", () => {
 		]);
 		assert.equal(await getStagedChanges(ctx), null);
 	});
+
+	it("routes to an explicit cwd override", async () => {
+		const { ctx, execCalls } = makeCtx([
+			{ match: () => true, result: EXIT(0) },
+		]);
+		await getStagedChanges(ctx, "/other");
+		assert.equal(execCalls[0]?.cwd, "/other");
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -274,6 +282,14 @@ describe("getWorkingTreeClean", () => {
 	it("returns null on non-zero exit", async () => {
 		const { ctx } = makeCtx([{ match: () => true, result: EXIT(128) }]);
 		assert.equal(await getWorkingTreeClean(ctx), null);
+	});
+
+	it("routes to an explicit cwd override", async () => {
+		const { ctx, execCalls } = makeCtx([
+			{ match: () => true, result: OK("") },
+		]);
+		await getWorkingTreeClean(ctx, "/other");
+		assert.equal(execCalls[0]?.cwd, "/other");
 	});
 });
 
@@ -308,6 +324,14 @@ describe("getRemoteUrl", () => {
 	it("returns null on empty stdout", async () => {
 		const { ctx } = makeCtx([{ match: () => true, result: OK("\n") }]);
 		assert.equal(await getRemoteUrl(ctx), null);
+	});
+
+	it("routes to an explicit cwd override", async () => {
+		const { ctx, execCalls } = makeCtx([
+			{ match: () => true, result: OK("git@github.com:org/repo.git") },
+		]);
+		await getRemoteUrl(ctx, "/other");
+		assert.equal(execCalls[0]?.cwd, "/other");
 	});
 });
 
