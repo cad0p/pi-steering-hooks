@@ -672,7 +672,7 @@ describe("buildEvaluator: when.happened", () => {
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "legacy",
-			// @ts-expect-error — "turn" is the removed v0.0.0-poc scope name
+			// @ts-expect-error — "turn" is the removed PoC scope name
 			when: { happened: { event: "ws-sync-done", in: "turn" } },
 		};
 		const warnings = captureWarnings();
