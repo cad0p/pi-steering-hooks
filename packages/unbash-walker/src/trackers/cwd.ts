@@ -111,17 +111,25 @@ function effectiveEnv(allState: Readonly<Record<string, unknown>>): EnvState {
  * tracker isn't registered we fall back to a process-env snapshot
  * (see {@link PROCESS_ENV_FALLBACK}) so single-tracker walker users
  * don't lose tilde expansion.
+ *
+ * Used by the bare-`cd` code path (no args → HOME). For `cd <target>`,
+ * tilde expansion happens inside {@link resolveWord}, which is
+ * quote-aware — bare `~/proj` expands, double-quoted `"~/proj"`
+ * does not (matching bash).
  */
 function resolveHome(current: string, env: EnvState): string {
 	return env.get("HOME") ?? current;
 }
 
-/** Compute the cwd resulting from `cd <target>` starting at `current`. */
-function resolveTarget(current: string, target: string, env: EnvState): string {
-	if (target === "~") return resolveHome(current, env);
-	if (target.startsWith("~/")) {
-		return path.join(resolveHome(current, env), target.slice(2));
-	}
+/**
+ * Compute the cwd resulting from `cd <target>` starting at `current`.
+ *
+ * The target string is the post-resolveWord literal — tilde expansion
+ * already happened quote-correctly inside resolveWord (bare `~/...`
+ * expands, double-quoted `"~/..."` stays literal). Here we only
+ * decide absolute-vs-relative: absolute replaces, relative joins.
+ */
+function resolveTarget(current: string, target: string): string {
 	if (path.isAbsolute(target)) return target;
 	return path.join(current, target);
 }
@@ -150,6 +158,32 @@ function resolveTarget(current: string, target: string, env: EnvState): string {
  * where `cd "\$VAR/protected" && cr` passed cwd-scoped rules
  * because the regex never saw the "/protected" path.
  */
+/**
+ * Sequential modifier for `cd`. Updates the cwd for this command AND
+ * subsequent sibling commands.
+ *
+ * Env-aware resolution (Tier B of PR #5):
+ *
+ *   - `cd` with no args → HOME via `env.get('HOME')`.
+ *   - `cd -` → no-op (we don't track OLDPWD).
+ *   - Any other target: resolve through {@link resolveWord} with the
+ *     effective env map. The helper handles every quote + expansion
+ *     variant the walker understands (Literal, SingleQuoted,
+ *     DoubleQuoted with resolvable children, `$VAR`, `${VAR}`, and
+ *     tilde at word start), returns `undefined` when any part is
+ *     intractable (command substitution, arithmetic, unknown `$VAR`,
+ *     parameter-expansion with modifier). Tilde handling is
+ *     quote-aware inside resolveWord, so `cd ~/proj` expands but
+ *     `cd "~/proj"` stays literal — matching bash.
+ *
+ * Undefined return surfaces the walker's `unknown` sentinel, which
+ * the engine's `when.cwd` consumes via its `onUnknown: 'allow' |
+ * 'block'` policy (default `'block'`, fail-closed). This replaces
+ * the pre-Tier-B Phase 1 exception that returned `current` unchanged
+ * on dynamic targets — a silent-bypass class where
+ * `cd "$VAR/protected" && cr` passed cwd-scoped rules because the
+ * regex never saw the `/protected` path.
+ */
 const cdModifier: Modifier<string, { env: EnvState }> = {
 	scope: "sequential",
 	apply(args, current, allState) {
@@ -159,21 +193,14 @@ const cdModifier: Modifier<string, { env: EnvState }> = {
 		// `cd` with no arguments → HOME.
 		if (targetWord === undefined) return resolveHome(current, env);
 
-		let target: string | undefined;
-		if (isStaticallyResolvable(targetWord)) {
-			target = targetWord.value ?? targetWord.text;
-		} else {
-			// Non-static: attempt env-aware resolution. `undefined` means
-			// any part was intractable (unknown var, command substitution,
-			// arithmetic, parameter expansion with modifier). Return
-			// `undefined` so the walker emits the tracker's `unknown`
-			// sentinel and the engine's `when.cwd` fires its `onUnknown`
-			// policy.
-			target = resolveWord(targetWord, env);
-			if (target === undefined) return undefined;
-		}
+		// Route every target — static or dynamic, quoted or unquoted —
+		// through resolveWord so tilde + env expansion are quote-aware
+		// (M5 fix). resolveWord returns `undefined` for intractable
+		// words; surface that as the walker's unknown sentinel.
+		const target = resolveWord(targetWord, env);
+		if (target === undefined) return undefined;
 
-		if (target === undefined || target === "-") return current;
+		if (target === "-") return current;
 
 		// Sticky-unknown guard (Tier B correctness fix H1): once the
 		// cwd has fallen into the `unknown` sentinel via an earlier
@@ -188,7 +215,7 @@ const cdModifier: Modifier<string, { env: EnvState }> = {
 			return undefined;
 		}
 
-		return resolveTarget(current, target, env);
+		return resolveTarget(current, target);
 	},
 };
 

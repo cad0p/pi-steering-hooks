@@ -106,6 +106,29 @@ describe("cwdTracker via walk", () => {
 		assert.equal(cwds["cmd"], "/home/me/projects/app");
 	});
 
+	it('`cd "~/proj"` keeps the `~` literal per bash (M5 quoted-tilde fix)', () => {
+		// Correctness fix M5: previously the static path took
+		// `targetWord.value ?? targetWord.text === "~/proj"` and then
+		// `resolveTarget` re-expanded the leading `~/` via HOME. But
+		// bash treats quoted tildes as literal, so the walker now routes
+		// every target through `resolveWord`, which is quote-aware.
+		// resolveWord returns "~/proj" (literal); resolveTarget sees a
+		// relative path and joins onto current. Bash would error trying
+		// to cd into a nonexistent `~/proj` directory; our over-match
+		// stance keeps the literal path so rules can match it precisely.
+		const cwds = cwdByName('cd "~/proj" && cmd', "/start");
+		assert.equal(
+			cwds["cmd"],
+			"/start/~/proj",
+			"quoted tilde stays literal; must NOT silently expand to HOME/proj",
+		);
+	});
+
+	it("`cd ~/proj` (unquoted) still expands to HOME/proj — regression guard for M5", () => {
+		const cwds = cwdByName("cd ~/proj && cmd", "/start");
+		assert.equal(cwds["cmd"], "/home/me/proj");
+	});
+
 	it("`cd -` is treated as a no-op (OLDPWD not tracked)", () => {
 		const cwds = cwdByName("cd /x && cd - && cmd", "/start");
 		assert.equal(cwds["cmd"], "/x");
