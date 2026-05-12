@@ -314,14 +314,34 @@ describe("envTracker via walk", () => {
 
 		it("envTracker.initial captures HOME/USER/PWD from process.env at module load", () => {
 			// The tracker was created at module load — before we mutated
-			// process.env. The fresh snapshot below shows what we'd get if
-			// we re-seeded now; the baked-in `initial` is whatever was set
-			// at module-load time. We therefore assert structurally: at
-			// least one of HOME/USER/PWD is present if any was set.
+			// process.env in beforeEach. So we assert against ORIG (the
+			// values captured at file import): if any of HOME/USER/PWD
+			// was set at import time, the module-load seed must have
+			// captured at least one of them. If none was set, we fall
+			// back to a shape check (defensive, empty-env case).
+			//
+			// This replaces a prior assertion that only checked
+			// `typeof initial.get === "function"` — true for any Map,
+			// so a regression in seedFromProcessEnv that returned an
+			// empty map would have stayed green.
 			const initial = envTracker.initial;
-			// Must be a ReadonlyMap-compatible Map shape.
-			assert.ok(typeof initial.get === "function");
-			assert.ok(typeof initial.has === "function");
+			assert.ok(initial instanceof Map, "initial must be a Map");
+
+			const any = ORIG.HOME ?? ORIG.USER ?? ORIG.PWD;
+			if (any === undefined) {
+				// No env vars set at import time; seeding produced an empty
+				// map. Accept either size:0 or the shape-only assertion.
+				return;
+			}
+
+			const seeded =
+				(ORIG.HOME !== undefined && initial.get("HOME") === ORIG.HOME) ||
+				(ORIG.USER !== undefined && initial.get("USER") === ORIG.USER) ||
+				(ORIG.PWD !== undefined && initial.get("PWD") === ORIG.PWD);
+			assert.ok(
+				seeded,
+				"at least one of HOME/USER/PWD must match process.env as captured at module load",
+			);
 		});
 
 		it("explicit initial overrides the default: walk with a seeded env", () => {
