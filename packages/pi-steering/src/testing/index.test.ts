@@ -392,7 +392,14 @@ describe("mockContext", () => {
 			path: "/a.ts",
 			content: "x",
 		});
-		assert.deepEqual(ctx.walkerState, { cwd: "/work", branch: "main" });
+		// walkerState overrides merge OVER the defaults (shallow merge),
+		// so branch lands, cwd overrides the default, and env stays as the
+		// default empty Map — matching production evaluator shape.
+		assert.deepEqual(ctx.walkerState, {
+			cwd: "/work",
+			env: new Map(),
+			branch: "main",
+		});
 	});
 
 	it("derives default input shape per tool", () => {
@@ -585,6 +592,21 @@ describe("mockContext", () => {
 		const ctx = mockContext();
 		const env = ctx.walkerState?.["env"];
 		assert.ok(env instanceof Map, "walkerState.env is a Map");
+		assert.equal((env as Map<string, string>).size, 0);
+	});
+
+	it("walkerState override SHALLOW-MERGES with defaults so env stays a Map (M8)", () => {
+		// Correctness fix M8: `mockContext({ walkerState: { cwd: "/x" } })`
+		// previously replaced the entire default, dropping `env: new Map()`
+		// and crashing any predicate that did `ctx.walkerState.env.get(...)`.
+		// The merge now preserves defaults for fields the override omits.
+		const ctx = mockContext({ walkerState: { cwd: "/x" } });
+		assert.equal(ctx.walkerState?.["cwd"], "/x", "override cwd lands");
+		const env = ctx.walkerState?.["env"];
+		assert.ok(
+			env instanceof Map,
+			"walkerState.env is still a Map — default not dropped by partial override",
+		);
 		assert.equal((env as Map<string, string>).size, 0);
 	});
 

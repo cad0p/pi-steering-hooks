@@ -420,10 +420,10 @@ export interface MockContextOptions {
 	 * don't have to fill in the others. The engine's production path
 	 * always populates `cwd` + `env`; the mock's default matches.
 	 *
-	 * Note: when you pass an explicit walkerState here, this option
-	 * REPLACES the default (including the env map). If your test
-	 * asserts against `walkerState.env.get(...)`, include env in
-	 * your override.
+	 * Partial override: fields you pass merge over the defaults, so
+	 * `mockContext({ walkerState: { cwd: "/x" } })` keeps the default
+	 * empty env Map (same shape as production). Pass `env` explicitly
+	 * only when you need a seeded map.
 	 */
 	readonly walkerState?: Partial<WhenWalkerState> & Record<string, unknown>;
 
@@ -487,13 +487,17 @@ export function mockContext(
 	const input = options.input ?? defaultInputFor(tool);
 	// Default walker state satisfies the required `cwd` + `env` fields
 	// of {@link WhenWalkerState}. Callers supplying their own
-	// walkerState pass whatever shape their predicate under test reads;
-	// the required fields still type-check because the option is typed
-	// against the interface itself.
-	const baseWalkerState: Record<string, unknown> =
-		options.walkerState !== undefined
-			? (options.walkerState as Record<string, unknown>)
-			: { cwd, env: new Map<string, string>() };
+	// walkerState get a shallow merge: defaults first, override last,
+	// so `mockContext({ walkerState: { cwd: "/x" } })` keeps the
+	// default env Map instead of dropping it (which would crash any
+	// predicate that reads `ctx.walkerState.env.get(...)`). This
+	// matches the production evaluator, which always populates both
+	// cwd and env.
+	const baseWalkerState: Record<string, unknown> = {
+		cwd,
+		env: new Map<string, string>(),
+		...(options.walkerState as Record<string, unknown> | undefined),
+	};
 	// Fold `toolCallEvents` (option) into `walkerState.events` (ctx
 	// shape) the same way the evaluator's `prepareBashState` does —
 	// the caller doesn't have to know the reserved-key convention.
