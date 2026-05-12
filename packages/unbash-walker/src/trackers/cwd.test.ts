@@ -829,6 +829,18 @@ describe("cwdTracker + envTracker integration (env-aware cd)", () => {
 		assert.equal(cwds["cmd"], cwdTracker.unknown);
 	});
 
+	it("bare `cd` (no args) with HOME absent from env → unknown (matches `cd ~` and `cd $HOME`)", () => {
+		// Bare `cd` defaults to HOME; same fail-closed behavior as `cd ~`.
+		// Pre-fix this silently returned `current` (no-op), bypassing
+		// onUnknown guardrails. Now returns undefined → walker emits
+		// unknown. Pins the bare-cd code path alongside the tilde path.
+		const cwds = cwdByNameFull("cd && cmd", {
+			cwd: "/start",
+			env: new Map(),
+		});
+		assert.equal(cwds["cmd"], cwdTracker.unknown);
+	});
+
 	it("subshell isolation: `(FOO=/s; cd \"$FOO\"); cmd` — outer env unchanged, outer cwd unchanged", () => {
 		// Spec success criterion: outer has no FOO, outer cwd returns to initial.
 		const map = walkCwdEnv('(FOO=/s; cd "$FOO"); cmd', { cwd: "/start" });

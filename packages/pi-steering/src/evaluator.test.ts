@@ -395,6 +395,56 @@ describe("buildEvaluator: when.cwd", () => {
 		);
 	});
 
+	it("object-form with onUnknown:'allow' skips on unresolvable cd target (opt-out of fail-closed)", async () => {
+		// Opposite of the block case above. An author who knows their
+		// rule should NOT fire on unresolvable cwd opts in via
+		// onUnknown: "allow". The walker still emits "unknown"; the
+		// built-in evaluateCwd routes to the allow branch.
+		const rule: Rule = {
+			name: "dont-block-on-unknown",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "would block, but onUnknown allows",
+			when: { cwd: { pattern: "/never-matches/", onUnknown: "allow" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"rule must NOT fire when cwd is unknown and onUnknown:'allow'",
+		);
+	});
+
+	it("object-form without onUnknown defaults to 'block' (fail-closed)", async () => {
+		// Pins the default: omitting `onUnknown` is equivalent to
+		// `onUnknown: 'block'`. Covers the evaluator's hot-path branch
+		// where obj.onUnknown is undefined.
+		const rule: Rule = {
+			name: "default-block-on-unknown",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "default-block",
+			when: { cwd: { pattern: "/never-matches/" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(
+			res,
+			"rule must fire on unknown when onUnknown is omitted (default: block)",
+		);
+	});
+
 	it("plugin predicate with onUnknown:'block' fires when handler sees unknown", async () => {
 		// Stand in for the future `when.branch` predicate: the plugin
 		// handler honors the object form's `onUnknown` policy itself.
