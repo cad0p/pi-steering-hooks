@@ -48,6 +48,8 @@
 import type { Word } from "unbash";
 import { type Modifier, type Tracker } from "../tracker.ts";
 import { resolveWord } from "../resolve-word.ts";
+import { isIdentifierName } from "../internal/identifier.ts";
+import { seedProcessEnv } from "../internal/seed-process-env.ts";
 
 /**
  * Shape of the env tracker's state: a read-only map from variable
@@ -112,28 +114,6 @@ function parseAssignmentToken(
 	if (!isIdentifierName(name)) return undefined;
 	const value = raw.slice(eq + 1);
 	return { name, value };
-}
-
-function isIdentifierName(name: string): boolean {
-	if (name.length === 0) return false;
-	const first = name.charCodeAt(0);
-	if (!isIdentStart(first)) return false;
-	for (let i = 1; i < name.length; i++) {
-		if (!isIdentCont(name.charCodeAt(i))) return false;
-	}
-	return true;
-}
-
-function isIdentStart(c: number): boolean {
-	return (
-		(c >= 65 && c <= 90) ||
-		(c >= 97 && c <= 122) ||
-		c === 95
-	);
-}
-
-function isIdentCont(c: number): boolean {
-	return isIdentStart(c) || (c >= 48 && c <= 57);
 }
 
 /**
@@ -327,12 +307,7 @@ const unsetModifier: Modifier<EnvState> = {
  * standard per-dimension seeding.
  */
 function seedFromProcessEnv(): EnvState {
-	const out = new Map<string, string>();
-	const { HOME, USER, PWD } = process.env;
-	if (HOME !== undefined) out.set("HOME", HOME);
-	if (USER !== undefined) out.set("USER", USER);
-	if (PWD !== undefined) out.set("PWD", PWD);
-	return out;
+	return seedProcessEnv();
 }
 
 /**

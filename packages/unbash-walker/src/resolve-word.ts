@@ -41,6 +41,7 @@
  */
 
 import type { Word, WordPart } from "unbash";
+import { isIdentifierName } from "./internal/identifier.ts";
 
 /**
  * Resolve a {@link Word} to its runtime string value using the
@@ -209,33 +210,4 @@ function resolvePart(
 		default:
 			return undefined;
 	}
-}
-
-/**
- * Accept only bash-identifier names (`[A-Za-z_][A-Za-z0-9_]*`).
- * Rejects positional parameters (`1`, `2`, …) and special
- * parameters (`@`, `*`, `#`, `?`, `$`, `!`, `-`). Those are
- * intractable for our static-resolution purposes even if the
- * parser hands them to us under SimpleExpansion / ParameterExpansion.
- */
-function isIdentifierName(name: string): boolean {
-	if (name.length === 0) return false;
-	const first = name.charCodeAt(0);
-	if (!isIdentStart(first)) return false;
-	for (let i = 1; i < name.length; i++) {
-		if (!isIdentCont(name.charCodeAt(i))) return false;
-	}
-	return true;
-}
-
-function isIdentStart(c: number): boolean {
-	return (
-		(c >= 65 /* A */ && c <= 90 /* Z */) ||
-		(c >= 97 /* a */ && c <= 122 /* z */) ||
-		c === 95 /* _ */
-	);
-}
-
-function isIdentCont(c: number): boolean {
-	return isIdentStart(c) || (c >= 48 /* 0 */ && c <= 57 /* 9 */);
 }

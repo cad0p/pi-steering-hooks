@@ -58,6 +58,7 @@ import * as path from "node:path";
 import type { Word } from "unbash";
 import { isStaticallyResolvable, type Modifier, type Tracker } from "../tracker.ts";
 import { resolveWord } from "../resolve-word.ts";
+import { seedProcessEnv } from "../internal/seed-process-env.ts";
 import type { EnvState } from "./env.ts";
 
 // --------------------------------------------------------------------------
@@ -85,12 +86,7 @@ import type { EnvState } from "./env.ts";
  * budget.
  */
 function buildProcessEnvFallback(): EnvState {
-	const out = new Map<string, string>();
-	const { HOME, USER, PWD } = process.env;
-	if (HOME !== undefined) out.set("HOME", HOME);
-	if (USER !== undefined) out.set("USER", USER);
-	if (PWD !== undefined) out.set("PWD", PWD);
-	return out;
+	return seedProcessEnv();
 }
 
 /**
