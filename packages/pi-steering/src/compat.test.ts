@@ -3,7 +3,7 @@
 
 /**
  * Tests for {@link fromJSON} — v1 JSON → v2 {@link SteeringConfig}
- * migration helper.
+ * import helper.
  *
  * Covers:
  *   - Happy paths: top-level fields, rule fields, `when.cwd`.

@@ -59,7 +59,7 @@ interface Entry {
  *   - `exec()` + `appendEntry()` are recorded for assertion.
  *
  * Everything else throws if touched so accidental reliance on
- * unsupported API surfaces breaks loudly during migration.
+ * unsupported API surfaces breaks loudly.
  */
 interface MockPi {
 	api: unknown; // cast at call site to ExtensionAPI

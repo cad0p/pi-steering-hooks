@@ -109,7 +109,7 @@ export { definePredicate } from "./define-predicate.ts";
 // Loader — walk-up config discovery + merge.
 export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";
 
-// JSON compat — migrate v0.0.x JSON configs to v0.1+ TS configs.
+// JSON compat — convert v1 JSON configs to v2 TS configs.
 export { FromJSONError, fromJSON } from "./compat.ts";
 
 // Auto-tag key for session-entry writes. Exposed so plugin authors

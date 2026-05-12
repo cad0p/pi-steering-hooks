@@ -663,9 +663,9 @@ describe("buildEvaluator: when.happened", () => {
 	});
 
 	it('treats legacy "turn" scope as an unknown-scope typo (S1)', async () => {
-		// "turn" was the removed v0.0.0-poc scope name. With v0.1.0 there
-		// is no special-case migration hint — it falls through to the
-		// generic "unknown scope" error, same as any other typo.
+		// "turn" was the removed PoC scope name. v0.1.0 has no special-case
+		// hint for it — it falls through to the generic "unknown scope"
+		// error, same as any other typo.
 		const rule: Rule = {
 			name: "legacy-turn",
 			tool: "bash",
@@ -739,10 +739,10 @@ describe("buildEvaluator: when.happened", () => {
 
 	it("untagged entries are treated as 'not happened this loop' (G5)", async () => {
 		// Simulates a pre-feature entry (hand-written session JSONL,
-		// migration across pi-steering versions, plugin that bypassed
-		// the wrapper): `data` has no `_agentLoopIndex` key. The
-		// agent_loop filter must NOT treat undefined as a match, so the
-		// rule's `when.happened` predicate still fires (rule blocks).
+		// or a plugin that bypassed the wrapper): `data` has no
+		// `_agentLoopIndex` key. The agent_loop filter must NOT treat
+		// undefined as a match, so the rule's `when.happened` predicate
+		// still fires (rule blocks).
 		const rule: Rule = {
 			name: "cr-needs-sync",
 			tool: "bash",
@@ -4690,8 +4690,8 @@ describe("buildEvaluator: when.happened.notIn (scope subtraction)", () => {
 	});
 
 	it("throws when notIn is a non-string (e.g. JSON config passes an object)", async () => {
-		// Pre-v0.1.0 the rename was `not: { in: "tool_call" }` (nested
-		// object). Authors migrating from that shape get a clear error.
+		// Pre-v0.1.0 the shape was `not: { in: "tool_call" }` (nested
+		// object). Authors passing that shape get a clear error.
 		await assertWarnMatches(
 			mkBadRule({ in: "tool_call" }),
 			/when\.happened\.notIn must be.*"agent_loop", "session", or "tool_call"/,
@@ -4701,7 +4701,7 @@ describe("buildEvaluator: when.happened.notIn (scope subtraction)", () => {
 
 // Keep `Observer` import referenced — downstream tests in
 // observer-dispatcher.test.ts exercise it directly; keeping the symbol
-// used here avoids "unused import" diagnostics if this file migrates.
+// used here avoids "unused import" diagnostics if this file is refactored.
 const _obsTypeKeepalive = null as unknown as Observer | null;
 void _obsTypeKeepalive;
 // And pull in ToolCallEvent for the narrow type echo below so unused-
