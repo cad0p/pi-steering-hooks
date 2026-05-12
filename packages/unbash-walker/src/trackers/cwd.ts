@@ -175,6 +175,19 @@ const cdModifier: Modifier<string, { env: EnvState }> = {
 
 		if (target === undefined || target === "-") return current;
 
+		// Sticky-unknown guard (Tier B correctness fix H1): once the
+		// cwd has fallen into the `unknown` sentinel via an earlier
+		// dynamic cd, a subsequent RELATIVE cd would otherwise produce
+		// `path.join("unknown", "<rel>") === "unknown/<rel>"` — a
+		// prefixed-sentinel that `evaluateCwd` no longer recognises
+		// (strict `walkerCwd === "unknown"`), silently defeating
+		// `onUnknown: 'block'`. Keep the sentinel sticky for relative
+		// targets; absolute cd recovers static ground and is allowed to
+		// re-anchor as before.
+		if (current === cwdTracker.unknown && !path.isAbsolute(target)) {
+			return undefined;
+		}
+
 		return resolveTarget(current, target, env);
 	},
 };

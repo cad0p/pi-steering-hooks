@@ -320,6 +320,21 @@ describe("cwdTracker via walk", () => {
 			const cwds = cwdByName("cd $UNDEFINED && cd /static && cmd", "/start");
 			assert.equal(cwds["cmd"], "/static");
 		});
+
+		it("`cd $UNDEFINED; cd relative; cmd` — sentinel stays sticky across a RELATIVE cd (H1)", () => {
+			// Correctness fix H1: `path.join("unknown", "relative")` produces
+			// `"unknown/relative"`, a prefixed-sentinel that `evaluateCwd`
+			// (strict `walkerCwd === "unknown"`) no longer treats as unknown,
+			// silently defeating `onUnknown: 'block'`. With the fix,
+			// cdModifier short-circuits when current is unknown AND the
+			// target is not absolute, keeping the sentinel intact.
+			const cwds = cwdByName("cd $UNDEFINED && cd relative && cmd", "/start");
+			assert.equal(
+				cwds["cmd"],
+				cwdTracker.unknown,
+				"unknown must propagate through the relative cd; no 'unknown/relative' leak",
+			);
+		});
 	});
 
 	describe("control-flow branch merge", () => {
