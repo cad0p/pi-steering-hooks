@@ -126,16 +126,42 @@ export class UnknownPredicateError extends Error {
  *     unknown so the rule fires (block the command).
  *   - `onUnknown: "allow"`                        → predicate FAILS on
  *     unknown so the rule skips (allow the command).
+ *
+ * Fast path: the common shorthand form `when.cwd: /regex/` (or a
+ * string pattern) is read directly — no normalization object
+ * allocated. Only the object form `{ pattern, onUnknown }` takes
+ * the slightly-slower path of reading two fields. Matters because
+ * `when.cwd` runs once per rule per extracted ref per tool_call,
+ * so cutting the per-call allocation saves micro-seconds on hot
+ * configs with many cwd-scoped rules.
  */
 function evaluateCwd(
 	value: unknown,
 	walkerCwd: string,
 ): boolean {
-	const unwrapped = unwrapOnUnknown(value);
-	if (walkerCwd === "unknown") {
-		return unwrapped.onUnknown === "block"; // block → pred passes → rule fires
+	// Shorthand Pattern form (string or RegExp).
+	if (typeof value === "string" || value instanceof RegExp) {
+		if (walkerCwd === "unknown") return true; // onUnknown default: block
+		return matchesPattern(value, walkerCwd);
 	}
-	return matchesPattern(unwrapped.pattern, walkerCwd);
+	// Object form: { pattern, onUnknown? }.
+	if (
+		value !== null &&
+		typeof value === "object" &&
+		"pattern" in (value as Record<string, unknown>)
+	) {
+		const obj = value as {
+			pattern: Pattern;
+			onUnknown?: "allow" | "block";
+		};
+		if (walkerCwd === "unknown") {
+			return (obj.onUnknown ?? "block") === "block";
+		}
+		return matchesPattern(obj.pattern, walkerCwd);
+	}
+	// Malformed input — treat as shorthand Pattern with fail-closed default.
+	if (walkerCwd === "unknown") return true;
+	return matchesPattern(value as Pattern, walkerCwd);
 }
 
 /**
@@ -395,31 +421,6 @@ function realEntryInScope(
 		const tag = entry.data?.[AGENT_LOOP_INDEX_KEY];
 		return tag === target;
 	};
-}
-
-/**
- * Normalize the union shape accepted by built-in predicates:
- *   - `Pattern`                            → { pattern, onUnknown: "block" }
- *   - `{ pattern: Pattern, onUnknown? }`   → as supplied; `onUnknown`
- *                                            defaults to "block".
- */
-function unwrapOnUnknown(value: unknown): {
-	pattern: Pattern;
-	onUnknown: "allow" | "block";
-} {
-	if (
-		value !== null &&
-		typeof value === "object" &&
-		!(value instanceof RegExp) &&
-		"pattern" in (value as Record<string, unknown>)
-	) {
-		const obj = value as {
-			pattern: Pattern;
-			onUnknown?: "allow" | "block";
-		};
-		return { pattern: obj.pattern, onUnknown: obj.onUnknown ?? "block" };
-	}
-	return { pattern: value as Pattern, onUnknown: "block" };
 }
 
 /**
