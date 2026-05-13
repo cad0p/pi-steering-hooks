@@ -27,6 +27,7 @@
  */
 
 import type { Rule } from "../../schema.ts";
+import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
 
 /**
  * `no-main-commit` - block direct commits to a protected branch
@@ -56,6 +57,18 @@ import type { Rule } from "../../schema.ts";
  *
  *   `when: { branch: { pattern: /.../, onUnknown: "allow" } }`
  *
+ * Reason text is dynamic via {@link ReasonFn}: when the branch
+ * tracker has resolved a concrete branch name for the guarded
+ * command (statically from a `git checkout <name>` earlier in the
+ * chain), the name is injected into the block message so the agent
+ * sees "You are on 'main'" instead of a generic reminder. The
+ * ReasonFn filters out the tracker's internal sentinels
+ * (`NO_CHECKOUT_IN_CHAIN` — no in-chain checkout, exec-fallback
+ * path; `"unknown"` — dynamic checkout the walker couldn't
+ * resolve) so those strings never leak into the agent-facing
+ * message; the static actionable tail still guides the agent to a
+ * feature branch in those cases.
+ *
  * Override: allowed (the rule is overridable via a
  * `# steering-override: no-main-commit` comment). This is a workflow
  * rule, not an inherent-destructiveness rule - authors override when
@@ -71,8 +84,34 @@ export const noMainCommit = {
 	pattern:
 		"^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+commit\\b",
 	when: { branch: /^(main|master|mainline|trunk)$/ },
-	reason:
-		"Don't commit directly to a protected branch (main / master / mainline / trunk). Create a feature branch first: `git checkout -b feat/...`.",
+	reason: (ctx) => {
+		const raw = ctx.walkerState?.branch;
+		// Only inject the dynamic clause when the tracker resolved a
+		// concrete branch name. Filter out:
+		//   - non-string values (no tracker ran, no walker invocation),
+		//   - empty strings (detached HEAD / no current branch),
+		//   - the walker's `"unknown"` sentinel (dynamic checkout the
+		//     tracker couldn't resolve — leaking the string would
+		//     read as "You are on 'unknown'" which is misleading),
+		//   - the branch tracker's `NO_CHECKOUT_IN_CHAIN` initial
+		//     sentinel (no in-chain `git checkout` fired — the rule
+		//     fires via the exec fallback path which doesn't touch
+		//     walker state, so the sentinel would leak otherwise).
+		const branch =
+			typeof raw === "string" &&
+			raw !== "" &&
+			raw !== "unknown" &&
+			raw !== NO_CHECKOUT_IN_CHAIN
+				? raw
+				: undefined;
+		const onClause =
+			branch !== undefined ? ` You are on '${branch}'.` : "";
+		return (
+			`Don't commit directly to a protected branch ` +
+			`(main / master / mainline / trunk).${onClause} ` +
+			`Create a feature branch first: \`git checkout -b feat/...\`.`
+		);
+	},
 	// Explicit override-OK: workflow rules are intentionally
 	// overridable.
 	noOverride: false,
