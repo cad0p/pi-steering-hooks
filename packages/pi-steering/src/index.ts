@@ -116,6 +116,7 @@ export {
 	requireKnownCwd,
 	requireKnownState,
 } from "./helpers/require-known-state.ts";
+export type { BuiltInTrackerDimension } from "./helpers/require-known-state.ts";
 
 // Loader — walk-up config discovery + merge.
 export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";

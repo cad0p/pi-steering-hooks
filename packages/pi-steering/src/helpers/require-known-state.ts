@@ -62,17 +62,37 @@
 import type { PredicateHandler } from "../schema.ts";
 
 /**
+ * Walker-tracked state dimensions known to the engine out of the box.
+ * Plugin-registered trackers can add additional dimensions at
+ * config-build time; the `(string & {})` widening below preserves
+ * acceptance of those custom names while still prompting IDE
+ * autocomplete for the built-ins.
+ *
+ * Kept in this module (rather than `schema.ts`) because it's a
+ * helper-layer authoring convenience, not a runtime type the
+ * engine consumes — exported so plugin helpers can compose with
+ * the same literal union.
+ */
+export type BuiltInTrackerDimension = "cwd" | "env";
+
+/**
  * Wrap a predicate handler so it fires (returns `true`) whenever any
  * listed walker-state dimension is the `"unknown"` sentinel, without
  * invoking the wrapped handler.
  *
  * Design notes:
- *   - `dimensions` is `readonly string[]` rather than a stricter
- *     union because plugin-registered trackers add dimensions at
- *     config-build time — the schema-level type can't enumerate
- *     them. Invalid dimension names still "work" (they'll never
- *     match `"unknown"`) and the handler runs as-is; this mirrors
- *     the loose `PredicateContext.walkerState` indexing.
+ *   - `dimensions` accepts `BuiltInTrackerDimension | (string & {})`
+ *     so IDE autocomplete prompts the engine's built-in dimension
+ *     names (`"cwd"`, `"env"`) as soon as the author opens the
+ *     array literal, reducing the typo footgun (`"bracnh"` silently
+ *     degrades to passthrough because the wrapper can never match
+ *     the `"unknown"` sentinel on a key no tracker produces). The
+ *     `(string & {})` intersection preserves acceptance of custom
+ *     dimension names registered by plugin-supplied trackers —
+ *     fully additive, zero runtime change.
+ *   - Invalid dimension names still "work" at runtime (they'll
+ *     never match `"unknown"`) and the handler runs as-is; this
+ *     mirrors the loose `PredicateContext.walkerState` indexing.
  *   - When `ctx.walkerState` is `undefined` (the tool isn't bash —
  *     `write` / `edit` have no walker invocation), no dimension can
  *     resolve to `"unknown"`, so the wrapper delegates. This keeps
@@ -95,7 +115,7 @@ import type { PredicateHandler } from "../schema.ts";
  */
 export function requireKnownState<A>(
 	handler: PredicateHandler<A>,
-	dimensions: readonly string[],
+	dimensions: readonly (BuiltInTrackerDimension | (string & {}))[],
 ): PredicateHandler<A> {
 	return async (args, ctx) => {
 		const state = ctx.walkerState;
