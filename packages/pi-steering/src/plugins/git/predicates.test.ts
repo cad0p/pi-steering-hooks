@@ -876,4 +876,70 @@ describe("predicates: requireKnownCwd wrap fires on walker-unknown cwd", () => {
 		assert.equal(await commitsAhead({ eq: 2 }, ctx), true);
 		assert.equal(execCalls.length, 1);
 	});
+
+	it("remote fires even with onUnknown:allow when walker reports cwd unknown", async () => {
+		// Pins the wrap's fail-closed precedence: user-supplied
+		// `onUnknown: "allow"` asks the rule to skip when uncertain.
+		// The wrap's walker-unknown short-circuit fires anyway —
+		// runtime-cwd predicates are fail-closed at the wrap layer, and
+		// the user's `onUnknown` knob only applies to SHELL-level
+		// uncertainty (no origin configured, exec failure). A refactor
+		// that plumbed the user's `onUnknown` into the wrap's verdict
+		// would silently flip behavior here.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd) => cmd === "git",
+					result: execOk("url\n"),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		assert.equal(
+			await remote({ pattern: /./, onUnknown: "allow" }, ctx),
+			true,
+			"wrap must fire on walker-unknown cwd even when user asked to allow",
+		);
+		assert.equal(execCalls.length, 0);
+	});
+
+	it("hasStagedChanges with known cwd dispatches to handler", async () => {
+		// Counter-pin: `isClean`'s known-cwd dispatch is pinned above;
+		// this mirrors it for `hasStagedChanges` so the "walker-defined,
+		// cwd-resolved → delegate" branch of the wrap is exercised on
+		// every wrapped predicate, not just isClean.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "diff" &&
+						args[1] === "--cached" &&
+						args[2] === "--quiet",
+					result: execOk(""),
+				},
+			],
+			{ walkerState: { cwd: "/workplace/pkg" } },
+		);
+		assert.equal(await hasStagedChanges(false, ctx), true);
+		assert.equal(execCalls.length, 1);
+	});
+
+	it("remote with known cwd dispatches to handler", async () => {
+		// Counter-pin: mirrors the isClean / hasStagedChanges known-
+		// cwd dispatch tests for remote. With walker cwd resolved, the
+		// wrap must not interfere — the handler runs and the verdict
+		// reflects the git state.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd) => cmd === "git",
+					result: execOk("git@github.com:org/repo.git\n"),
+				},
+			],
+			{ walkerState: { cwd: "/workplace/pkg" } },
+		);
+		assert.equal(await remote(/github\.com:org\//, ctx), true);
+		assert.equal(execCalls.length, 1);
+	});
 });
