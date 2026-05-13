@@ -119,6 +119,7 @@ export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
 
 // Schema types — the public authoring surface.
 export type {
+	AnyPredicateHandler,
 	ExecOpts,
 	ExecResult,
 	BaseRule,

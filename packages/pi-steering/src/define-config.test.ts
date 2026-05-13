@@ -423,16 +423,24 @@ describe("defineConfig: type constraints (ADR §8)", () => {
 		assert.equal(cfg.rules?.[0]?.when?.happened?.event, "plugin-obs-type");
 	});
 
-	it("G10 — Plugin.predicates without definePredicate requires the cast", () => {
-		// Authors who skip `definePredicate` lose the variance cast it
-		// internalizes. Direct assignment of a typed-arg handler into
-		// `Plugin.predicates: Record<string, PredicateHandler>` (unknown
-		// arg) must fail — `definePredicate`'s whole point.
+	it("G10 — Plugin.predicates accepts typed-arg handlers without a cast", () => {
+		// Pins Item 2 of PR #5: `Plugin.predicates` is now
+		// `Record<string, AnyPredicateHandler>` (where
+		// `AnyPredicateHandler = PredicateHandler<any>`), which leverages
+		// TS's bivariance fallback so a specifically-typed handler
+		// assigns into the registry slot directly — no cast, no
+		// `definePredicate` wrapper needed at the plug-in site.
+		//
+		// Pre-Item-2 this test pinned the OPPOSITE behavior (typed-arg
+		// handlers were rejected by the `PredicateHandler<unknown>` slot,
+		// motivating `definePredicate`). If TS's variance rules change
+		// under us the `@ts-expect-error` version of this test would
+		// reappear in git history — `definePredicate` is still exported
+		// for handler AUTHORS who want the generic narrowing sugar on
+		// their handler declaration.
 		const plugin: Plugin = {
 			name: "p",
 			predicates: {
-				// @ts-expect-error — typed-arg handler not assignable to the
-				// loose record shape without the definePredicate cast.
 				commitFormat: (
 					_args: { pattern: RegExp },
 					_ctx: PredicateContext,

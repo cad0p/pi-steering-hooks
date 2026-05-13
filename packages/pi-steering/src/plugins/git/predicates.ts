@@ -46,6 +46,7 @@
  */
 
 import type {
+	AnyPredicateHandler,
 	Pattern,
 	PredicateContext,
 	PredicateHandler,
@@ -455,12 +456,18 @@ export const remote: PredicateHandler = async (value, ctx) => {
  * Bundle of predicate handlers the git plugin registers under
  * `Plugin.predicates`. Keys become the `when.<key>` slots rule authors
  * see.
+ *
+ * Typed as `Record<string, AnyPredicateHandler>` to match
+ * {@link Plugin.predicates} at the registry boundary — each handler's
+ * concrete argument shape is preserved in its individual declaration
+ * above, and consumers can import `commitsAhead`, `isClean`, etc.
+ * directly when they want the narrow type.
  */
-export const predicates: Record<string, PredicateHandler> = {
+export const predicates: Record<string, AnyPredicateHandler> = {
 	branch,
 	upstream,
-	commitsAhead: commitsAhead as PredicateHandler,
-	hasStagedChanges: hasStagedChanges as PredicateHandler,
-	isClean: isClean as PredicateHandler,
+	commitsAhead,
+	hasStagedChanges,
+	isClean,
 	remote,
 };

@@ -464,7 +464,7 @@ describe("buildEvaluator: when.cwd", () => {
 		};
 		const plugin: Plugin = {
 			name: "git",
-			predicates: { branch: branchPredicate as PredicateHandler },
+			predicates: { branch: branchPredicate },
 		};
 		const ruleBlock: Rule = {
 			name: "no-main-commit",
@@ -2234,10 +2234,10 @@ describe("buildEvaluator: plugin predicates", () => {
 		const plugin: Plugin = {
 			name: "p",
 			predicates: {
-				commitsAhead: ((args, _ctx) => {
+				commitsAhead: (args, _ctx) => {
 					seenArgs.push(args);
 					return true;
-				}) as PredicateHandler,
+				},
 			},
 		};
 		const rule: Rule = {

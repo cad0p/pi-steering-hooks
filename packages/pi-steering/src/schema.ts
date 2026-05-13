@@ -103,6 +103,25 @@ export type PredicateHandler<A = unknown> = (
 	ctx: PredicateContext,
 ) => boolean | Promise<boolean>;
 
+/**
+ * Type-erased alias for {@link PredicateHandler} used at registry
+ * boundaries (notably {@link Plugin.predicates}).
+ *
+ * TypeScript treats function-argument types as contravariant: a
+ * `PredicateHandler<CommitsAheadArgs>` is **not** assignable to a
+ * `PredicateHandler<unknown>` because the handler needs to *accept*
+ * `unknown`, while the specialized handler only accepts a narrower
+ * shape. Using `any` at the registry slot leverages TS's bivariance
+ * fallback — specifically-typed handlers assign without a cast, and
+ * the engine's generic call site stays safe because it passes the
+ * matching `when.<name>` value straight through to the handler
+ * (the handler already validates its own arg shape).
+ *
+ * Prefer this alias at any `Record<string, PredicateHandler<…>>`
+ * boundary where the value shape is per-key heterogeneous.
+ */
+export type AnyPredicateHandler = PredicateHandler<any>;
+
 // ---------------------------------------------------------------------------
 // When clause
 // ---------------------------------------------------------------------------
@@ -958,7 +977,7 @@ export interface Plugin {
 	 * Predicate handlers keyed by the `when.<key>` slot they register.
 	 * See {@link PredicateHandler}.
 	 */
-	predicates?: Record<string, PredicateHandler>;
+	predicates?: Record<string, AnyPredicateHandler>;
 
 	/** Rules the plugin suggests. Users can opt out via `disabledRules: [...]`. */
 	rules?: readonly Rule[];
