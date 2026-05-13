@@ -194,6 +194,57 @@ describe("requireKnownState", () => {
 		const ctx = makeCtx({ cwd: "/repo", env: new Map() });
 		assert.equal(await wrapped(undefined, ctx), true);
 	});
+
+	it("propagates inner handler throws without swallowing", async () => {
+		// Pin the wrap contract: errors from the inner handler
+		// propagate upward rather than being caught and coerced to
+		// `true`/`false`. A refactor that added a try/catch around the
+		// inner call (e.g. "fail-safe to true on handler error") would
+		// change the semantics silently — the evaluator is the layer
+		// responsible for handling handler failures centrally.
+		const boom = new Error("handler boom");
+		const inner: PredicateHandler<void> = () => {
+			throw boom;
+		};
+		const wrapped = requireKnownState<void>(inner, ["cwd"]);
+		const ctx = makeCtx({ cwd: "/repo", env: new Map() });
+		await assert.rejects(
+			() => Promise.resolve(wrapped(undefined, ctx)),
+			(err: unknown) => err === boom,
+			"wrap must not swallow inner handler errors",
+		);
+	});
+
+	it("propagates inner handler promise rejections", async () => {
+		const boom = new Error("async boom");
+		const inner: PredicateHandler<void> = async () => {
+			throw boom;
+		};
+		const wrapped = requireKnownState<void>(inner, ["cwd"]);
+		const ctx = makeCtx({ cwd: "/repo", env: new Map() });
+		await assert.rejects(
+			() => Promise.resolve(wrapped(undefined, ctx)),
+			(err: unknown) => err === boom,
+		);
+	});
+
+	it("delegates when a listed dimension is absent from walkerState", async () => {
+		// Pins "undefined !== 'unknown'" contract: a dimension key that
+		// walkerState doesn't carry (typo, or a dimension no tracker
+		// produces yet) must delegate to the handler rather than fire.
+		// A refactor that tightened dimension lookup (e.g. fail if the
+		// key isn't in state) would break this contract silently.
+		let calls = 0;
+		const inner: PredicateHandler<boolean> = (args) => {
+			calls += 1;
+			return args;
+		};
+		const wrapped = requireKnownState<boolean>(inner, ["nonexistent"]);
+		const ctx = makeCtx({ cwd: "/repo", env: new Map() });
+		assert.equal(await wrapped(true, ctx), true);
+		assert.equal(await wrapped(false, ctx), false);
+		assert.equal(calls, 2);
+	});
 });
 
 describe("requireKnownCwd (shorthand)", () => {
@@ -213,5 +264,35 @@ describe("requireKnownCwd (shorthand)", () => {
 		assert.equal(await wrapped(true, ctxKnown), true);
 		assert.equal(await wrapped(false, ctxKnown), false);
 		assert.equal(calls, 2);
+	});
+
+	it("delegates when branch is unknown but cwd is resolved", async () => {
+		// Pins the scope narrowness of the shorthand: `requireKnownCwd`
+		// is NOT "fire on any walker-unknown dimension", it's
+		// specifically cwd. A refactor that broadened it to
+		// `requireKnownState(handler, ["cwd", "branch"])` would silently
+		// over-fire every runtime-cwd predicate on chains with a dynamic
+		// `git checkout`. The walker threads cwd-resolved + branch-
+		// unknown through this path on chains like
+		// `git checkout $VAR && git status`.
+		let calls = 0;
+		const inner: PredicateHandler<boolean> = (args) => {
+			calls += 1;
+			return args;
+		};
+		const wrapped = requireKnownCwd<boolean>(inner);
+		const ctx = makeCtx({
+			cwd: "/repo",
+			env: new Map(),
+			branch: "unknown",
+		});
+
+		assert.equal(await wrapped(true, ctx), true);
+		assert.equal(await wrapped(false, ctx), false);
+		assert.equal(
+			calls,
+			2,
+			"shorthand must delegate — only cwd unknown triggers fire",
+		);
 	});
 });
