@@ -655,3 +655,125 @@ describe("walkerString: rejects initialSentinel === \"unknown\"", () => {
 		);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// requireKnownCwd wrap (Item 4 of PR #5 scope expansion)
+//
+// `isClean`, `hasStagedChanges`, `remote` all call `ctx.exec("git", [...],
+// { cwd: ctx.cwd })` at runtime. When the walker's cwd tracker couldn't
+// statically resolve the effective cwd (e.g. `cd "$VAR/pkg" && git commit`)
+// `ctx.cwd` falls back to the pre-cd ambient cwd — the pi session cwd,
+// NOT the intended subpackage. Without a guard the predicate silently
+// queries the wrong repo and a gate like `isClean: true` would miss the
+// state that matters.
+//
+// The runtime-cwd predicates are wrapped with `requireKnownCwd` from
+// `helpers/require-known-state.ts` so the walker's `"unknown"` sentinel
+// short-circuits to "fire" (fail-closed) without running the handler.
+// These tests pin that contract: when `ctx.walkerState.cwd === "unknown"`,
+// each wrapped predicate fires regardless of what the stubbed exec would
+// have returned — in fact exec must not be called at all.
+// ---------------------------------------------------------------------------
+
+describe("predicates: requireKnownCwd wrap fires on walker-unknown cwd", () => {
+	it("isClean fires without calling exec when walker reports cwd unknown", async () => {
+		// Even though the stubbed `git status --porcelain` would return
+		// empty stdout (i.e. clean → `isClean: true` would MATCH and
+		// `isClean: false` would NOT), the wrapper must short-circuit
+		// BEFORE dispatch and fire regardless of the args value.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "status" &&
+						args[1] === "--porcelain",
+					result: execOk(""),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		assert.equal(await isClean(true, ctx), true);
+		assert.equal(await isClean(false, ctx), true);
+		assert.equal(
+			execCalls.length,
+			0,
+			"exec must not be called when walker reports cwd unknown",
+		);
+	});
+
+	it("hasStagedChanges fires without calling exec when walker reports cwd unknown", async () => {
+		// Stubbed exit 0 would classify as "no staged changes", so
+		// `hasStagedChanges: true` would NOT match under the normal
+		// code path. The wrap must override that and fire for both
+		// boolean args.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "diff" &&
+						args[1] === "--cached" &&
+						args[2] === "--quiet",
+					result: execOk(""),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		assert.equal(await hasStagedChanges(true, ctx), true);
+		assert.equal(await hasStagedChanges(false, ctx), true);
+		assert.equal(execCalls.length, 0);
+	});
+
+	it("remote fires without calling exec when walker reports cwd unknown", async () => {
+		// Stubbed stdout matches the test pattern under normal
+		// dispatch (→ match = true → fire). Without the wrap the rule
+		// would also fire, so the test is sharpened by asserting that
+		// exec is NOT called even once: the fire verdict must come
+		// from the walker short-circuit, not from the stub.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "config" &&
+						args[1] === "--get" &&
+						args[2] === "remote.origin.url",
+					result: execOk("git@github.com:org/repo.git\n"),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		assert.equal(await remote(/github\.com:org\//, ctx), true);
+		// Also pin the wrap fires even when the pattern would NOT have
+		// matched the stubbed stdout — the verdict is walker-driven,
+		// not pattern-driven.
+		assert.equal(await remote(/never-matches/, ctx), true);
+		assert.equal(
+			execCalls.length,
+			0,
+			"exec must not be called when walker reports cwd unknown",
+		);
+	});
+
+	it("isClean with known cwd still dispatches to the handler (wrap is transparent)", async () => {
+		// Counter-pin: with walker cwd resolved, the wrap must NOT
+		// interfere — the handler runs and the verdict reflects the
+		// git state. Guards against a refactor that over-fires on a
+		// walker-known cwd.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "status" &&
+						args[1] === "--porcelain",
+					result: execOk(""),
+				},
+			],
+			{ walkerState: { cwd: "/workplace/pkg" } },
+		);
+		assert.equal(await isClean(true, ctx), true);
+		assert.equal(execCalls.length, 1);
+	});
+});

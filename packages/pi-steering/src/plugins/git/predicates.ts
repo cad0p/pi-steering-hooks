@@ -51,6 +51,7 @@ import type {
 	PredicateContext,
 	PredicateHandler,
 } from "../../schema.ts";
+import { requireKnownCwd } from "../../helpers/require-known-state.ts";
 import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
 import {
 	getCommitsAhead,
@@ -390,16 +391,24 @@ export const commitsAhead: PredicateHandler<CommitsAheadArgs> = async (
  * 1 = staged changes exist. On any other exit / spawn failure, we
  * conservatively report `false` - the caller can AND this with an
  * `upstream` check if fail-closed behavior is needed.
+ *
+ * Runtime-cwd guard: the underlying `git diff --cached` call runs
+ * at `ctx.cwd`. When the walker surfaces `ctx.walkerState.cwd ===
+ * "unknown"` (dynamic `cd "$VAR/pkg"` the walker couldn't resolve),
+ * `ctx.cwd` falls back to the pre-cd ambient cwd — the PI session
+ * cwd, not the intended subpackage. {@link requireKnownCwd} wraps
+ * the handler to fire instead of silently querying the wrong repo,
+ * mirroring the engine's `onUnknown: "block"` default. See
+ * `helpers/require-known-state.ts` for the full rationale.
  */
-export const hasStagedChanges: PredicateHandler<boolean> = async (
-	args,
-	ctx,
-) => {
-	if (typeof args !== "boolean") return false;
-	const state = await getStagedChanges(ctx);
-	if (state === null) return false; // unknown — don't fire
-	return args === state;
-};
+export const hasStagedChanges: PredicateHandler<boolean> = requireKnownCwd(
+	async (args, ctx) => {
+		if (typeof args !== "boolean") return false;
+		const state = await getStagedChanges(ctx);
+		if (state === null) return false; // unknown — don't fire
+		return args === state;
+	},
+);
 
 // ---------------------------------------------------------------------------
 // isClean
@@ -417,13 +426,20 @@ export const hasStagedChanges: PredicateHandler<boolean> = async (
  * Uses `git status --porcelain`: empty stdout = clean. Non-zero exit
  * returns `false` (unknown); pair with an `upstream` check for
  * fail-closed behavior.
+ *
+ * Runtime-cwd guard: same rationale as {@link hasStagedChanges} —
+ * {@link requireKnownCwd} fires the predicate when the walker couldn't
+ * statically resolve the command's effective cwd, rather than
+ * silently running `git status` at the pi session cwd.
  */
-export const isClean: PredicateHandler<boolean> = async (args, ctx) => {
-	if (typeof args !== "boolean") return false;
-	const clean = await getWorkingTreeClean(ctx);
-	if (clean === null) return false;
-	return args === clean;
-};
+export const isClean: PredicateHandler<boolean> = requireKnownCwd(
+	async (args, ctx) => {
+		if (typeof args !== "boolean") return false;
+		const clean = await getWorkingTreeClean(ctx);
+		if (clean === null) return false;
+		return args === clean;
+	},
+);
 
 // ---------------------------------------------------------------------------
 // remote
@@ -438,15 +454,22 @@ export const isClean: PredicateHandler<boolean> = async (args, ctx) => {
  *
  * Resolves via `git config --get remote.origin.url`. Non-zero exit
  * (no origin configured) falls back to `onUnknown`.
+ *
+ * Runtime-cwd guard: {@link requireKnownCwd} fires the predicate when
+ * the walker couldn't statically resolve the command's effective cwd
+ * — querying the wrong repo's remote would silently mis-route a
+ * repo-gated rule. Same rationale as {@link hasStagedChanges}.
  */
-export const remote: PredicateHandler = async (value, ctx) => {
-	const arg = unwrapPatternArg(value);
-	if (arg === null) return false;
+export const remote: PredicateHandler = requireKnownCwd(
+	async (value, ctx) => {
+		const arg = unwrapPatternArg(value);
+		if (arg === null) return false;
 
-	const out = await getRemoteUrl(ctx);
-	if (out === null) return unknownVerdict(arg.onUnknown);
-	return matchPattern(arg.pattern, out);
-};
+		const out = await getRemoteUrl(ctx);
+		if (out === null) return unknownVerdict(arg.onUnknown);
+		return matchPattern(arg.pattern, out);
+	},
+);
 
 // ---------------------------------------------------------------------------
 // Plugin-level export
