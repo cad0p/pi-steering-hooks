@@ -27,7 +27,13 @@
  *                           --show-current`.
  *   - `upstream`         - no tracker today; always shell out via
  *                           `git rev-parse --abbrev-ref @{upstream}`.
+ *                           Wrapped with `requireKnownCwd` so
+ *                           walker-unknown cwd fires the predicate
+ *                           rather than shelling against the pi
+ *                           session cwd.
  *   - `commitsAhead`     - shell out via `git rev-list --count`.
+ *                           Wrapped with `requireKnownCwd` for the
+ *                           same reason as `upstream`.
  *   - `hasStagedChanges` - shell out via `git diff --cached --quiet`.
  *   - `isClean`          - shell out via `git status --porcelain`.
  *   - `remote`           - shell out via `git config --get
@@ -298,15 +304,25 @@ export const branch: PredicateHandler = async (value, ctx) => {
  * is past the point where a pre-execution guard would act). The
  * per-tool_call exec cache ensures multiple upstream-gated rules share
  * one git call.
+ *
+ * Runtime-cwd guard: `getUpstream` shells out at `ctx.cwd`. When the
+ * walker surfaces `ctx.walkerState.cwd === "unknown"` (dynamic
+ * `cd "$VAR/pkg"` the walker couldn't resolve), the exec would run
+ * against the pi session cwd — the wrong repo — and a user who opted
+ * into `onUnknown: "allow"` would get a silent fail-OPEN. {@link
+ * requireKnownCwd} fires the predicate instead, mirroring the engine's
+ * `onUnknown: "block"` default. See `hasStagedChanges` JSDoc.
  */
-export const upstream: PredicateHandler = async (value, ctx) => {
-	const arg = unwrapPatternArg(value);
-	if (arg === null) return false;
+export const upstream: PredicateHandler = requireKnownCwd(
+	async (value, ctx) => {
+		const arg = unwrapPatternArg(value);
+		if (arg === null) return false;
 
-	const out = await getUpstream(ctx);
-	if (out === null) return unknownVerdict(arg.onUnknown);
-	return matchPattern(arg.pattern, out);
-};
+		const out = await getUpstream(ctx);
+		if (out === null) return unknownVerdict(arg.onUnknown);
+		return matchPattern(arg.pattern, out);
+	},
+);
 
 // ---------------------------------------------------------------------------
 // commitsAhead
@@ -355,25 +371,32 @@ export interface CommitsAheadArgs {
  * fail-closed behavior can layer `{ upstream: "..." }` first in the
  * same `when` (AND semantics via the ADR's plugin predicates) - that
  * handles the "no upstream" case with explicit `onUnknown`.
+ *
+ * Runtime-cwd guard: `getCommitsAhead` shells out at `ctx.cwd`. When
+ * the walker surfaces `ctx.walkerState.cwd === "unknown"`, the exec
+ * would run against the pi session cwd — wrong repo — and the
+ * `count === null` failure path returns `false`, silently skipping
+ * the rule (fail-OPEN). {@link requireKnownCwd} fires the predicate
+ * instead, matching the fail-closed policy used by the other
+ * runtime-cwd predicates in this plugin.
  */
-export const commitsAhead: PredicateHandler<CommitsAheadArgs> = async (
-	args,
-	ctx,
-) => {
-	if (args === null || typeof args !== "object") return false;
-	const { wrt = "@{upstream}", eq, gt, lt } = args;
-	if (eq === undefined && gt === undefined && lt === undefined) {
-		return false;
-	}
+export const commitsAhead: PredicateHandler<CommitsAheadArgs> = requireKnownCwd(
+	async (args, ctx) => {
+		if (args === null || typeof args !== "object") return false;
+		const { wrt = "@{upstream}", eq, gt, lt } = args;
+		if (eq === undefined && gt === undefined && lt === undefined) {
+			return false;
+		}
 
-	const count = await getCommitsAhead(ctx, wrt);
-	if (count === null) return false;
+		const count = await getCommitsAhead(ctx, wrt);
+		if (count === null) return false;
 
-	if (eq !== undefined && count !== eq) return false;
-	if (gt !== undefined && !(count > gt)) return false;
-	if (lt !== undefined && !(count < lt)) return false;
-	return true;
-};
+		if (eq !== undefined && count !== eq) return false;
+		if (gt !== undefined && !(count > gt)) return false;
+		if (lt !== undefined && !(count < lt)) return false;
+		return true;
+	},
+);
 
 // ---------------------------------------------------------------------------
 // hasStagedChanges

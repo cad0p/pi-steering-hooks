@@ -776,4 +776,104 @@ describe("predicates: requireKnownCwd wrap fires on walker-unknown cwd", () => {
 		assert.equal(await isClean(true, ctx), true);
 		assert.equal(execCalls.length, 1);
 	});
+
+	it("upstream fires without calling exec when walker reports cwd unknown", async () => {
+		// Same contract as isClean / hasStagedChanges / remote: the
+		// underlying `git rev-parse --abbrev-ref @{upstream}` call runs
+		// at `ctx.cwd`. When the walker bails, exec would target the pi
+		// session cwd — wrong repo — and a rule with
+		// `onUnknown: "allow"` would silently fail-OPEN. Pin that the
+		// wrap fires before dispatch.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "rev-parse" &&
+						args[1] === "--abbrev-ref" &&
+						args[2] === "@{upstream}",
+					result: execOk("origin/main\n"),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		// Default onUnknown=block: wrap fires regardless of pattern.
+		assert.equal(await upstream(/^origin\/main$/, ctx), true);
+		// onUnknown="allow" is also overridden by the wrap — the
+		// walker-cwd-unknown case is fail-closed at the wrap layer.
+		assert.equal(
+			await upstream({ pattern: /^origin\/main$/, onUnknown: "allow" }, ctx),
+			true,
+		);
+		assert.equal(
+			execCalls.length,
+			0,
+			"exec must not be called when walker reports cwd unknown",
+		);
+	});
+
+	it("upstream with known cwd still dispatches to the handler (wrap is transparent)", async () => {
+		// Counter-pin: walker cwd resolved → handler runs.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "rev-parse" &&
+						args[1] === "--abbrev-ref" &&
+						args[2] === "@{upstream}",
+					result: execOk("origin/main\n"),
+				},
+			],
+			{ walkerState: { cwd: "/workplace/pkg" } },
+		);
+		assert.equal(await upstream(/^origin\/main$/, ctx), true);
+		assert.equal(execCalls.length, 1);
+	});
+
+	it("commitsAhead fires without calling exec when walker reports cwd unknown", async () => {
+		// commitsAhead has no `onUnknown` knob at all; its exec-
+		// failure path returns `false` (rule silently skips). That's
+		// exactly the silent fail-OPEN class `requireKnownCwd` exists
+		// to close. Pin that the wrap fires ahead of dispatch for
+		// every comparator flavor.
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" && args[0] === "rev-list",
+					result: execOk("3\n"),
+				},
+			],
+			{ walkerState: { cwd: "unknown" } },
+		);
+		// Under normal dispatch, `3 === 1` would be false; under the
+		// wrap it fires true.
+		assert.equal(await commitsAhead({ eq: 1 }, ctx), true);
+		// Normal dispatch would fire for `gt: 0`; wrap still returns
+		// true without running exec.
+		assert.equal(await commitsAhead({ gt: 0 }, ctx), true);
+		assert.equal(
+			execCalls.length,
+			0,
+			"exec must not be called when walker reports cwd unknown",
+		);
+	});
+
+	it("commitsAhead with known cwd still dispatches to the handler (wrap is transparent)", async () => {
+		const { ctx, execCalls } = makeCtx(
+			[
+				{
+					match: (cmd, args) =>
+						cmd === "git" &&
+						args[0] === "rev-list" &&
+						args[1] === "--count",
+					result: execOk("2\n"),
+				},
+			],
+			{ walkerState: { cwd: "/workplace/pkg" } },
+		);
+		assert.equal(await commitsAhead({ eq: 2 }, ctx), true);
+		assert.equal(execCalls.length, 1);
+	});
 });
