@@ -19,17 +19,21 @@
  *
  * Custom predicates that read `ctx.cwd` DIRECTLY — typically via
  * `ctx.exec("git", [...], { cwd: ctx.cwd })` or a filesystem check —
- * do NOT. `ctx.cwd` is populated with the walker's pre-cd cwd (the pi
- * session cwd) when the walker bailed, so the predicate silently
- * queries the WRONG directory. An `isClean` gate on `cd $VAR && git
- * commit` would happily report "clean" for the session cwd and let
- * the commit through.
+ * do NOT. When the walker bails on a dynamic `cd "$VAR/pkg"`,
+ * `ctx.cwd` is populated with the walker sentinel string `"unknown"`
+ * (a literal, not a resolved path). An `ctx.exec` at that path fails
+ * at spawn time (nonexistent directory), the handler's failure path
+ * returns `null` / `false`, and — without a wrap — the rule silently
+ * fail-OPENS. An `isClean` gate on `cd $VAR && git commit` would skip
+ * the rule entirely, letting the commit through.
  *
- * See `cwd-dynamic-tracking-gap.md` (napkin feature doc) for the full
- * motivating analysis and the long-term v0.2+ alternatives
- * (Approaches B and C). This helper is Approach A — a per-predicate
- * fail-closed wrapper that plugin authors can opt into at
- * registration time.
+ * This helper (Approach A — per-predicate fail-closed wrapper) closes
+ * the gap: plugin authors opt into it at registration time so their
+ * runtime-cwd predicates inherit the engine's `onUnknown: "block"`
+ * semantics mechanically. Longer-term v0.2+ approaches (cwd-value
+ * producers on the walker, engine-level opt-in on plugin predicates)
+ * may subsume it, but Approach A is the zero-schema-change closure
+ * for v0.1.0.
  *
  * ## How
  *
