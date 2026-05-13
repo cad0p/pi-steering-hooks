@@ -106,6 +106,17 @@ export type { DefineConfigInput } from "./define-config.ts";
 // Predicate helper.
 export { definePredicate } from "./define-predicate.ts";
 
+// Guard helpers for custom predicates that read runtime `ctx.cwd`
+// (shell-exec or filesystem queries) rather than walker-tracked state.
+// Wrap handlers with `requireKnownCwd` / `requireKnownState` to
+// inherit the engine's `onUnknown: "block"` fail-closed semantics
+// when the walker surfaces its `"unknown"` sentinel for a dynamic
+// `cd $VAR` target.
+export {
+	requireKnownCwd,
+	requireKnownState,
+} from "./helpers/require-known-state.ts";
+
 // Loader — walk-up config discovery + merge.
 export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";
 
