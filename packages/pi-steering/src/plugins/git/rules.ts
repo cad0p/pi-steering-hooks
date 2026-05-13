@@ -28,6 +28,7 @@
 
 import type { Rule } from "../../schema.ts";
 import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
+import { walkerString } from "./predicates.ts";
 
 /**
  * `no-main-commit` - block direct commits to a protected branch
@@ -85,25 +86,17 @@ export const noMainCommit = {
 		"^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+commit\\b",
 	when: { branch: /^(main|master|mainline|trunk)$/ },
 	reason: (ctx) => {
-		const raw = ctx.walkerState?.branch;
-		// Only inject the dynamic clause when the tracker resolved a
-		// concrete branch name. Filter out:
-		//   - non-string values (no tracker ran, no walker invocation),
-		//   - empty strings (detached HEAD / no current branch),
-		//   - the walker's `"unknown"` sentinel (dynamic checkout the
-		//     tracker couldn't resolve — leaking the string would
-		//     read as "You are on 'unknown'" which is misleading),
-		//   - the branch tracker's `NO_CHECKOUT_IN_CHAIN` initial
-		//     sentinel (no in-chain `git checkout` fired — the rule
-		//     fires via the exec fallback path which doesn't touch
-		//     walker state, so the sentinel would leak otherwise).
+		// Delegate the sentinel classification to `walkerString` — the
+		// same three-way discrimination (value / unknown / missing)
+		// every other branch-consumer in this plugin uses. Single source
+		// of truth for tracker-sentinel semantics; future sentinel
+		// additions update one site (the classifier in predicates.ts),
+		// not this filter too. Empty-string remains filtered inline as
+		// a defensive check against future tracker contracts (detached
+		// HEAD or similar); the branch tracker doesn't emit it today.
+		const res = walkerString(ctx, "branch", NO_CHECKOUT_IN_CHAIN);
 		const branch =
-			typeof raw === "string" &&
-			raw !== "" &&
-			raw !== "unknown" &&
-			raw !== NO_CHECKOUT_IN_CHAIN
-				? raw
-				: undefined;
+			res.kind === "value" && res.value !== "" ? res.value : undefined;
 		const onClause =
 			branch !== undefined ? ` You are on '${branch}'.` : "";
 		return (
