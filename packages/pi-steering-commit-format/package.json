@@ -1,0 +1,46 @@
+{
+	"name": "pi-steering-commit-format",
+	"version": "0.0.0-poc.0",
+	"private": true,
+	"description": "Commit-message format validation predicates for pi-steering. Bundled formats: Conventional Commits 1.0.0 (Angular preset type allowlist), bracketed JIRA-style ticket references. Extensible via `commitFormatFactory`.",
+	"keywords": [
+		"pi-package",
+		"pi-steering-package",
+		"guardrails",
+		"safety",
+		"commit",
+		"conventional-commits",
+		"jira"
+	],
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"clean": "rm -rf dist tsconfig.build.tsbuildinfo",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"pi-steering": "workspace:*"
+	},
+	"devDependencies": {
+		"pi-steering": "workspace:*",
+		"typescript": "^5.4.5"
+	}
+}

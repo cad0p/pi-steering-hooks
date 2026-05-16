@@ -103,11 +103,24 @@ describe("defaults: DEFAULT_RULES shape", () => {
 });
 
 describe("defaults: DEFAULT_PLUGINS shape", () => {
-	it("is empty by default (Phase 3 ships no built-in plugins)", () => {
-		// Phase 4 will add the git plugin. When that lands this test flips
-		// to assert the expected plugin list — keeping a count lock so the
-		// ship-surface stays deliberate.
-		assert.deepEqual(DEFAULT_PLUGINS, []);
+	it("ships the git plugin default-on", () => {
+		// D1 (v0.1.0 release gate): the git plugin is promoted into
+		// DEFAULT_PLUGINS so new consumers get the `branch` predicate,
+		// the `no-main-commit` rule, and the branch tracker + git cwd
+		// extensions without explicit import. Users opt out via
+		// `disabledPlugins: ["git"]` or `disableDefaults: true` - see
+		// the `defaults.ts` JSDoc for the opt-out paths.
+		//
+		// This test is the count lock: any addition to the default
+		// plugin list is a deliberate ship-surface change and must
+		// update this assertion explicitly.
+		assert.equal(
+			DEFAULT_PLUGINS.length,
+			1,
+			"DEFAULT_PLUGINS should ship exactly the git plugin; adding more is a ship-surface change",
+		);
+		const names = DEFAULT_PLUGINS.map((p) => p.name);
+		assert.deepEqual(names, ["git"]);
 	});
 });
 
@@ -489,5 +502,65 @@ describe("defaults: end-to-end via buildEvaluator", () => {
 			0,
 		);
 		assert.equal(r, undefined);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// disabledPlugins: ["git"] e2e regression fence (D1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin-merger unit test proves that `disabledPlugins` filters by
+ * name against a SYNTHETIC `{ name: "git", ... }` plugin. That's
+ * sufficient for the filter itself, but doesn't prove the REAL git
+ * plugin — the one shipped in {@link DEFAULT_PLUGINS} and the one
+ * users actually opt out of — is fully removed across every surface
+ * the plugin registers (predicates, rules, trackers, tracker
+ * extensions). A regression that merged the real plugin in through a
+ * second code path would escape the synthetic test entirely.
+ *
+ * One e2e smoke guard here is enough: drive `resolvePlugins` over
+ * the real default plugin list with `disabledPlugins: ["git"]` and
+ * assert every surface the git plugin ships is absent from the
+ * resolved state.
+ */
+describe("defaults: disabledPlugins: [\"git\"] opts out of the real git plugin", () => {
+	it("removes no-main-commit rule, branch predicate, and cwd.git tracker extension", () => {
+		const resolved = resolvePlugins(DEFAULT_PLUGINS, {
+			disabledPlugins: ["git"],
+		});
+
+		// Rule surface: `no-main-commit` (the rule the git plugin ships)
+		// must not appear in the resolved rule list.
+		const ruleNames = resolved.rules.map((r) => r.name);
+		assert.ok(
+			!ruleNames.includes("no-main-commit"),
+			`no-main-commit leaked past disabledPlugins: ["git"]; rules: ${ruleNames.join(", ")}`,
+		);
+
+		// Predicate surface: `branch` (canonical git predicate) must not
+		// be registered. Spot-checking one predicate is enough — if the
+		// plugin's predicate bundle was registered at all, `branch` would
+		// be present.
+		assert.ok(
+			!("branch" in resolved.predicates),
+			"branch predicate leaked past disabledPlugins: [\"git\"]",
+		);
+
+		// Tracker-extension surface: `cwd.git` (the --git-dir / --work-tree
+		// parser layered on the core cwd tracker) must not be registered.
+		const cwdExts = resolved.trackerModifiers["cwd"];
+		assert.ok(
+			cwdExts === undefined || !("git" in cwdExts),
+			"cwd.git tracker extension leaked past disabledPlugins: [\"git\"]",
+		);
+
+		// Plugin-merger emits a warning for every opted-out plugin; the
+		// CLI surfaces these in `list`. Spot-check that the warning fires
+		// here too, so a regression that silently accepts an unknown name
+		// also trips this test.
+		const warn = resolved.warnings.find((w) => w.kind === "plugin-disabled");
+		assert.ok(warn, "expected plugin-disabled warning for git");
+		assert.match(warn?.message ?? "", /"git"/);
 	});
 });

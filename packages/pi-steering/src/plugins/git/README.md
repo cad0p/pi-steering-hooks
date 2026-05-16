@@ -4,9 +4,12 @@ Git plugin for [pi-steering](../../../README.md) — branch
 awareness, upstream checks, and git-specific cwd tracking on top of
 the core steering engine.
 
-> **Opt-in.** This plugin ships with the package but is NOT loaded by
-> default. Users who want the git predicates and rules must register
-> it explicitly. See [Usage](#usage) below.
+> **Default-on.** As of v0.1.0 this plugin is registered
+> automatically via [`DEFAULT_PLUGINS`](../../defaults.ts). New
+> consumers get the predicates, rules, tracker, and cwd extensions
+> without an explicit `import`. Opt out via
+> `defineConfig({ disabledPlugins: ["git"] })` or drop all defaults
+> with `disableDefaults: true`. See [Disabling](#disabling) below.
 
 ## What it ships
 
@@ -22,10 +25,9 @@ the core steering engine.
 ```ts
 // .pi/steering.ts
 import { defineConfig } from "pi-steering";
-import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
-  plugins: [gitPlugin],
+  // No explicit `plugins: [gitPlugin]` needed — it's in DEFAULT_PLUGINS.
   rules: [
     // Custom rule layered on top of the plugin's predicates:
     {
@@ -40,22 +42,43 @@ export default defineConfig({
 });
 ```
 
-### Disabling specific pieces
+Explicit import still works (e.g. in tests driving `loadHarness`
+with `includeDefaults: false`):
 
 ```ts
+import gitPlugin from "pi-steering/plugins/git";
+
 export default defineConfig({
   plugins: [gitPlugin],
-  disabledRules: ["no-main-commit"],   // Keep predicates, drop the shipped rule
+  rules: [...],
 });
 ```
 
-Or disable the whole plugin while still importing it (useful when a
-parent config registers the plugin and a project wants to opt out):
+### Disabling
+
+Keep the predicates + tracker, drop the shipped rule:
 
 ```ts
 export default defineConfig({
-  plugins: [gitPlugin],
+  disabledRules: ["no-main-commit"],
+});
+```
+
+Drop the whole git plugin (no `branch` / `upstream` / ... predicates,
+no tracker, no cwd extensions, no rule):
+
+```ts
+export default defineConfig({
   disabledPlugins: ["git"],
+});
+```
+
+Drop EVERYTHING shipped — both `DEFAULT_RULES` and
+`DEFAULT_PLUGINS`:
+
+```ts
+export default defineConfig({
+  disableDefaults: true,
 });
 ```
 
@@ -71,15 +94,27 @@ when: { branch: "^feat-" }                             // string = regex source
 when: { branch: { pattern: /^main$/, onUnknown: "allow" } }
 ```
 
-Resolution order:
-1. `ctx.walkerState.branch` — set by the branch tracker when the
-   current bash chain contains `git checkout` / `git switch`. This is
-   what makes `git checkout main && git commit` evaluate against
-   `main` (not the pre-chain branch).
-2. `git branch --show-current` in `ctx.cwd`.
+Resolution is a three-way discrimination on what the branch tracker
+knows about the current `tool_call` chain:
 
-`onUnknown` defaults to `"block"` (fail-closed) — if neither source
-resolves, the predicate reports "match" so the rule fires.
+1. **value** — the tracker observed an in-chain `git checkout <X>` /
+   `git switch <X>` with a statically-resolvable target. Match the
+   pattern against `X`. This is what makes
+   `git checkout main && git commit` evaluate against `main`, not
+   the pre-chain branch.
+2. **unknown** — the tracker observed a checkout but couldn't
+   resolve the target (e.g. `git checkout $VAR`). Apply `onUnknown`
+   policy WITHOUT shelling out: `git branch --show-current` here
+   would return the PRE-checkout branch and silently defeat the
+   walker — exactly the case the tracker exists to catch.
+3. **missing** — no branch-changing command fired in the current
+   chain. Shell out via `git branch --show-current` in `ctx.cwd`;
+   the shell's current state is the answer the predicate wants.
+
+`onUnknown` defaults to `"block"` (fail-closed) — if the branch
+can't be determined (dynamic checkout, exec failure, detached HEAD
+in the missing case), the predicate reports "match" so the rule
+still fires.
 
 ### `upstream`
 

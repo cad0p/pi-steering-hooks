@@ -26,6 +26,7 @@
 
 import type {
 	AndOr,
+	AssignmentPrefix,
 	BraceGroup,
 	Command,
 	CompoundList,
@@ -75,8 +76,18 @@ export type SubshellSemantics = "isolated" | "global";
  *
  * The `apply` contract is the same across both variants:
  *
- * Given the command's argument words and the tracker's current value,
+ * Given the command's argument words, the tracker's current value, and
+ * a snapshot of every OTHER tracker's state at this ref (`allState`),
  * return the new value.
+ *
+ * `allState` is the cross-tracker-read protocol (D1 in Tier B of PR #5).
+ * Modifiers that need to consult another dimension — e.g. cd reading env
+ * to expand `$VAR` — use the second type parameter `TAll` to declare the
+ * shape they need. Modifiers that don't read cross-tracker state ignore
+ * the parameter and get the default `Record<string, unknown>` type.
+ * Processing order within a single ref follows tracker registration
+ * order: callers register `envTracker` before `cwdTracker` so cd's
+ * modifier sees the current ref's env.
  *
  * Return `undefined` to signal "can't resolve statically" (e.g. the
  * target is a `$VAR` or `$(cmd)` whose runtime value we refuse to
@@ -89,20 +100,39 @@ export type SubshellSemantics = "isolated" | "global";
  *     `unknown` sentinel, so every subsequent command in this scope
  *     sees `unknown` and the walker stops trying to refine it further.
  *
- * `apply` must be pure — no I/O, no mutation of `args` or `current`.
+ * `apply` must be pure — no I/O, no mutation of `args`, `current`, or
+ * `allState`.
  */
-export type Modifier<T> =
+export type Modifier<
+	T,
+	TAll extends Record<string, unknown> = Record<string, unknown>,
+> =
 	| {
 			/** Propagates to this command AND all subsequent sibling commands.
 			 *  Example: `cd DIR`, `git checkout X`. */
 			scope: "sequential";
-			apply: (args: readonly Word[], current: T) => T | undefined;
+			// Method syntax (`apply(...)`) keeps TAll BIVARIANT for parameter
+			// type compatibility. Under strict mode an arrow-typed `apply` on
+			// a narrower TAll isn't assignable to a wider TAll, even though the
+			// walker always passes the full outer state object and the narrow
+			// modifier simply reads a subset. Bivariance here matches the
+			// runtime contract — modifiers requesting narrower allState still
+			// satisfy the Tracker.modifiers storage type.
+			apply(
+				args: readonly Word[],
+				current: T,
+				allState: Readonly<TAll>,
+			): T | undefined;
 	  }
 	| {
 			/** Applies to this command only; caller's next-command state is unchanged.
 			 *  Example: `git -C DIR subcmd`, `env -C DIR cmd`, `make -C DIR target`. */
 			scope: "per-command";
-			apply: (args: readonly Word[], current: T) => T | undefined;
+			apply(
+				args: readonly Word[],
+				current: T,
+				allState: Readonly<TAll>,
+			): T | undefined;
 	  };
 
 /**
@@ -419,6 +449,14 @@ function mergeBranches<T extends Record<string, unknown>>(
  * for a command that is itself a sequential modifier — matching the
  * original effectiveCwd behavior where `cd /x` is recorded at the pre-cd
  * cwd, and `cmd` on the next line is recorded at `/x`.
+ *
+ * Cross-tracker reads via `allState`: every modifier receives a
+ * read-only snapshot of the pre-ref state of every registered tracker
+ * as its third argument (D1 in Tier B of PR #5). All modifiers at a
+ * single ref see the same `state` snapshot, so registration order
+ * only matters for ambiguous composition (e.g. a future `export`
+ * modifier that also updates cwd); for the built-in env + cwd pair,
+ * env goes first so cd's `$VAR` expansion reads env's current value.
  */
 function handleCommand<T extends Record<string, unknown>>(
 	node: Command,
@@ -427,7 +465,26 @@ function handleCommand<T extends Record<string, unknown>>(
 	byNode: Map<Command, T>,
 ): T {
 	const basename = commandBasename(node);
-	const args = node.suffix;
+	// Bare-assignment command (basename "" + non-empty prefix): the shell
+	// treats `FOO=bar` as a stand-alone statement that mutates the env.
+	// unbash parses this as a Command with no `name` and a non-empty
+	// `prefix`. We synthesize per-assignment Words from the prefix so
+	// trackers registered on basename "" (e.g. envTracker) can apply them
+	// uniformly through the same `apply(args, current, allState)` path as
+	// every other modifier. Prefix assignments attached to a real command
+	// (`FOO=bar cmd`) are NOT routed here — those belong to the
+	// per-command scope surfaced via `input.envAssignments` at the
+	// evaluator, not to the shell-state env tracker.
+	const args: readonly Word[] =
+		basename === "" && node.prefix.length > 0 && node.suffix.length === 0
+			? synthesizeAssignmentWords(node.prefix)
+			: node.suffix;
+
+	// All modifiers at this ref see the same pre-ref snapshot. Typing the
+	// shared `allState` parameter as `Readonly<T>` keeps callers honest;
+	// modifiers declaring a narrower `TAll` via the second type parameter
+	// are assignable from this wider shape at their call sites.
+	const allState = state as Readonly<T>;
 
 	// Per-tracker: compute the pre-command value (= sequential applied) and
 	// the recorded value (= per-command applied on top). Sequential updates
@@ -437,7 +494,7 @@ function handleCommand<T extends Record<string, unknown>>(
 	for (const name of Object.keys(trackers) as Array<keyof T>) {
 		const tracker = trackers[name];
 		const current = state[name] as T[typeof name];
-		const mods = basename ? tracker.modifiers[basename] : undefined;
+		const mods = basename !== undefined ? tracker.modifiers[basename] : undefined;
 		const modList: Modifier<T[typeof name]>[] | undefined = mods
 			? Array.isArray(mods)
 				? (mods as Modifier<T[typeof name]>[])
@@ -451,7 +508,7 @@ function handleCommand<T extends Record<string, unknown>>(
 		if (modList) {
 			for (const mod of modList) {
 				if (mod.scope !== "per-command") continue;
-				const res = mod.apply(args, recordedValue);
+				const res = mod.apply(args, recordedValue, allState);
 				if (res === undefined) {
 					recordedValue = tracker.unknown as T[typeof name];
 					// Stop layering further per-command modifiers: once the
@@ -470,7 +527,7 @@ function handleCommand<T extends Record<string, unknown>>(
 		if (modList) {
 			for (const mod of modList) {
 				if (mod.scope !== "sequential") continue;
-				const res = mod.apply(args, threaded);
+				const res = mod.apply(args, threaded, allState);
 				if (res === undefined) {
 					threaded = tracker.unknown as T[typeof name];
 					break;
@@ -483,6 +540,87 @@ function handleCommand<T extends Record<string, unknown>>(
 
 	byNode.set(node, recorded);
 	return next;
+}
+
+/**
+ * Synthesize one Word per assignment-prefix entry, carrying the raw
+ * `NAME=VALUE` source text plus a concatenated `parts` array that
+ * reflects the RHS's static-ness.
+ *
+ * Why synthesize: the walker dispatches modifiers by basename with
+ * `args = node.suffix`. Bare-assignment commands have an empty suffix
+ * — the assignment payload lives on `node.prefix` (AssignmentPrefix[]).
+ * Reshaping the prefix entries into Word[] lets trackers registered on
+ * basename "" consume them through the same `apply(args, ...)` surface
+ * as every other modifier, keeping the Tracker API uniform.
+ *
+ * Parts concatenation:
+ *   - Literal `"NAME="` prefix (so `isStaticallyResolvable` accounts for
+ *     the name),
+ *   - followed by every part of `prefix.value` (if present) —
+ *     preserving whether the RHS is literal, single-quoted,
+ *     parameter-expanded, command-substituted, etc.
+ *
+ * If `prefix.value` is undefined (`FOO=`), the synthetic parts are
+ * `[Literal("NAME=")]` — a trivially-static empty-value assignment.
+ * If `prefix.value` has no parts (pure literal), we still emit the
+ * Literal-prefix + Literal-value shape so `isStaticallyResolvable`
+ * (which returns `true` on empty-parts) produces a consistent answer.
+ */
+function synthesizeAssignmentWords(
+	prefix: readonly AssignmentPrefix[],
+): readonly Word[] {
+	const out: Word[] = [];
+	for (const p of prefix) {
+		// Skip compound-assignment shapes that the parser flags but the
+		// env tracker doesn't model (Tier B correctness fixes H2/H3/H4):
+		//
+		//   - `FOO+=append` (`p.append === true`) — append op. The
+		//     previous code silently REPLACED FOO with the RHS
+		//     (synthesizing `FOO=append`), losing the existing value.
+		//     Skip for now; a follow-up can handle true append semantics
+		//     by reading `allState.env` once multi-hop env resolution
+		//     lands (v0.2 deferred per env.ts's module header).
+		//   - `FOO=(a b c)` array init (`p.array !== undefined`, `p.value
+		//     === undefined`). Previously surfaced as
+		//     `{name: "FOO", value: ""}` — an empty scalar that spuriously
+		//     flipped `env.has("FOO")` predicates. We don't track bash
+		//     arrays; skip.
+		//   - `FOO[0]=value` array-index assignment (`p.index !== undefined`).
+		//     Previously wrote to the scalar FOO; bash would write to the
+		//     array slot instead. Skip — we don't track arrays.
+		if (p.append === true) continue;
+		if (p.array !== undefined) continue;
+		if (p.index !== undefined) continue;
+		const name = p.name ?? "";
+		const leader: WordPart = {
+			type: "Literal",
+			value: `${name}=`,
+			text: `${name}=`,
+		};
+		const valueParts: readonly WordPart[] = p.value
+			? // Value has sub-parts: preserve them so parameter expansion,
+			  // command substitution, etc. remain visible to
+			  // `isStaticallyResolvable`.
+			  p.value.parts && p.value.parts.length > 0
+				? p.value.parts
+				: [
+						{
+							type: "Literal",
+							value: p.value.value ?? p.value.text ?? "",
+							text: p.value.text ?? p.value.value ?? "",
+						},
+				  ]
+			: [];
+		out.push({
+			text: p.text,
+			value: p.text,
+			pos: p.pos,
+			end: p.end,
+			parts: [leader, ...valueParts],
+		});
+	}
+	return out;
 }
 
 /** Return the command's basename (e.g. `/usr/bin/git` → `git`), or "". */

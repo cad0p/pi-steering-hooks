@@ -43,6 +43,9 @@ export {
 } from "./tracker.ts";
 
 export { cwdTracker } from "./trackers/cwd.ts";
+export { envTracker, type EnvState } from "./trackers/env.ts";
+
+export { resolveWord } from "./resolve-word.ts";
 
 export {
 	getBasename,

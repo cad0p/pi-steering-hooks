@@ -3,7 +3,7 @@
 
 /**
  * Shared observer-merge helper used by both the evaluator's reverse
- * index (chain-aware `when.happened`) and the observer-dispatcher's
+ * index (`when.happened` with `in: "tool_call"`) and the observer-dispatcher's
  * fire list.
  *
  * Both callers need the same answer to the question "what observers
@@ -11,7 +11,7 @@
  * overrides?" Keeping a single implementation here prevents silent
  * drift — if the dispatcher drops a plugin observer because a user
  * observer shadows it by name, the evaluator's reverse-index must do
- * the same, or chain-aware speculative allow can grant on a watch
+ * the same, or tool_call-scope speculative allow can grant on a watch
  * pattern that will never actually fire.
  *
  * Merge semantics (must match `buildObserverDispatcher`):

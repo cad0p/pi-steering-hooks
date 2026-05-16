@@ -2,6 +2,8 @@
 
 A rule pack that forces `gh pr create` to include `--draft`.
 
+> **v0.1.0 TypeScript form:** see [`steering.ts`](./steering.ts) — drop in at `~/.pi/steering.ts` or `<project-root>/.pi/steering.ts`. The JSON form in [`steering.json`](./steering.json) is still supported for v0.0.x configs.
+
 ## What it enforces
 
 - `gh pr create --title "..."` → **blocked**

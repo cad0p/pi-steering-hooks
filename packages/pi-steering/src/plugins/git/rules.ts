@@ -26,7 +26,9 @@
  * commit, so the rule still fires.
  */
 
-import type { Rule } from "../../index.ts";
+import type { Rule } from "../../schema.ts";
+import { NO_CHECKOUT_IN_CHAIN } from "./branch-tracker.ts";
+import { walkerString } from "./predicates.ts";
 
 /**
  * `no-main-commit` - block direct commits to a protected branch
@@ -56,12 +58,24 @@ import type { Rule } from "../../index.ts";
  *
  *   `when: { branch: { pattern: /.../, onUnknown: "allow" } }`
  *
+ * Reason text is dynamic via {@link ReasonFn}: when the branch
+ * tracker has resolved a concrete branch name for the guarded
+ * command (statically from a `git checkout <name>` earlier in the
+ * chain), the name is injected into the block message so the agent
+ * sees "You are on 'main'" instead of a generic reminder. The
+ * ReasonFn filters out the tracker's internal sentinels
+ * (`NO_CHECKOUT_IN_CHAIN` — no in-chain checkout, exec-fallback
+ * path; `"unknown"` — dynamic checkout the walker couldn't
+ * resolve) so those strings never leak into the agent-facing
+ * message; the static actionable tail still guides the agent to a
+ * feature branch in those cases.
+ *
  * Override: allowed (the rule is overridable via a
  * `# steering-override: no-main-commit` comment). This is a workflow
  * rule, not an inherent-destructiveness rule - authors override when
  * the commit is intentional (e.g. release process on `main`).
  */
-const noMainCommit = {
+export const noMainCommit = {
 	name: "no-main-commit",
 	tool: "bash",
 	field: "command",
@@ -71,8 +85,26 @@ const noMainCommit = {
 	pattern:
 		"^git\\b(?:\\s+-{1,2}[A-Za-z]\\S*(?:\\s+\\S+)?)*\\s+commit\\b",
 	when: { branch: /^(main|master|mainline|trunk)$/ },
-	reason:
-		"Don't commit directly to a protected branch (main / master / mainline / trunk). Create a feature branch first: `git checkout -b feat/...`.",
+	reason: (ctx) => {
+		// Delegate the sentinel classification to `walkerString` — the
+		// same three-way discrimination (value / unknown / missing)
+		// every other branch-consumer in this plugin uses. Single source
+		// of truth for tracker-sentinel semantics; future sentinel
+		// additions update one site (the classifier in predicates.ts),
+		// not this filter too. Empty-string remains filtered inline as
+		// a defensive check against future tracker contracts (detached
+		// HEAD or similar); the branch tracker doesn't emit it today.
+		const res = walkerString(ctx, "branch", NO_CHECKOUT_IN_CHAIN);
+		const branch =
+			res.kind === "value" && res.value !== "" ? res.value : undefined;
+		const onClause =
+			branch !== undefined ? ` You are on '${branch}'.` : "";
+		return (
+			`Don't commit directly to a protected branch ` +
+			`(main / master / mainline / trunk).${onClause} ` +
+			`Create a feature branch first: \`git checkout -b feat/...\`.`
+		);
+	},
 	// Explicit override-OK: workflow rules are intentionally
 	// overridable.
 	noOverride: false,

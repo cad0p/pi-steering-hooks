@@ -326,10 +326,13 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 
 	it("checkout in a subshell does NOT escape - outer `git commit` allowed on feature", async () => {
 		// `(git checkout main)` is subshell-isolated; the outer
-		// `git commit` inherits the pre-subshell branch state.
-		// Walker says `unknown` (no initial branch seeded; tracker's
-		// initial value), so the predicate falls back to exec which
-		// reports `feature`. Rule doesn't fire.
+		// `git commit` inherits the pre-subshell branch state. No
+		// branch-changing modifier fired in the outer scope, so the
+		// walker threads the tracker's `NO_CHECKOUT_IN_CHAIN` initial
+		// sentinel (distinct from the `"unknown"` sentinel that
+		// signals a dynamic checkout). The predicate reads this as
+		// `missing` -> exec fallback to `git branch --show-current`,
+		// which the stub reports as `feature`. Rule doesn't fire.
 		const { evaluator } = buildRuntime(
 			{ plugins: [gitPlugin], rules: [] },
 			branchExec("feature"),
@@ -342,24 +345,23 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 		assert.equal(res, undefined);
 	});
 
-	it("`git checkout $VAR && git commit` - walker unknown + fail-closed fires no-main-commit", async () => {
+	it("`git checkout $VAR && git commit` - walker unknown short-circuits to onUnknown, no exec fallback", async () => {
 		// When $VAR is not statically resolvable, the branch tracker
-		// collapses to "unknown". The branch predicate's
-		// onUnknown:"block" default makes the rule fire even though
-		// git's exec fallback (if it ran) would report the starting
-		// branch. This is the fail-closed enforcement the ADR's
-		// walker+predicate story promises at the rule level.
+		// collapses to its "unknown" sentinel. The predicate MUST
+		// short-circuit on this signal: a `git branch --show-current`
+		// exec fallback here would return the PRE-checkout branch,
+		// which is exactly the case the walker's in-chain tracking
+		// exists to catch. The predicate's `onUnknown: "block"`
+		// default then fires the rule.
 		//
-		// NB: today the predicate treats walker "unknown" as "absent"
-		// and DOES fall back to exec (see the sibling unit test for
-		// that); the stub here deliberately makes exec FAIL so the
-		// fail-closed policy is what produces the fire. Wiring a
-		// direct walker-unknown -> onUnknown=block short-circuit is
-		// tracked as a follow-up (ADR Phase 5).
-		const { evaluator } = buildRuntime(
+		// This pins U1: the exec stub reports "feature" (a non-
+		// protected branch). Pre-U1 the predicate treated walker
+		// "unknown" as "absent" and fell through to exec -> the rule
+		// would INCORRECTLY allow, defeating fail-closed. Post-U1:
+		// exec is not consulted, the rule correctly fires.
+		const { evaluator, host } = buildRuntime(
 			{ plugins: [gitPlugin], rules: [] },
-			// exec fails -> onUnknown:"block" default fires the rule.
-			async () => ({ stdout: "", stderr: "", code: 128, killed: false }),
+			branchExec("feature"),
 		);
 		const res = await evaluator.evaluate(
 			bashEvent("git checkout $VAR && git commit -m 'x'"),
@@ -369,6 +371,19 @@ describe("git plugin: walker-driven branch state (the KEY test)", () => {
 		assert.ok(
 			res && res.block === true,
 			"unresolvable branch must fail-closed and fire no-main-commit",
+		);
+		// Regression guard: walker-unknown must NOT fall through to
+		// `git branch --show-current`. If this count is ever > 0 the
+		// U1 short-circuit has been re-broken.
+		assert.equal(
+			host.execCalls.filter(
+				(c) =>
+					c.cmd === "git" &&
+					c.args[0] === "branch" &&
+					c.args[1] === "--show-current",
+			).length,
+			0,
+			"walker-unknown short-circuits to onUnknown; predicate must not shell out",
 		);
 	});
 });

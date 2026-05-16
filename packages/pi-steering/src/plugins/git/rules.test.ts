@@ -169,3 +169,102 @@ describe("rules: no-main-commit shape", () => {
 		);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// no-main-commit: dynamic reason (Item 1 of PR #5 scope expansion)
+//
+// When the branch tracker has resolved the current branch statically
+// (from a `git checkout <name>` earlier in the chain), the rule's
+// reason text injects the branch name so the agent sees
+// "You are on 'main'" instead of a generic reminder. When tracker
+// state is missing (no checkout in chain, exec fallback) or the value
+// is the walker's `"unknown"` sentinel (dynamic checkout), the
+// dynamic clause is omitted — the static actionable tail still
+// guides the agent to a feature branch.
+// ---------------------------------------------------------------------------
+
+describe("rules: no-main-commit dynamic reason", () => {
+	it("`git checkout main && git commit` - reason injects 'You are on main'", async () => {
+		// Walker folds the checkout into the branch state seen by the
+		// commit ref; the ReasonFn reads `ctx.walkerState.branch` and
+		// sees the concrete value `main`.
+		const { evaluator } = buildWithBranch("feature");
+		const res = await evaluator.evaluate(
+			bashEvent("git checkout main && git commit -m 'x'"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(
+			res.reason!,
+			/You are on 'main'/,
+			"reason must include the walker-resolved branch name",
+		);
+		// Prefix and static tail still present - the dynamic clause
+		// is additive, not a replacement.
+		assert.match(res.reason!, /\[steering:no-main-commit@[^\]]+\]/);
+		assert.match(res.reason!, /Create a feature branch first/);
+	});
+
+	it("`git checkout master && git commit` - injects the concrete protected branch name", async () => {
+		// Pin that the injected name is the tracker-resolved value,
+		// not a hardcoded "main" — master / trunk / mainline all get
+		// the same dynamic treatment.
+		const { evaluator } = buildWithBranch("feature");
+		const res = await evaluator.evaluate(
+			bashEvent("git checkout master && git commit -m 'x'"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.match(res.reason!, /You are on 'master'/);
+	});
+
+	it("no in-chain checkout + exec fallback - reason omits the dynamic clause", async () => {
+		// Exec reports `main` via `git branch --show-current`, so the
+		// rule fires — but the BRANCH TRACKER didn't see an in-chain
+		// checkout, so `ctx.walkerState.branch` is the tracker's
+		// `NO_CHECKOUT_IN_CHAIN` sentinel (not a real branch name).
+		// The ReasonFn must NOT leak that sentinel into the reason
+		// text; it falls back to the static form.
+		const { evaluator } = buildWithBranch("main");
+		const res = await evaluator.evaluate(
+			bashEvent("git commit -m 'x'"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.doesNotMatch(
+			res.reason!,
+			/You are on '/,
+			"reason must not include the dynamic clause when walker state is missing",
+		);
+		// Static tail still present.
+		assert.match(res.reason!, /Create a feature branch first/);
+	});
+
+	it("`git checkout $VAR && git commit` - walker-unknown branch - reason omits the dynamic clause", async () => {
+		// The branch tracker collapses `checkout $VAR` to its
+		// `"unknown"` sentinel. The predicate's onUnknown="block"
+		// default still fires, and the ReasonFn treats `"unknown"`
+		// as a non-concrete value — the dynamic clause is omitted
+		// rather than leaking the sentinel string into the message.
+		const { evaluator } = buildWithBranch("feature");
+		const res = await evaluator.evaluate(
+			bashEvent("git checkout $VAR && git commit -m 'x'"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(res && res.block === true);
+		assert.doesNotMatch(
+			res.reason!,
+			/You are on '/,
+			"reason must not include the dynamic clause when walker state is 'unknown'",
+		);
+		assert.doesNotMatch(
+			res.reason!,
+			/unknown/,
+			"reason must not leak the walker sentinel string",
+		);
+	});
+});

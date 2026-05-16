@@ -157,7 +157,7 @@ export function ancestorChain(cwd: string): string[] {
  * Emits a `console.warn` when BOTH `.pi/steering/index.ts` AND
  * `.pi/steering.ts` exist in the same directory — the directory form
  * wins, but ambiguous coexistence is almost always an authoring
- * mistake (partial migration, stale file).
+ * mistake (forgotten cleanup, stale file).
  *
  * Exported for tests.
  */

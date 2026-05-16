@@ -1,6 +1,6 @@
 ---
 name: steering-authoring
-description: Author declarative steering rules for pi-steering. Use when the user asks to block or allow agent tool calls, write guardrails for bash/write/edit, author pi steering rules, add rule plugins, or migrate an old .pi/steering.json to the v2 TypeScript config.
+description: Author declarative steering rules for pi-steering. Use when the user asks to block or allow agent tool calls, write guardrails for bash/write/edit, author pi steering rules, add rule plugins, or convert a JSON steering config to the TypeScript config.
 ---
 
 # pi-steering
@@ -20,13 +20,18 @@ The loader walks up from `cwd` to the nearest `.pi/` dir, falling back to `~/.pi
 | User says | You do |
 |---|---|
 | "block X" | Add a `Rule` with `tool`, `field`, and `pattern` to the `rules` array. |
-| "block X only in dir Y" | Add `when: { cwd: /Y/ }` to the rule. |
+| "block X only in dir Y" | Add `when: { cwd: /Y/ }` to the rule. The walker resolves `cd "$WS/pkg"`-style dynamic targets through `envTracker`; intractable targets (unknown `$VAR`, command substitution) surface as `"unknown"` and fire `onUnknown: "block"` by default. |
 | "block X unless on branch Z" | `when: { not: { branch: /Z/ } }` — requires the git plugin. |
 | "block X unless `--flag`" | `unless: /--flag\b/`. |
 | "require Y before X" | Observer that `appendEntry`s a marker, plus a rule whose `when.happened` gates on it (`{ event, in: "agent_loop" }`). Prefer this to hand-rolled `findEntries` + `agentLoopIndex` comparisons — same semantics, less code. |
+| "require Y in a **prior** tool_call, not same-chain" | `when: { happened: { event, in: "agent_loop", notIn: "tool_call" } }`. `notIn` is scope subtraction — it removes the narrower scope from the broader one, so `&&`-chain bypass is blocked. Distinct from clause-level `not` (boolean negation). |
+| "invalidate Y when Z happens" | `when: { happened: { event: Y_EVENT, in: "agent_loop", since: Z_EVENT } }`. Y only counts if its latest entry is newer than Z's latest entry in scope. If Z never happened, the clause degrades to a simple presence check. |
+| "put runtime state in the block message" | `reason: (ctx) => \`blocked at \${ctx.walkerState?.cwd}\`` — `Rule.reason` accepts a sync or async function. The engine awaits it and prefixes with `[steering:name@source]` like a string reason. If it throws, a fail-safe fallback text fires and the error is logged to `console.warn`; the block still fires. |
 | "add a custom check" | Write a plugin in `.pi/steering/plugins/`, import it into `index.ts`, register it in `plugins: [...]`. |
+| "change the reason on a built-in rule" | Import the original rule from its plugin, spread it with `{ ...original, name: "new-name", reason: "..." }`, and use `disabledRules: ["original-name"]` + add the replacement. Preserves pattern / when / observer. |
 | "test this rule" | Create `steering.test.ts` using `expectBlocks` / `expectAllows` / `loadHarness`. |
-| "migrate my old JSON config" | Run `pi-steering import-json .pi/steering.json -o .pi/steering.ts`. |
+| "convert my JSON config to TypeScript" | Run `pi-steering import-json .pi/steering.json -o .pi/steering.ts`. Plugins, observers, and function predicates don't round-trip — author those directly in TS. |
+| "publish a pi-steering plugin" | Package as `pi-steering-<domain>` (unscoped) with `keywords: ["pi-package", "pi-steering-package"]` in package.json. peerDep on `pi-steering`. |
 
 ## Minimal config
 
@@ -94,4 +99,4 @@ Run with `node --test --experimental-strip-types '.pi/steering/**/*.test.ts'`.
 
 ## Details
 
-Read [the package README](../../README.md) for the full schema, plugin authoring, observer / turn-state patterns, override semantics, and migration notes.
+Read [the package README](../../README.md) for the full schema, plugin authoring, observer / turn-state patterns, override semantics, and the JSON-to-TS conversion surface.

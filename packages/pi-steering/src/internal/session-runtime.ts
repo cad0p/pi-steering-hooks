@@ -31,6 +31,7 @@ import {
 } from "../observer-dispatcher.ts";
 import { resolvePlugins } from "../plugin-merger.ts";
 import type { SteeringConfig } from "../schema.ts";
+import { dropUnusedObservers } from "./drop-unused-observers.ts";
 
 /**
  * Build the per-session evaluator + observer dispatcher from the walk-
@@ -88,16 +89,35 @@ export async function buildSessionRuntime(
 	const resolved = resolvePlugins(
 		filteredConfig.plugins ?? [],
 		filteredConfig,
-		// `cwd` is injected by the evaluator (the built-in `cwdTracker`);
-		// extensions targeting it are valid and must not be treated as
-		// orphans. Any other built-in tracker the evaluator introduces
-		// later should be added here.
-		["cwd"],
+		// `cwd` and `env` are injected by the evaluator (built-in
+		// cwdTracker + envTracker); extensions targeting them are valid
+		// and must not be treated as orphans. Any other built-in tracker
+		// the evaluator introduces later should be added here.
+		["cwd", "env"],
 	);
-	const evaluator = buildEvaluator(filteredConfig, resolved, host);
+
+	// Drop observers whose declared writes are unconsumed. Applied
+	// across plugin-merged observers AND user-authored observers using
+	// the union of all rule `happened` references. Dropped observers
+	// stop firing on tool_result AND stop contributing speculative
+	// entries to the evaluator (single source of truth via this
+	// orchestration-layer filter).
+	const userObservers = filteredConfig.observers ?? [];
+	const allRules = [...(filteredConfig.rules ?? []), ...resolved.rules];
+	const pluginDrop = dropUnusedObservers(resolved.observers, allRules);
+	const userDrop = dropUnusedObservers(userObservers, allRules);
+	for (const d of [...pluginDrop.dropped, ...userDrop.dropped]) {
+		console.info(
+			`[pi-steering] observer '${d.name}' dropped; its writes ` +
+				`(${d.writes.join(", ")}) are not consumed by any rule`,
+		);
+	}
+	const filteredResolved = { ...resolved, observers: [...pluginDrop.kept] };
+
+	const evaluator = buildEvaluator(filteredConfig, filteredResolved, host);
 	const dispatcher = buildObserverDispatcher(
-		resolved,
-		filteredConfig.observers ?? [],
+		filteredResolved,
+		userDrop.kept,
 		host,
 	);
 	return { evaluator, dispatcher, config: filteredConfig };

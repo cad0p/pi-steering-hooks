@@ -1,0 +1,46 @@
+{
+	"name": "pi-steering-flags",
+	"version": "0.0.0-poc.0",
+	"private": true,
+	"description": "Declarative flag-presence and flag-allowlist predicates for pi-steering rules. First official external plugin.",
+	"keywords": [
+		"pi-package",
+		"pi-steering-package",
+		"guardrails",
+		"safety",
+		"flags",
+		"cli"
+	],
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"src",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"clean": "rm -rf dist tsconfig.build.tsbuildinfo",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "node --test --experimental-strip-types 'src/**/*.test.ts'",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"pi-steering": "workspace:*"
+	},
+	"devDependencies": {
+		"pi-steering": "workspace:*",
+		"unbash-walker": "workspace:*",
+		"typescript": "^5.4.5"
+	}
+}

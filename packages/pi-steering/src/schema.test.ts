@@ -133,7 +133,11 @@ describe("schema: shape smoke tests", () => {
 			args.wrt.startsWith("origin/");
 		const plugin: Plugin = {
 			name: "fake",
-			predicates: { commitsAhead: fakeHandler as PredicateHandler },
+			// No cast on the typed `PredicateHandler<{ wrt: string }>` here —
+			// Item 2 of PR #5 switched `Plugin.predicates` to
+			// `Record<string, AnyPredicateHandler>`, so specifically-typed
+			// handlers assign into the registry slot directly.
+			predicates: { commitsAhead: fakeHandler },
 			rules: [
 				{
 					name: "r",
@@ -150,6 +154,24 @@ describe("schema: shape smoke tests", () => {
 			// runtime code we don't need for a shape test.
 		};
 		assert.equal(plugin.name, "fake");
+	});
+
+	it("Plugin.predicates accepts typed PredicateHandler<A> values without a cast", () => {
+		// Pins the Item 2 fix: `Plugin.predicates` is
+		// `Record<string, AnyPredicateHandler>`, so a specifically-typed
+		// `PredicateHandler<FooArgs>` assigns cast-free at the registry
+		// slot. If this starts failing to compile, the alias was
+		// widened/narrowed incompatibly — every downstream plugin that
+		// registers a typed handler will break on the same change.
+		interface FooArgs {
+			threshold: number;
+		}
+		const typed: PredicateHandler<FooArgs> = (args) => args.threshold > 0;
+		const plugin = {
+			name: "typed-predicates",
+			predicates: { foo: typed },
+		} satisfies Plugin;
+		assert.ok(plugin.predicates);
 	});
 
 	it("Rule.observer accepts inline Observer and string reference", () => {

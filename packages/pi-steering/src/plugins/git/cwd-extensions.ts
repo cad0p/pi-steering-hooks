@@ -83,7 +83,7 @@
 
 import * as path from "node:path";
 import type { Word } from "unbash";
-import { isStaticallyResolvable, type Modifier } from "../../index.ts";
+import { isStaticallyResolvable, type Modifier } from "unbash-walker";
 
 /** Regex matched against each `git`-command argument token. */
 const GIT_DIR_RE = /^--git-dir=(.+)$/;

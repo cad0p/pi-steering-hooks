@@ -68,8 +68,8 @@ USAGE
 SUBCOMMANDS
   import-json <input.json> [-o <output.ts>]
       Convert a v1 JSON steering config to v2 TS form. Writes to
-      <output.ts> if specified, else stdout. See the migration guide
-      in the README for details.
+      <output.ts> if specified, else stdout. See the README for
+      the JSON-to-TS conversion surface and rejected features.
 
   list [--format=text|json]
       Load the effective config for the current directory (walk-up

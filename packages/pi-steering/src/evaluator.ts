@@ -45,12 +45,14 @@
 
 import {
 	cwdTracker,
+	envTracker,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	getBasename,
 	parse as parseBash,
 	walk,
 	type CommandRef,
+	type EnvState,
 	type Modifier,
 	type Tracker,
 	type Word,
@@ -61,10 +63,7 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import {
-	computePriorAndChains,
-	refToText,
-} from "./evaluator-internals/chain.ts";
+import { refToText } from "./internal/ref-text.ts";
 import {
 	createAppendEntry,
 	createExecCache,
@@ -78,6 +77,10 @@ import {
 	matchesPatternOrFn,
 	matchesPattern,
 } from "./evaluator-internals/predicates.ts";
+import {
+	synthesizeSpeculativeEntries,
+	type SpeculativeEventsByRef,
+} from "./evaluator-internals/speculative-synthesis.ts";
 import { mergeObserversUserFirst } from "./internal/merge-observers.ts";
 import type { ResolvedPluginState } from "./plugin-merger.ts";
 import { validateName } from "./plugin-merger.ts";
@@ -87,6 +90,7 @@ import type {
 	PredicateToolInput,
 	Rule,
 	SteeringConfig,
+	WhenWalkerState,
 } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -127,12 +131,16 @@ export interface EvaluatorRuntime {
  *                    a stub). Kept separate from `ExtensionContext`
  *                    because the ctx shape does not expose these.
  *
- * Note: `observersByWrittenEvent` is built ONCE at construction from
- * merged `config.observers + resolved.observers`. If future versions
- * add a dynamic-reload path (observers added at runtime), this reverse
- * index must be rebuilt on change — otherwise chain-aware
- * `when.happened` consults a stale observer list. Today there is no
- * dynamic-reload path.
+ * Observers (`config.observers + resolved.observers`, user-first
+ * deduplicated via {@link mergeObserversUserFirst}) are threaded into
+ * {@link prepareBashState} where the walker-level synthesis pass
+ * turns them into per-ref speculative events on
+ * `walkerState.events`. The built-in `when.happened` predicate merges
+ * those with real entries via timestamp ordering. If future versions
+ * add a dynamic-reload path (observers added at runtime), this merged
+ * list must be rebuilt on change — otherwise `when.happened` with
+ * `in: "tool_call"` scope consults a stale observer list. Today
+ * there is no dynamic-reload path.
  */
 export function buildEvaluator(
 	config: SteeringConfig,
@@ -174,23 +182,34 @@ export function buildEvaluator(
 	}
 
 	// Compose the walker's tracker registry. Must always include `cwd`
-	// so the built-in `when.cwd` predicate can resolve — even if no
-	// plugin ships one. Plugins extending `cwd` with their own modifiers
-	// are honored via `resolved.composedTrackers.cwd` (the plugin
-	// merger already layered extensions on top of the plugin-declared
-	// cwd tracker, if any).
+	// and `env` so the built-in `when.cwd` predicate + cd's env-aware
+	// resolution work — even if no plugin ships them. Plugins extending
+	// these with their own modifiers are honored via
+	// `resolved.composedTrackers.{cwd,env}` (the plugin merger already
+	// layered extensions on top of the plugin-declared trackers, if any).
 	//
 	// When no plugin registers a `cwd` tracker, we fall back to the
 	// built-in `cwdTracker` AND layer any `trackerModifiers.cwd`
 	// extensions onto it (the plugin merger preserves extensions
 	// targeting `"cwd"` on the caller's behalf via the
-	// `knownBuiltinTrackers` hint passed to `resolvePlugins`). This is
-	// how the git plugin's `--git-dir=` / `--work-tree=` modifiers
-	// reach the cwd tracker despite the plugin not owning the tracker
-	// itself.
+	// `knownBuiltinTrackers` hint passed to `resolvePlugins`). Same
+	// pattern for `env` — lets a future plugin add e.g. `.envrc`-style
+	// env loading as a new modifier on the shared tracker without
+	// replacing it.
+	//
+	// Env goes in first so cd's modifier sees the current ref's env via
+	// the `allState` read. Walker iteration is registration-order
+	// stable (Object.keys on an object literal); the ordering is a soft
+	// guarantee good for the built-in composition.
 	const trackers: Record<string, Tracker<unknown>> = {
 		...resolved.composedTrackers,
 	};
+	if (!("env" in trackers)) {
+		const extraEnvModifiers = resolved.trackerModifiers["env"];
+		trackers["env"] = composeBuiltinEnv(
+			extraEnvModifiers,
+		) as Tracker<unknown>;
+	}
 	if (!("cwd" in trackers)) {
 		const extraCwdModifiers = resolved.trackerModifiers["cwd"];
 		trackers["cwd"] = composeBuiltinCwd(
@@ -198,25 +217,19 @@ export function buildEvaluator(
 		) as Tracker<unknown>;
 	}
 
-	// Chain-aware `when.happened`: for each event literal declared in
-	// an observer's `writes`, we index the observer(s) that produce it.
-	// The evaluator threads this map into PredicateContext so the
-	// built-in `happened` predicate can speculatively allow `&&` chains
-	// whose prior refs match a writing observer's watch. Both plugin-
-	// shipped observers and user inline observers contribute.
-	//
-	// Apply the same user-first dedup the observer-dispatcher applies
-	// (via the shared helper) so the reverse-index never keeps a plugin
-	// observer that will be shadowed at dispatch time by a user
-	// observer of the same name. Without this, chain-aware allow could
-	// grant on the shadowed plugin observer's watch pattern while the
-	// shadowed observer never fires, producing the exact infinite-loop
-	// speculative allow was designed to avoid.
+	// Merge user + plugin observers (user-first dedup via the shared
+	// helper, same convention as the observer-dispatcher). The merged
+	// list feeds the walker-level synthesis pass in
+	// {@link prepareBashState}, where eligible observers contribute
+	// speculative `walkerState.events` entries the built-in
+	// `when.happened` predicate consults alongside real entries. Without
+	// the dedup, a shadowed plugin observer's `writes` could produce
+	// synthetic entries that never match a real dispatch, re-creating
+	// the infinite-loop risk the speculative pass was designed to avoid.
 	const allObservers = mergeObserversUserFirst(
 		config.observers ?? [],
 		resolved.observers,
 	);
-	const observersByWrittenEvent = buildObserversByWrittenEvent(allObservers);
 
 	return {
 		evaluate: (event, ctx, agentLoopIndex) =>
@@ -230,35 +243,9 @@ export function buildEvaluator(
 				host,
 				defaultNoOverride,
 				ruleSources,
-				observersByWrittenEvent,
+				allObservers,
 			),
 	};
-}
-
-/**
- * Build the reverse index `event literal → observers that write it`
- * from the evaluator's merged observer list. Observers with no
- * `writes[]` declaration contribute nothing (can't gate anything).
- * Returns `undefined` when the index is empty so downstream code can
- * short-circuit chain-aware logic without constructing a ctx field.
- */
-function buildObserversByWrittenEvent(
-	observers: readonly Observer[],
-): ReadonlyMap<string, readonly Observer[]> | undefined {
-	const map = new Map<string, Observer[]>();
-	for (const obs of observers) {
-		if (!obs.writes) continue;
-		for (const event of obs.writes) {
-			const bucket = map.get(event);
-			if (bucket) {
-				bucket.push(obs);
-			} else {
-				map.set(event, [obs]);
-			}
-		}
-	}
-	if (map.size === 0) return undefined;
-	return map as ReadonlyMap<string, readonly Observer[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -281,27 +268,70 @@ function buildObserversByWrittenEvent(
 function composeBuiltinCwd(
 	extras: Record<string, Modifier<unknown>[]> | undefined,
 ): Tracker<string> {
-	if (!extras || Object.keys(extras).length === 0) return cwdTracker;
-	const merged: Record<string, Modifier<string> | Modifier<string>[]> = {};
-	for (const [basename, mod] of Object.entries(cwdTracker.modifiers)) {
+	return composeBuiltin(cwdTracker, extras);
+}
+
+/**
+ * Layer a bucket of plugin-provided `{ basename -> Modifier[] }`
+ * extensions on top of the built-in {@link envTracker}, returning a
+ * fresh tracker so the built-in's `modifiers` map is never mutated.
+ *
+ * Parallels {@link composeBuiltinCwd}. Env extensions are a future
+ * surface — no plugin ships one today — but the composition is
+ * symmetric with cwd and costs one helper to keep both paths
+ * consistent when a plugin eventually wants to add e.g. `.envrc`-
+ * style env-loading under the same tracker.
+ */
+function composeBuiltinEnv(
+	extras: Record<string, Modifier<unknown>[]> | undefined,
+): Tracker<EnvState> {
+	return composeBuiltin(envTracker, extras);
+}
+
+/**
+ * Generic tracker-extension compositor. Given a base tracker and a
+ * bucket of plugin-provided `{ basename -> Modifier[] }` extensions,
+ * returns a fresh tracker whose `modifiers` map fuses the two
+ * without mutating the base.
+ *
+ * Resolution rule per basename:
+ *   - Base has none, extras has 1+: extras become the entry
+ *     (unwrapped to a single Modifier when length is 1).
+ *   - Base has one or many, extras has 1+: concatenated into an
+ *     array ordered base-first, extras-after, so per-command
+ *     overrides layer in the expected sequence.
+ *
+ * Used by {@link composeBuiltinCwd} and {@link composeBuiltinEnv}
+ * to fold `trackerExtensions.cwd` / `trackerExtensions.env` from
+ * plugin registrations onto the built-ins. Keeping this helper
+ * internal (not exported) lets the plugin-merger stay agnostic of
+ * which built-in trackers exist.
+ */
+function composeBuiltin<T>(
+	baseTracker: Tracker<T>,
+	extras: Record<string, Modifier<unknown>[]> | undefined,
+): Tracker<T> {
+	if (!extras || Object.keys(extras).length === 0) return baseTracker;
+	const merged: Record<string, Modifier<T> | Modifier<T>[]> = {};
+	for (const [basename, mod] of Object.entries(baseTracker.modifiers)) {
 		merged[basename] = Array.isArray(mod)
-			? [...(mod as Modifier<string>[])]
+			? [...(mod as Modifier<T>[])]
 			: mod;
 	}
 	for (const [basename, mods] of Object.entries(extras)) {
 		const existing = merged[basename];
-		const extrasTyped = mods as unknown as Modifier<string>[];
+		const extrasTyped = mods as unknown as Modifier<T>[];
 		if (existing === undefined) {
 			merged[basename] =
 				extrasTyped.length === 1 ? extrasTyped[0]! : [...extrasTyped];
 			continue;
 		}
 		const existingList = Array.isArray(existing)
-			? (existing as Modifier<string>[])
-			: [existing as Modifier<string>];
+			? (existing as Modifier<T>[])
+			: [existing as Modifier<T>];
 		merged[basename] = [...existingList, ...extrasTyped];
 	}
-	return { ...cwdTracker, modifiers: merged };
+	return { ...baseTracker, modifiers: merged };
 }
 
 /**
@@ -318,25 +348,25 @@ interface BashRefState {
 	readonly text: string;
 	readonly basename: string;
 	readonly args: readonly Word[];
-	readonly walkerState: Record<string, unknown>;
-	/**
-	 * Prior refs reachable via a continuous `&&` chain from the left of
-	 * this ref. Populated by {@link prepareBashState}; consumed by
-	 * chain-aware `when.happened`. Each entry carries the ref's
-	 * stringified text (enough to run `watch.inputMatches.command`
-	 * patterns against) — observers never see the full `CommandRef`.
-	 */
-	readonly priorAndChainedRefs: readonly { text: string }[];
+	readonly envAssignments: readonly Word[];
+	readonly walkerState: Readonly<WhenWalkerState>;
 }
 
 /**
  * Prepare bash state for every rule to share: parse once, extract +
  * expand wrappers once, walk trackers once, stringify each ref once.
+ *
+ * Also runs the walker-level speculative-entry synthesis pass and
+ * merges its output into each ref's walkerState under the reserved
+ * `events` key. The built-in `when.happened` predicate consults
+ * `ctx.walkerState.events[customType]` to unify real + speculative
+ * entries via timestamp ordering (see {@link evaluateHappened}).
  */
 function prepareBashState(
 	command: string,
 	sessionCwd: string,
 	trackers: Record<string, Tracker<unknown>>,
+	observers: readonly Observer[],
 ): BashRefState[] {
 	const script = parseBash(command);
 	const extracted = extractAllCommandsFromAST(script, command);
@@ -347,18 +377,54 @@ function prepareBashState(
 		trackers,
 		refs,
 	);
-	const priorChains = computePriorAndChains(refs);
-	return refs.map((ref, i) => ({
-		ref,
-		text: refToText(ref),
-		basename: getBasename(ref),
-		// `node.suffix` is the quote-aware Word[] for the ref. Exposed
-		// to predicates via PredicateToolInput.args; the walker already
-		// parsed it so we just pass it through.
-		args: ref.node.suffix,
-		walkerState: walkResult.get(ref) ?? { cwd: sessionCwd },
-		priorAndChainedRefs: priorChains[i] ?? [],
-	}));
+	const speculativeEvents: SpeculativeEventsByRef =
+		synthesizeSpeculativeEntries(refs, observers);
+	return refs.map((ref) => {
+		const trackerState = walkResult.get(ref) ?? {
+			cwd: sessionCwd,
+			env: new Map<string, string>(),
+		};
+		const events = speculativeEvents.get(ref) ?? {};
+		return {
+			ref,
+			text: refToText(ref),
+			basename: getBasename(ref),
+			// `node.suffix` is the quote-aware Word[] for the ref. Exposed
+			// to predicates via PredicateToolInput.args; the walker already
+			// parsed it so we just pass it through.
+			args: ref.node.suffix,
+			// `node.prefix` is unbash's AssignmentPrefix[] (shape:
+			// `{ text, name, value, ... }`). Project into Word[] so
+			// PredicateToolInput.envAssignments lines up with `.args` for
+			// plugin consumers — `.text` preserves the full "KEY=VALUE"
+			// source token (with quoting), and dynamic values like `A=$VAR`
+			// come through visibly in `.text` so callers can detect them.
+			envAssignments: ref.node.prefix.map<Word>((p) => ({
+				text: p.text,
+				value: p.text,
+				pos: p.pos,
+				end: p.end,
+			})),
+			// Merge tracker state with synthesized events so the built-in
+			// `happened` predicate can read `walkerState.events` without
+			// threading a separate context field. Trackers cannot name a
+			// dimension `"events"` — the plugin merger rejects that (see
+			// plugin-merger.ts). The merge is a shallow copy so the walker's
+			// state object stays untouched for future evaluations.
+			//
+			// The cast via `unknown` to `Readonly<WhenWalkerState>` is safe:
+			// buildEvaluator always registers `cwd` + `env` trackers, so every
+			// ref the walker yields carries both fields; the fallback literal
+			// above also supplies them. The schema interface's `readonly
+			// [key: string]: unknown` index signature tolerates the `events`
+			// key and any plugin-registered tracker slot. TypeScript's
+			// spread inference over `Record<string, unknown> | { cwd: string;
+			// env: Map<...> }` doesn't preserve the cwd/env shape through
+			// the spread, so the double cast is the minimum TS needs to
+			// accept a structure its inference widens away.
+			walkerState: { ...trackerState, events } as unknown as Readonly<WhenWalkerState>,
+		};
+	});
 }
 
 /**
@@ -381,24 +447,74 @@ function effectiveNoOverride(rule: Rule, defaultNoOverride: boolean): boolean {
  * rules, or `user` for rules declared directly in the user's
  * SteeringConfig.rules.
  *
- * Ported from v1's `formatBlockReason` + `overrideHint` so the
- * message body is otherwise identical across versions.
+ * Rule.reason accepts both a static string and a {@link ReasonFn}
+ * (D3 in pr5-tier-b-shell-var-tracker-spec.md). Function reasons
+ * receive the same {@link PredicateContext} the predicates saw;
+ * async returns are awaited before prefixing. A reason function
+ * that throws or rejects is logged via `console.warn` and replaced
+ * with a fail-safe fallback string — the block verdict still fires.
+ * The exact fallback text is a stable contract rule authors can
+ * detect in tests.
  */
-function formatReason(
+async function formatReason(
 	rule: Rule,
 	tool: "bash" | "write" | "edit",
 	noOverride: boolean,
 	source: string,
-): string {
+	ctx: PredicateContext,
+): Promise<string> {
 	const tag = `[steering:${rule.name}@${source}]`;
-	if (noOverride) {
-		return `${tag} ${rule.reason}`;
-	}
+	const body = await resolveReasonBody(rule, source, ctx);
+	if (noOverride) return `${tag} ${body}`;
 	const leader = tool === "bash" ? "#" : "//";
 	const hint =
 		` To override, include a comment: ` +
 		`\`${leader} steering-override: ${rule.name} — <reason>\`.`;
-	return `${tag} ${rule.reason}${hint}`;
+	return `${tag} ${body}${hint}`;
+}
+
+/**
+ * Resolve the string body of a rule's reason field. Handles both
+ * variants of the discriminated union on {@link Rule.reason}:
+ *
+ *   - `string`        — returned as-is.
+ *   - `ReasonFn`      — invoked with `ctx`, awaited, returned. A
+ *                       synchronous throw or rejected promise is
+ *                       caught, logged to `console.warn` with the
+ *                       rule name + source prefix + error message
+ *                       + stack, and replaced with the fail-safe
+ *                       fallback body `(reason failed to format;
+ *                       see log)`. The wrapping in
+ *                       {@link formatReason} still adds the source
+ *                       tag, so the agent sees
+ *                       `[steering:<rule>@<source>] (reason failed
+ *                       to format; see log)` — an unambiguous
+ *                       signal of a broken reason fn that still
+ *                       doesn't leak the error message.
+ *
+ * The fallback behavior is part of the public contract per spec
+ * D3: a rule author CAN assert the exact text (e.g. in a test
+ * asserting the engine keeps the block verdict alive when the
+ * reason function intentionally throws as a smoke-test).
+ */
+async function resolveReasonBody(
+	rule: Rule,
+	source: string,
+	ctx: PredicateContext,
+): Promise<string> {
+	if (typeof rule.reason === "string") return rule.reason;
+	try {
+		return await rule.reason(ctx);
+	} catch (err) {
+		const msg =
+			err instanceof Error
+				? `${err.message}\n${err.stack ?? ""}`
+				: String(err);
+		console.warn(
+			`[pi-steering] Rule "${rule.name}"@${source}: reason function threw: ${msg}`,
+		);
+		return "(reason failed to format; see log)";
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -437,14 +553,6 @@ interface SharedEvalContext {
 	 * unambiguously.
 	 */
 	readonly ruleSources: ReadonlyMap<Rule, string>;
-	/**
-	 * Reverse index: event literal → observers that write it. Built
-	 * once at evaluator-construction time and threaded into
-	 * {@link PredicateContext.observersByWrittenEvent} so the built-in
-	 * `happened` predicate can chain-aware speculatively allow `&&`
-	 * chains whose prior refs match a writing observer's watch.
-	 */
-	readonly observersByWrittenEvent?: ReadonlyMap<string, readonly Observer[]>;
 }
 
 /**
@@ -480,16 +588,13 @@ interface Candidate {
 	readonly overrideEntryExtras: Record<string, string>;
 	/**
 	 * Walker state snapshot for this candidate. Bash candidates carry
-	 * the per-ref walk result; write / edit candidates leave it
-	 * undefined (no walker ran).
+	 * the per-ref walk result (including synthesized
+	 * `events: Record<customType, SyntheticEntry[]>` under the reserved
+	 * `events` key, populated by the walker-level speculative-entry
+	 * synthesis pass); write / edit candidates leave it undefined (no
+	 * walker ran).
 	 */
-	readonly walkerState?: Readonly<Record<string, unknown>>;
-	/**
-	 * Prior refs reachable via `&&` from the current ref. Populated
-	 * only for bash candidates, exposed to predicates via
-	 * {@link PredicateContext.priorAndChainedRefs}.
-	 */
-	readonly priorAndChainedRefs?: readonly { text: string }[];
+	readonly walkerState?: Readonly<WhenWalkerState>;
 }
 
 /**
@@ -550,12 +655,6 @@ async function runPredicateChain(
 			findEntries: shared.findEntries,
 			...(cand.walkerState !== undefined
 				? { walkerState: cand.walkerState }
-				: {}),
-			...(cand.priorAndChainedRefs !== undefined
-				? { priorAndChainedRefs: cand.priorAndChainedRefs }
-				: {}),
-			...(shared.observersByWrittenEvent !== undefined
-				? { observersByWrittenEvent: shared.observersByWrittenEvent }
 				: {}),
 		};
 
@@ -671,11 +770,12 @@ async function evaluateCandidate(
 
 	return {
 		block: true,
-		reason: formatReason(
+		reason: await formatReason(
 			rule,
 			cand.tool,
 			noOverride,
 			shared.ruleSources.get(rule) ?? "user",
+			ctx,
 		),
 	};
 }
@@ -690,7 +790,7 @@ async function evaluateEvent(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
-	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
+	allObservers: readonly Observer[],
 ): Promise<ToolCallEventResult | void> {
 	// Top-level fail-closed wrap (S1). If the engine's own scaffolding
 	// throws — parse errors, walker bugs, corrupted session JSONL, etc.
@@ -710,7 +810,7 @@ async function evaluateEvent(
 			host,
 			defaultNoOverride,
 			ruleSources,
-			observersByWrittenEvent,
+			allObservers,
 		);
 	} catch (err) {
 		console.error(
@@ -735,7 +835,7 @@ async function evaluateEventInner(
 	host: EvaluatorHost,
 	defaultNoOverride: boolean,
 	ruleSources: ReadonlyMap<Rule, string>,
-	observersByWrittenEvent: ReadonlyMap<string, readonly Observer[]> | undefined,
+	allObservers: readonly Observer[],
 ): Promise<ToolCallEventResult | void> {
 	// Shared per-call closures: exec memoized by (cmd, args, cwd);
 	// findEntries reads the current session JSONL on demand; appendEntry
@@ -762,9 +862,6 @@ async function evaluateEventInner(
 		host,
 		defaultNoOverride,
 		ruleSources,
-		...(observersByWrittenEvent !== undefined
-			? { observersByWrittenEvent }
-			: {}),
 	};
 
 	// Bash state is lazy: non-bash rules don't pay for parse / walk.
@@ -788,6 +885,7 @@ async function evaluateEventInner(
 					bashEvent.input.command,
 					ctx.cwd,
 					trackers,
+					allObservers,
 				);
 			}
 			const result = await evaluateBashRule(
@@ -810,6 +908,10 @@ async function evaluateEventInner(
 					tool: "write",
 					path: event.input.path,
 					content: event.input.content,
+					// Shell env assignments don't apply to file-surface tools;
+					// shape as `[]` rather than `undefined` so plugin authors
+					// can treat the field uniformly across tools.
+					envAssignments: [],
 				},
 				target,
 				// override-comment scanned against content (the natural
@@ -840,6 +942,8 @@ async function evaluateEventInner(
 					tool: "edit",
 					path: editEvent.input.path,
 					edits: editEvent.input.edits,
+					// See the write branch above: `[]` for uniform shape.
+					envAssignments: [],
 				},
 				target,
 				editAllNewText,
@@ -879,12 +983,12 @@ async function evaluateBashRule(
 				command: refState.text,
 				basename: refState.basename,
 				args: refState.args,
+				envAssignments: refState.envAssignments,
 			},
 			overrideCarrier: rawCommand,
 			tool: "bash",
 			overrideEntryExtras: { command: rawCommand },
 			walkerState: refState.walkerState,
-			priorAndChainedRefs: refState.priorAndChainedRefs,
 		};
 		const r = await evaluateCandidate(rule, cand, shared);
 		if (r === "no-fire") continue;

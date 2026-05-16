@@ -26,16 +26,14 @@
  */
 
 import type {
-	ObserverWatch,
 	Pattern,
 	PredicateContext,
 	PredicateFn,
 	PredicateHandler,
-	ToolResultEvent,
 	WhenClause,
 } from "../schema.ts";
-import { matchesWatch } from "../internal/watch-matcher.ts";
 import { AGENT_LOOP_INDEX_KEY } from "./context.ts";
+import type { SyntheticEntry } from "./speculative-synthesis.ts";
 
 // ---------------------------------------------------------------------------
 // Pattern / PredicateFn resolution
@@ -128,28 +126,71 @@ export class UnknownPredicateError extends Error {
  *     unknown so the rule fires (block the command).
  *   - `onUnknown: "allow"`                        → predicate FAILS on
  *     unknown so the rule skips (allow the command).
+ *
+ * Fast path: the common shorthand form `when.cwd: /regex/` (or a
+ * string pattern) is read directly — no normalization object
+ * allocated. Only the object form `{ pattern, onUnknown }` takes
+ * the slightly-slower path of reading two fields. Matters because
+ * `when.cwd` runs once per rule per extracted ref per tool_call,
+ * so cutting the per-call allocation saves micro-seconds on hot
+ * configs with many cwd-scoped rules.
  */
 function evaluateCwd(
 	value: unknown,
 	walkerCwd: string,
 ): boolean {
-	const unwrapped = unwrapOnUnknown(value);
-	if (walkerCwd === "unknown") {
-		return unwrapped.onUnknown === "block"; // block → pred passes → rule fires
+	// Shorthand Pattern form (string or RegExp).
+	if (typeof value === "string" || value instanceof RegExp) {
+		if (walkerCwd === "unknown") return true; // onUnknown default: block
+		return matchesPattern(value, walkerCwd);
 	}
-	return matchesPattern(unwrapped.pattern, walkerCwd);
+	// Object form: { pattern, onUnknown? }.
+	if (
+		value !== null &&
+		typeof value === "object" &&
+		"pattern" in (value as Record<string, unknown>)
+	) {
+		const obj = value as {
+			pattern: Pattern;
+			onUnknown?: "allow" | "block";
+		};
+		if (walkerCwd === "unknown") {
+			return (obj.onUnknown ?? "block") === "block";
+		}
+		return matchesPattern(obj.pattern, walkerCwd);
+	}
+	// Malformed input — treat as shorthand Pattern with fail-closed default.
+	if (walkerCwd === "unknown") return true;
+	return matchesPattern(value as Pattern, walkerCwd);
 }
 
 /**
- * Built-in `when.happened` predicate. Reads session entries of the
- * given event from `ctx.findEntries`, filters by scope, and returns
- * **true when NO matching entry is found** — i.e. the event has NOT
- * happened yet in that scope.
+ * Built-in `when.happened` predicate. Merges real session entries
+ * (from `ctx.findEntries`, scope-filtered) with speculative entries
+ * (from `ctx.walkerState.events[event]`, produced by the walker-level
+ * synthesis pass — see {@link synthesizeSpeculativeEntries}) and
+ * returns **true when the unified timeline says the event has NOT
+ * happened** — i.e. the rule should fire.
  *
- * Matches ADR §5 semantics:
- *   - `in: "agent_loop"` keeps only entries whose
- *     `_agentLoopIndex === ctx.agentLoopIndex`.
- *   - `in: "session"` keeps every entry.
+ * Single pipeline: the merge via timestamp ordering collapses the
+ * prior two-path structure (specialized tool_call-scope speculative-
+ * allow running only on stale/absent real entries) into one uniform
+ * sort-and-compare. Synthetic entries carry reserved timestamps above
+ * all real entries in the same type (see
+ * {@link synthesizeSpeculativeEntries}'s timestamp convention); so on
+ * an `&&` chain where the prior ref would produce `event`, the
+ * merged timeline correctly treats the event as fresher than any
+ * stale real entry of the same type.
+ *
+ * ADR §5 scope semantics are applied to real entries only —
+ * speculative entries are always considered in-scope. Synthetic
+ * entries represent "about to happen in the current tool_call", and
+ * the current tool_call is always part of the current agent_loop and
+ * session, so a scope subset check adds no signal. This also means a
+ * rule using `in: "agent_loop"` and a rule using `in: "session"` see
+ * the same speculative view (correct — "about to happen" is scope-
+ * independent; a speculative entry newer than ALL real entries for
+ * the type is newer than any scope subset too).
  *
  * Inversion is handled by the caller via `when.not`. Authors wanting
  * "fires when the event HAS happened" wrap this clause in `not:`.
@@ -167,7 +208,7 @@ function evaluateHappened(
 	) {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": when.happened ` +
-				`expected { event: string; in: "agent_loop" | "session"; since?: string }; ` +
+				`expected { event: string; in: "agent_loop" | "session" | "tool_call"; since?: string; notIn?: "agent_loop" | "session" | "tool_call" }; ` +
 				`got ${JSON.stringify(value)}`,
 		);
 	}
@@ -175,30 +216,23 @@ function evaluateHappened(
 		event,
 		in: scope,
 		since,
+		notIn,
 	} = value as {
 		event: string;
 		in: unknown;
 		since?: unknown;
+		notIn?: unknown;
 	};
 	// Validate the scope string. The type system says
-	// `"agent_loop" | "session"`, but a user migrating from v0.0.0-poc
-	// configs where the scope was called `"turn"` — or anyone with a
-	// typo like `"agentLoop"` — slips through TypeScript when the value
-	// arrives from a JSON source (import-json CLI, hand-written config,
-	// etc.). Surface those as loud runtime errors rather than silent
-	// fallthrough to the else-branch (the agent_loop filter path).
-	if (scope === "turn") {
+	// `"agent_loop" | "session" | "tool_call"`, but a typo like
+	// `"agentLoop"` slips through TypeScript when the value arrives
+	// from a JSON source (import-json CLI, hand-written config, etc.).
+	// Surface those as loud runtime errors rather than silent
+	// fallthrough.
+	if (scope !== "agent_loop" && scope !== "session" && scope !== "tool_call") {
 		throw new Error(
 			`[pi-steering] Rule "${ruleName}": ` +
-				`when.happened.in: "turn" is no longer supported in ` +
-				`pi-steering v0.1.0. Use "agent_loop" instead ` +
-				`(see the v0.1.0 migration notes).`,
-		);
-	}
-	if (scope !== "agent_loop" && scope !== "session") {
-		throw new Error(
-			`[pi-steering] Rule "${ruleName}": ` +
-				`when.happened.in must be "agent_loop" or "session"; ` +
+				`when.happened.in must be "agent_loop", "session", or "tool_call"; ` +
 				`got ${JSON.stringify(scope)}`,
 		);
 	}
@@ -209,152 +243,178 @@ function evaluateHappened(
 				`got ${JSON.stringify(since)}`,
 		);
 	}
-	const inScope = scopeFilter(scope, ctx);
-	const eventEntries = ctx
-		.findEntries<Record<string, unknown>>(event)
-		.filter(inScope);
-	if (eventEntries.length > 0) {
-		if (since === undefined) {
-			// Simple presence check: event happened → rule does NOT fire.
-			return false;
+
+	// Optional `notIn`: scope-subtraction modifier. Flat string — no
+	// nested object shape. Validated here rather than at load time to
+	// match the existing unknown-scope validation pattern (engine has no
+	// schema-level validation pass).
+	let innerScope: "agent_loop" | "session" | "tool_call" | null = null;
+	if (notIn !== undefined) {
+		if (
+			notIn !== "agent_loop" &&
+			notIn !== "session" &&
+			notIn !== "tool_call"
+		) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.notIn must be "agent_loop", "session", or "tool_call"; ` +
+					`got ${JSON.stringify(notIn)}`,
+			);
 		}
-		const sinceEntries = ctx
-			.findEntries<Record<string, unknown>>(since)
-			.filter(inScope);
-		if (sinceEntries.length === 0) {
-			// Sentinel never written → degrade to simple-happened semantics.
-			return false;
+		if (notIn === scope) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.in and when.happened.notIn are identical (${JSON.stringify(scope)}); subtraction is empty. Remove the "notIn" modifier.`,
+			);
 		}
-		// Both present in scope. The event is "happened" iff its latest
-		// entry is strictly newer than the latest `since` entry.
-		// `findEntries` returns entries in append order, so the last
-		// element is the most recent.
-		const latestEvent =
-			eventEntries[eventEntries.length - 1]?.timestamp ?? 0;
-		const latestSince =
-			sinceEntries[sinceEntries.length - 1]?.timestamp ?? 0;
-		if (latestEvent > latestSince) {
-			// Event is fresher than the invalidator → still happened.
-			return false;
+		if (SCOPE_ORDER[notIn] > SCOPE_ORDER[scope]) {
+			throw new Error(
+				`[pi-steering] Rule "${ruleName}": ` +
+					`when.happened.notIn (${JSON.stringify(notIn)}) is a superset of when.happened.in (${JSON.stringify(scope)}); subtraction is empty. Adjust the scopes.`,
+			);
 		}
-		// Event is older than (or equal to) the invalidator → stale;
-		// fall through to speculative-allow + fire.
+		innerScope = notIn;
 	}
-	// At this point the happened predicate WOULD fire (event absent or
-	// stale). Before firing, try the chain-aware speculative-allow path
-	// (only meaningful for bash candidates with prior-`&&` refs and a
-	// config that ships observers writing `event`).
-	if (speculativeHappenedAllow(ctx, event)) {
+
+	const sinceValue = typeof since === "string" ? since : undefined;
+
+	const eventLatest = latestTimestampSubtracted(
+		event,
+		scope,
+		innerScope,
+		ctx,
+	);
+	if (eventLatest === null) {
+		// Event absent in the (subtracted) timeline → rule fires.
+		return true;
+	}
+	if (sinceValue === undefined) {
+		// Simple presence check: event happened → rule does NOT fire.
 		return false;
 	}
-	return true;
+	const sinceLatest = latestTimestampSubtracted(
+		sinceValue,
+		scope,
+		innerScope,
+		ctx,
+	);
+	if (sinceLatest === null) {
+		// Invalidator never written in the (subtracted) timeline →
+		// degrade to simple-happened semantics (event wins).
+		return false;
+	}
+	// Both present. Event counts as happened iff its latest entry
+	// is strictly newer than the invalidator's.
+	return eventLatest <= sinceLatest;
 }
 
 /**
- * Chain-aware speculative allow for `when.happened`. Returns `true`
- * when the current tool_call contains a prior `&&`-chained ref that
- * matches an observer declaring `writes: [event]` — meaning the event
- * is "about to happen" once the chain executes.
+ * Latest timestamp across the unified real + speculative timeline
+ * for the given customType, with optional set-subtraction against an
+ * inner scope. `null` when no entries remain after subtraction.
  *
- * Only `&&`-joined predecessors qualify (see
- * {@link PredicateContext.priorAndChainedRefs} and ADR amendment). The
- * guarantee: `A && B` short-circuits on A's failure, so if A would
- * make the observer fire on success, the speculative decision is safe
- * to grant — either A succeeds (event writes, block was correct to
- * skip) or A fails and B (the current ref) never runs.
+ * Semantics:
+ *   - Outer scope `"tool_call"`: real entries are skipped entirely
+ *     (real entries are never "within this one bash invocation");
+ *     only speculative entries count. Exactly the existing "about to
+ *     happen in THIS command" semantic.
+ *   - Outer `"agent_loop"`: real entries scope-filtered by
+ *     `_agentLoopIndex`; speculative always included.
+ *   - Outer `"session"`: all real entries; speculative always included.
  *
- * Filter semantics are delegated to the dispatcher's
- * {@link matchesWatch} via a synthesized `ToolResultEvent`
- * representing "a successful bash ref about to run" — the two paths
- * share one filter contract so new `watch` fields added to
- * {@link matchesWatch} automatically gate speculative-allow correctly.
- * Chain-aware-specific invariants (see
- * {@link observerEligibleForSpeculativeAllow}) are layered on top.
+ * When `innerScope` is non-null, the subtraction removes entries that
+ * are in `innerScope` from the entry stream BEFORE the timestamp max.
+ * Since speculative entries are `tool_call`-scope by construction and
+ * `tool_call ⊂ agent_loop ⊂ session`, ANY non-null `innerScope`
+ * subtracts all speculative entries. For real entries, the inner
+ * scope's membership predicate gates which are excluded.
  *
- * IMPORTANT: `priorAndChainedRefs` contains refs STRICTLY BEFORE the
- * current ref in source order. The contract is preserved by
- * {@link computePriorAndChains} (a left-to-right walk that never
- * forward-references) — we do NOT consult refs that come after, which
- * would let an agent bypass a block by placing the "satisfying" ref
- * after the blocked ref.
+ * Invariant (enforced by {@link evaluateHappened}'s validation):
+ * `innerScope === null` OR `SCOPE_ORDER[innerScope] <= SCOPE_ORDER[outer]`
+ * AND `innerScope !== outer`. Callers passing anything else get a
+ * configuration error before arriving here.
  */
-function speculativeHappenedAllow(
+function latestTimestampSubtracted(
+	customType: string,
+	outer: "agent_loop" | "session" | "tool_call",
+	innerScope: "agent_loop" | "session" | "tool_call" | null,
 	ctx: PredicateContext,
-	event: string,
-): boolean {
-	const priorRefs = ctx.priorAndChainedRefs;
-	if (priorRefs === undefined || priorRefs.length === 0) return false;
-	const observers = ctx.observersByWrittenEvent?.get(event);
-	if (!observers || observers.length === 0) return false;
-	for (const ref of priorRefs) {
-		for (const obs of observers) {
-			if (!observerEligibleForSpeculativeAllow(obs.watch)) continue;
-			// Synthesize the minimal event shape `matchesWatch` inspects
-			// for a successful bash ref. Fields the dispatcher fills on a
-			// real `tool_result` are either covered (`toolName`, `input`,
-			// `exitCode`) or irrelevant to the filter (`output` — never
-			// read by `matchesWatch`). If a future filter field becomes
-			// speculative-relevant, extend the synthesis here; the filter
-			// body itself stays single-sourced in watch-matcher.ts.
-			const synthetic: ToolResultEvent = {
-				toolName: "bash",
-				input: { command: ref.text },
-				output: undefined,
-				exitCode: 0,
-			};
-			if (matchesWatch(obs.watch, synthetic)) return true;
+): number | null {
+	let latest = -Infinity;
+
+	// Real entries: in outer scope AND NOT in inner scope.
+	// Outer = "tool_call" excludes all real entries outright.
+	if (outer !== "tool_call") {
+		const inOuter = realEntryInScope(outer, ctx);
+		const inInner =
+			innerScope !== null && innerScope !== "tool_call"
+				? realEntryInScope(innerScope, ctx)
+				: null;
+		for (const entry of ctx.findEntries<Record<string, unknown>>(customType)) {
+			if (!inOuter(entry)) continue;
+			if (inInner !== null && inInner(entry)) continue;
+			if (entry.timestamp > latest) latest = entry.timestamp;
 		}
 	}
-	return false;
+
+	// Speculative entries are always `tool_call` scope. Any non-null
+	// inner scope subtracts them (tool_call itself, or a superset that
+	// includes tool_call). When inner is null, keep them.
+	if (innerScope === null) {
+		const speculative = speculativeEntriesFor(ctx, customType);
+		for (const entry of speculative) {
+			if (entry.timestamp > latest) latest = entry.timestamp;
+		}
+	}
+
+	return latest === -Infinity ? null : latest;
 }
 
 /**
- * Chain-aware-specific pre-gate layered on top of the shared
- * {@link matchesWatch} contract. `matchesWatch` answers "would this
- * observer fire on this concrete event?"; speculative-allow needs the
- * stronger question "is it SAFE to grant an allow on the mere presence
- * of a prior `&&` ref matching this watch?". Two gates are specific to
- * speculative-allow:
- *
- *   - **Missing `inputMatches.command`**: an observer that fires on
- *     any bash event isn't a strong enough signal — it would grant
- *     allow on any `foo && cr` regardless of what `foo` does.
- *     Observers participating in chain-aware allow must declare
- *     `watch.inputMatches.command` (documented authoring
- *     requirement).
- *   - **toolName excluded from bash**: prior refs always come from
- *     the bash tool; a non-bash watch can never fire on one. Caught
- *     structurally by {@link matchesWatch}, but we fail fast here
- *     too so the synthesized event isn't constructed for obviously
- *     incompatible observers.
- *
- * Exit-code validation is delegated entirely to {@link matchesWatch}
- * against the synthesized `exitCode: 0` event — observers gated on
- * `"failure"` or non-zero codes can never fire via `&&` short-circuit
- * and `matchesWatch` correctly rejects the synthesized success event
- * for them.
+ * Read the speculative-entry slice for `customType` off
+ * `ctx.walkerState.events`. Returns an empty array when walkerState
+ * is undefined (non-bash candidates) or carries no `events` field
+ * (configs with no observers producing synthesis entries for this
+ * event → the synthesis pass returned empty views per ref).
  */
-function observerEligibleForSpeculativeAllow(
-	watch: ObserverWatch | undefined,
-): boolean {
-	if (!watch) return false;
-	if (watch.toolName !== undefined && watch.toolName !== "bash") return false;
-	const command = watch.inputMatches?.["command"];
-	if (command === undefined) return false;
-	return true;
+function speculativeEntriesFor(
+	ctx: PredicateContext,
+	customType: string,
+): readonly SyntheticEntry[] {
+	const events = ctx.walkerState?.["events"] as
+		| Readonly<Record<string, readonly SyntheticEntry[]>>
+		| undefined;
+	return events?.[customType] ?? [];
 }
 
 /**
- * Build a per-entry filter for the happened scope. Hoisted out of
- * {@link evaluateHappened} so both the `event` and the optional
- * `since` entry streams share the same predicate.
+ * Scope nesting order used for superset detection in happened.notIn
+ * validation. `tool_call ⊂ agent_loop ⊂ session`; a higher number
+ * means a broader scope.
  */
-function scopeFilter(
-	scope: "agent_loop" | "session",
+const SCOPE_ORDER = {
+	tool_call: 0,
+	agent_loop: 1,
+	session: 2,
+} as const;
+
+/**
+ * Build a per-entry filter for a scope as it applies to REAL entries
+ * (session JSONL). Speculative entries are filtered elsewhere since
+ * they have their own scope semantics.
+ *
+ * For a scope `tool_call`, real entries never match (no real entry
+ * originates from the current tool_call's speculative view).
+ */
+function realEntryInScope(
+	scope: "agent_loop" | "session" | "tool_call",
 	ctx: PredicateContext,
 ): (entry: { data: Record<string, unknown> }) => boolean {
 	if (scope === "session") {
 		return () => true;
+	}
+	if (scope === "tool_call") {
+		return () => false;
 	}
 	const target = ctx.agentLoopIndex;
 	return (entry) => {
@@ -364,36 +424,15 @@ function scopeFilter(
 }
 
 /**
- * Normalize the union shape accepted by built-in predicates:
- *   - `Pattern`                            → { pattern, onUnknown: "block" }
- *   - `{ pattern: Pattern, onUnknown? }`   → as supplied; `onUnknown`
- *                                            defaults to "block".
- */
-function unwrapOnUnknown(value: unknown): {
-	pattern: Pattern;
-	onUnknown: "allow" | "block";
-} {
-	if (
-		value !== null &&
-		typeof value === "object" &&
-		!(value instanceof RegExp) &&
-		"pattern" in (value as Record<string, unknown>)
-	) {
-		const obj = value as {
-			pattern: Pattern;
-			onUnknown?: "allow" | "block";
-		};
-		return { pattern: obj.pattern, onUnknown: obj.onUnknown ?? "block" };
-	}
-	return { pattern: value as Pattern, onUnknown: "block" };
-}
-
-/**
  * Walker state consumed by `when` evaluation. Today just the per-ref
  * cwd; the shape is open for future built-ins (e.g. branch) to pull
  * their own fields from the same snapshot.
+ *
+ * @internal — not a plugin-author surface. Plugin predicates consume
+ * `ctx.walkerState` (the public `Readonly<Record<string, unknown>>`
+ * on {@link PredicateContext}) instead.
  */
-export interface WhenWalkerState {
+interface WhenWalkerState {
 	readonly cwd: string;
 }
 

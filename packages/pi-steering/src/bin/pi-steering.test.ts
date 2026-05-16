@@ -142,9 +142,9 @@ describe("pi-steering CLI: help + dispatch", () => {
 	});
 
 	it("unknown subcommand writes to stderr and exits 1", async () => {
-		const r = await runCli("migrate");
+		const r = await runCli("bogus-sub");
 		assert.equal(r.code, 1);
-		assert.match(r.stderr, /unknown subcommand "migrate"/);
+		assert.match(r.stderr, /unknown subcommand "bogus-sub"/);
 		// Help still gets written to stdout for context.
 		assert.match(r.stdout, /USAGE/);
 	});

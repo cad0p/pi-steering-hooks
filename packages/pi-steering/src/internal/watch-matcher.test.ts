@@ -10,7 +10,7 @@
  *
  *   1. The production dispatcher ({@link matchesWatch} applied to a
  *      real `ToolResultEvent` arriving from pi).
- *   2. The evaluator's chain-aware `when.happened` speculative-allow
+ *   2. The evaluator's `when.happened` with `in: "tool_call"` speculative-allow
  *      (synthesizes a minimal successful bash event from a prior
  *      `&&` ref and calls {@link matchesWatch}).
  *
@@ -29,10 +29,10 @@
  * and forgets to exercise it in the synthesized event, the mismatch
  * shows up here first.
  *
- * Semantic layer note: chain-aware speculative-allow ALSO layers an
+ * Semantic layer note: tool_call-scope speculative allow ALSO layers an
  * extra "observer must declare `inputMatches.command`" gate on top of
  * the shared filter (to prevent allow on command-agnostic watches —
- * not a filter-semantic question, but a chain-aware safety
+ * not a filter-semantic question, but a speculative-synthesis safety
  * requirement). That gate is covered end-to-end in the evaluator tests
  * ("observer without inputMatches.command → no speculative allow"). It
  * is intentionally OUT OF SCOPE here: this file verifies that when
@@ -52,8 +52,9 @@ import { matchesWatch } from "./watch-matcher.ts";
 // Synthetic-event constructor
 // ---------------------------------------------------------------------------
 //
-// The exact synthesis the evaluator's `speculativeHappenedAllow` uses
-// for a prior `&&` ref. Kept in lockstep with the real one: if the
+// The exact synthesis the evaluator's speculative-entry producer
+// (see `evaluator-internals/speculative-synthesis.ts`) uses for a
+// prior `&&` ref. Kept in lockstep with the real one: if the
 // evaluator's synthesis grows a field, mirror it here so the test
 // exercises the same shape.
 
@@ -136,7 +137,7 @@ interface DispatcherEventCase {
 
 /**
  * For each ref text we build two events:
- *   - the chain-aware SYNTHESIS (constructed above),
+ *   - the speculative SYNTHESIS (constructed above),
  *   - the dispatcher equivalent: the same bash tool_result the
  *     dispatcher would see after a successful run of `refText`.
  *

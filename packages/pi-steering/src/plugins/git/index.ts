@@ -23,21 +23,27 @@
  *                              parser layered on the core cwd tracker.
  *                              See `./cwd-extensions.ts`.
  *
- * Not registered by default. Users opt in:
+ * Also re-exported as composable building blocks for downstream
+ * plugins (e.g. RDS-style multi-package `cr --all` scans that need
+ * to query git state per subpackage directory):
  *
- *   ```ts
- *   import { defineConfig } from "pi-steering";
- *   import gitPlugin from "pi-steering/plugins/git";
+ *   - `getBranch(ctx, cwd?)`            — current branch or `null`
+ *   - `getUpstream(ctx, cwd?)`          — upstream name or `null`
+ *   - `getCommitsAhead(ctx, wrt?, cwd?)` — commit count or `null`
+ *   - `getStagedChanges(ctx, cwd?)`     — boolean or `null`
+ *   - `getWorkingTreeClean(ctx, cwd?)`  — boolean or `null`
+ *   - `getRemoteUrl(ctx, cwd?)`         — origin URL or `null`
  *
- *   export default defineConfig({
- *     plugins: [gitPlugin],
- *     rules: [...],
- *   });
- *   ```
+ * See `./git-ops.ts` for the helper contract (all collapse failure
+ * modes to `null`; caller decides what to do with it).
  *
- * Phase 5+ may promote the git plugin into `DEFAULT_PLUGINS` once the
- * API surface stabilises; for Phase 4 the explicit opt-in keeps the
- * engine domain-agnostic.
+ * Default-on as of v0.1.0. Registered automatically via
+ * {@link DEFAULT_PLUGINS}; users do not need to import and register
+ * explicitly. Opt out via `disabledPlugins: ["git"]` or
+ * `disableDefaults: true`.
+ *
+ * Explicit registration is still supported and canonical in tests
+ * that build a config via `loadHarness({ includeDefaults: false })`.
  *
  * ## Note for plugin authors
  *
@@ -47,7 +53,8 @@
  * them. Copy-adapt liberally.
  */
 
-import type { Plugin, Tracker } from "../../index.ts";
+import type { Plugin } from "../../schema.ts";
+import type { Tracker } from "unbash-walker";
 import { branchTracker } from "./branch-tracker.ts";
 import { gitCwdExtensions } from "./cwd-extensions.ts";
 import { predicates } from "./predicates.ts";
@@ -99,6 +106,14 @@ export default gitPlugin;
 export { branchTracker } from "./branch-tracker.ts";
 export { gitCwdExtensions } from "./cwd-extensions.ts";
 export {
+	getBranch,
+	getCommitsAhead,
+	getRemoteUrl,
+	getStagedChanges,
+	getUpstream,
+	getWorkingTreeClean,
+} from "./git-ops.ts";
+export {
 	branch,
 	upstream,
 	commitsAhead,
@@ -108,4 +123,4 @@ export {
 	predicates,
 	type CommitsAheadArgs,
 } from "./predicates.ts";
-export { rules } from "./rules.ts";
+export { rules, noMainCommit } from "./rules.ts";

@@ -54,10 +54,8 @@ Create `.pi/steering/index.ts` at your project root:
 
 ```ts
 import { defineConfig } from "pi-steering";
-import gitPlugin from "pi-steering/plugins/git";
 
 export default defineConfig({
-  plugins: [gitPlugin],
   rules: [
     {
       name: "no-force-push",
@@ -70,18 +68,37 @@ export default defineConfig({
       reason: "Force-push rewrites history. Use --force-with-lease if needed.",
     },
   ],
-  // Compile-time safety: typo in a rule name below is a TS error.
-  // Try changing "no-main-commit" to "no-main-commito" — tsc will reject it.
-  disabledRules: ["no-main-commit"],
 });
 ```
 
 With this config:
 
-- `git push --force`, `sh -c 'git push --force'`, and `cd /repo && git push --force` all block.
+- `git push --force`, `sh -c 'git push --force'`, and `cd /repo && git push --force` all block via your rule.
 - `git push --force-with-lease` is not matched.
-- The git plugin's `no-main-commit` rule is disabled (you opted out).
+- `git commit` on `main` / `master` / `mainline` / `trunk` blocks via the git plugin's `no-main-commit` rule (default-on — see [Defaults](#defaults) below).
 - `echo 'git push --force'` correctly does not block — the AST extraction anchors patterns on real command refs, not substrings of arguments.
+
+## Defaults
+
+Two default bundles ship with the package and are layered onto every config automatically:
+
+- **`DEFAULT_RULES`** — `no-force-push`, `no-hard-reset`, `no-rm-rf-slash`, `no-long-running-commands`. Domain-agnostic safety rails. See [`src/defaults.ts`](./src/defaults.ts) for the exact patterns.
+- **`DEFAULT_PLUGINS`** — the [git plugin](./src/plugins/git/README.md). Contributes the `branch` / `upstream` / `commitsAhead` / `hasStagedChanges` / `isClean` / `remote` predicates, the `no-main-commit` rule (overridable per commit via `# steering-override: no-main-commit — <reason>`), the branch tracker (tool_call-scoped `git checkout` awareness), and the `cwd.git` tracker extension (`--git-dir=` / `--work-tree=` parsing).
+
+Opt-out paths:
+
+```ts
+// Drop the shipped rule but keep the git predicates + tracker:
+defineConfig({ disabledRules: ["no-main-commit"] });
+
+// Drop the whole git plugin (predicates, tracker, rule):
+defineConfig({ disabledPlugins: ["git"] });
+
+// Drop EVERYTHING shipped — DEFAULT_RULES and DEFAULT_PLUGINS:
+defineConfig({ disableDefaults: true });
+```
+
+All three fields are typo-checked by `defineConfig`'s generics (see [Compile-time safety](#compile-time-safety-via-defineconfig)).
 
 **Typecheck payoff.** Declare anything that should be typo-checked:
 
@@ -91,6 +108,38 @@ disabledRules: ["wrong-name"],
 ```
 
 This fails at `tsc --noEmit` time — rule / plugin / observer names are threaded through `defineConfig`'s generics and cross-validated.
+
+## Glossary
+
+Three orthogonal axes, three distinct word families. Keep them straight and the docs / rules / errors all line up.
+
+**Time scope** (`WhenClause.happened.in`):
+
+- **`agent_loop`** — the current user prompt plus every tool call it spawns. Bumped on pi's `agent_start` event. Most common scope for workflow rules.
+- **`session`** — the entire pi session across all agent loops. Persisted in the session JSONL, survives restarts.
+- **`tool_call`** — the current bash tool call only. Considers ONLY speculative entries synthesized from `&&`-reachable observers. Use when the event MUST be chained directly before the guarded command.
+
+**Entry origin** (how a session entry came to exist):
+
+- **Real entry** — persisted in pi's session JSONL via `ctx.appendEntry`. Outlives the current tool call.
+- **Speculative entry** — synthesized by the engine for a `&&`-chain, representing "if this chain runs to completion, this entry WILL be written." Not persisted; exists only for the current evaluation.
+- **Synthesis pass** — walker-level pass that produces speculative entries from observer `writes:` declarations plus `&&`-chain reachability.
+
+**Shell constructs** (what the agent typed):
+
+- **`&&`-chain** — the shell construct `A && B && C`. Legitimate bash terminology throughout these docs; distinct from the retired adjective "chain-aware".
+- **Pipeline** (`|`) — each peer runs in its own subshell; cwd / branch / state effects don't propagate across peers.
+- **Subshell** (`(…)`) — cwd / branch effects are isolated to the subshell's body.
+
+**Hook surfaces** (where code runs):
+
+- **Tracker** — walker-level, static. Models per-ref state (cwd, branch, …) from the bash AST before execution. Plugin authors register under `Plugin.trackers`. See "Walker extensibility".
+- **Observer** — engine-level, dynamic. Watches `tool_result` events and persists session entries via `ctx.appendEntry`. Plugin authors register under `Plugin.observers`. See "Observers".
+
+**Walker terminology** (shell-semantics terms of art):
+
+- **Effective cwd** — the cwd a command runs at, computed statically by the walker from preceding `cd` / `-C` constructs. Always `tool_call`-scoped (fresh per bash invocation).
+- **Command ref** (`CommandRef`) — one extracted command node with its args, per bash tool call. Multiple per `&&`-chain.
 
 ## How it works
 
@@ -117,15 +166,22 @@ User prompt sent to pi.
         ref#0 at cwd=/original
         ref#1 at cwd=/original
         ref#2 at cwd=/tmp  (the `cd /tmp` applied)
+      Walker-level speculative-entry synthesis runs in the same pass,
+      populating `walkerState.events` per ref (see "`&&`-chain
+      speculative allow" below).
    e. For each ref × for each rule, build a Candidate:
         input.command   = ref.text (FLATTENED: "git push --force")
         input.basename  = "git"
         input.args      = ref.node.suffix (Word[] with quote-aware .value)
         cwd             = walkerState.cwd   (per-ref)
-        walkerState     = { cwd, branch, … }  (all trackers)
+        walkerState     = { cwd, branch, …, events }  (all trackers +
+                          synthesized events under the reserved `events` key)
         agentLoopIndex  = N+1
    f. Test rule.pattern / requires / unless against ref.text.
       Run when.cwd / when.branch / when.happened / plugin predicates.
+      `when.happened` merges real entries (ctx.findEntries) with
+      synthesized speculative ones (walkerState.events) by timestamp
+      — one unified latest-entry comparison.
    g. First rule that ALL predicates pass on wins.
       Return { block: true, reason: "[steering:no-force-push@user] …" }.
       If the rule defines `onFire`, invoke it first (may writeSession entries,
@@ -166,17 +222,33 @@ interface Rule {
   requires?: Pattern | PredicateFn;             // AND extra
   unless?: Pattern | PredicateFn;               // exemption
   when?: WhenClause;                            // composable predicates
-  reason: string;                               // message to the agent
+  reason: string | ReasonFn;                    // message (or fn) to the agent
   noOverride?: boolean;                         // default: true (fail-closed)
   observer?: Observer | string;                 // name-ref to a shipped observer
   writes?: readonly string[];                   // declared session-entry types
   onFire?: (ctx: PredicateContext) => void;     // side-effect hook on block
 }
+
+type ReasonFn = (ctx: PredicateContext) => string | Promise<string>;
 ```
 
 The **pattern** tests against the flattened `basename + " " + args.join(" ")` of each extracted command ref (bash). Anchor with `^` so substrings of arguments don't accidentally match. For write/edit, the pattern tests `path` or `content` directly.
 
-The **reason** is written for the agent. Include what was blocked and what the safe alternative is — the agent reads it and acts on it.
+The **reason** is written for the agent. Include what was blocked and what the safe alternative is — the agent reads it and acts on it. A plain string is the common case. For dynamic context (the walker-resolved cwd, a count pulled from `findEntries`), pass a function instead:
+
+```ts
+{
+  name: "cr-upstream-mainline",
+  tool: "bash", field: "command",
+  pattern: /^cr\b/,
+  reason: (ctx) =>
+    ctx.walkerState?.cwd === "unknown"
+      ? "Walker could not resolve cwd statically. Retry with a literal path, or run `cr` from inside a package directory."
+      : "Your branch's upstream must track origin/mainline before running `cr`.",
+}
+```
+
+Reason functions are awaited, and the result is prefixed the same way as string reasons (`[steering:<rule>@<source>] …`). If the function throws or rejects, the engine logs the error with `console.warn` and emits a fail-safe fallback body (`(reason failed to format; see log)`) so the block verdict still lands without leaking the raw error to the agent.
 
 ### `WhenClause`
 
@@ -185,8 +257,9 @@ interface WhenClause {
   cwd?: Pattern | { pattern: Pattern; onUnknown?: "allow" | "block" };
   happened?: {
     event: string;
-    in: "agent_loop" | "session";
+    in: "agent_loop" | "session" | "tool_call";
     since?: string;  // optional invalidation sentinel
+    notIn?: "agent_loop" | "session" | "tool_call";  // scope subtraction
   };
   not?: WhenClause;
   condition?: (ctx: PredicateContext) => boolean | Promise<boolean>;
@@ -198,9 +271,9 @@ interface WhenClause {
 
 Built-ins:
 
-- **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). For write/edit, it's the session cwd.
-- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL. Invert via `not`. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Chain-aware for `&&` bash chains — see "Chain-aware `happened`" below.
-- **`not`** — boolean NOT over a nested clause.
+- **`cwd`** — rule fires only when the command's effective cwd matches. For bash, this is the per-ref cwd from the walker (so `cd ~/personal && git commit` evaluates against `~/personal`). Dynamic targets — `cd "$WS_DIR/pkg"`, `cd ~/proj` — resolve through the walker's env tracker (seeded from `process.env.{HOME, USER, PWD}` plus any bare assignments, `export`s, or `unset`s in the same chain). Intractable targets (`cd $(pwd)`, `cd $UNDEFINED`) surface as the `"unknown"` sentinel; apply `onUnknown: "allow" | "block"` (default `"block"`, fail-closed) to choose. For write/edit, it's the session cwd.
+- **`happened`** — fires when an entry of `event` has NOT occurred in `in` scope. `"agent_loop"` filters by `_agentLoopIndex === ctx.agentLoopIndex` (one user prompt + its tool calls); `"session"` scans the whole session JSONL; `"tool_call"` considers only speculative entries synthesized for THIS tool_call's `&&`-chain. Optional `since` acts as an invalidation sentinel — see "Temporal ordering with `happened.since`" below. Optional `notIn` subtracts a narrower scope from `in` (e.g. `{ in: "agent_loop", notIn: "tool_call" }` means "happened in a prior tool_call in this loop", blocking the same-tool_call speculative bypass). `notIn` is set subtraction, distinct from the clause-level `not` (boolean negation). Synthesizes speculative entries across `&&` bash chains — see "`&&`-chain speculative allow" below.
+- **`not`** — boolean NOT over a nested clause. Use to invert a sub-clause (e.g. `not: { upstream: /^origin\/main$/ }` fires unless upstream is origin/main).
 - **`condition`** — escape hatch for one-off logic. Prefer plugin predicates when the logic is reusable.
 
 Plugin predicates fill the `[customKey: string]` slot. `when.branch: /^main$/` is valid only if a plugin registered `branch` under `predicates`.
@@ -218,13 +291,32 @@ interface PredicateContext {
   exec: (cmd, args, opts?) => Promise<ExecResult>;  // memoized per (cmd, args, cwd)
   appendEntry<T>(type: string, data?: T): void;
   findEntries<T>(type: string): Array<{ data: T; timestamp: number }>;
-  walkerState?: Record<string, unknown>;        // tracker snapshot
+  walkerState?: Readonly<WhenWalkerState>;      // tracker snapshot (bash only)
+}
+
+interface WhenWalkerState {
+  readonly cwd: string;                          // effective cwd, or "unknown"
+  readonly env: ReadonlyMap<string, string>;     // env map (HOME/USER/PWD + chain writes)
+  readonly [key: string]: unknown;               // plugin trackers (e.g. `branch`)
 }
 ```
 
 `exec` is memoized per `(cmd, args, cwd)` within a single tool_call — two rules reading the same git state don't re-fork git. No cross-call cache.
 
 `PredicateToolInput.args` on bash gives you the `Word[]` suffix — quote-aware; `.value` is the lexical unwrapped value, `.text` is the raw source. Use this when a predicate needs to read `-m "feat: x"` without losing the quoted content.
+
+`walkerState.env` carries the per-ref env map: bare assignments (`FOO=bar`), `export NAME=value`, and `unset NAME` from the same bash chain, plus `HOME`/`USER`/`PWD` seeded from `process.env` at session start. Use it to resolve `$VAR` / `${VAR}` / `~` in user-supplied patterns via the `resolveWord` helper re-exported from the package root:
+
+```ts
+import { resolveWord } from "pi-steering";
+
+const myPredicate: PredicateHandler = (args, ctx) => {
+  const expanded = resolveWord(userWord, ctx.walkerState!.env);
+  return expanded !== undefined && /workspace/.test(expanded);
+};
+```
+
+`resolveWord` returns `undefined` when any part of the word is statically intractable (unknown var, command substitution, arithmetic, parameter-expansion with modifiers). Handle that the same way the built-in `when.cwd` does — via an `onUnknown: "allow" | "block"` policy on your own predicate surface.
 
 ### `onFire`
 
@@ -319,7 +411,7 @@ Semantics: the event counts as "happened" only if its most-recent entry in scope
 
 Contrast with a hand-rolled `condition:` handler doing the same comparison: `since` is declarative, cross-checked at compile time (both `event` and `since` are constrained to the `Writes` union), and shared across rules without duplicating helper code. Reach for `condition` only when the comparison isn't "my event after their event" — e.g. counting, content matching, or quorum across multiple invalidators.
 
-### Chain-aware `happened`
+### `&&`-chain speculative allow
 
 Agents frequently chain related commands in one tool_call:
 
@@ -329,7 +421,9 @@ sync && cr --description notes.md
 
 The naive evaluation path blocks this chain: the evaluator runs BEFORE execution, so when it sees `cr`, the observer hasn't written `ws-sync-done` yet. Rule fires, block, retry, same block — an infinite loop.
 
-pi-steering resolves this by looking at **prior `&&`-chained refs**. If any of them matches an observer declaring `writes: [event]`, the event is treated as "about to happen" and the rule does NOT fire. `&&` short-circuits on the prior's failure, so the speculative decision is safe: either the prior succeeds (and writes the event, retroactively justifying the allow), or it fails and the current ref never runs.
+pi-steering resolves this via a walker-level **speculative-entry synthesis pass**. For every ref in an unconditionally-`&&`-reachable segment, every observer declaring `writes: [event]` and matching the ref (via the shared `watch` filter) contributes a synthetic entry into the next ref's `walkerState.events[event]`. The built-in `when.happened` then merges these synthetic entries with real session entries by timestamp — so a speculative `ws-sync-done` entry satisfies the rule exactly as a real one would, and the chain is allowed.
+
+`&&` short-circuits on the prior's failure, so the speculative decision is safe: either the prior succeeds (and writes the event, retroactively justifying the allow), or it fails and the current ref never runs. Synthetic entries carry `speculative: true` so plugin predicates wanting pure historical semantics can filter them out; the built-in `happened` treats real and speculative entries identically.
 
 **Which joiners qualify:**
 
@@ -340,7 +434,7 @@ pi-steering resolves this by looking at **prior `&&`-chained refs**. If any of t
 | `A \| B` | ❌ | pipeline, no ordering |
 | `A \|\| B` | ❌ | B runs only if A FAILED |
 
-**Authoring requirement.** Observers participating in chain-aware allow must declare `watch.inputMatches.command`. An observer matching every bash event isn't a strong enough signal to grant the allow.
+**Authoring requirement.** Observers participating in the speculative allow must declare `watch.inputMatches.command`. An observer matching every bash event isn't a strong enough signal to grant the allow.
 
 Worked example:
 
@@ -471,14 +565,92 @@ export const branch = definePredicate<BranchArgs>(async (args, ctx) => {
 Production plugins in this repo:
 
 - [`src/plugins/git`](./src/plugins/git) — the canonical plugin reference for trackers + tracker extensions. Ships `branch` / `upstream` / `commitsAhead` predicates, a `branchTracker`, a `--git-dir` / `--work-tree` cwd extension, and the `no-main-commit` rule.
+- [`pi-steering-flags`](../pi-steering-flags) — a sibling package in this monorepo; first official external plugin, establishing the precedent for community plugins. Ships `requiresFlag` / `allowlistedFlagsOnly` predicates and helper primitives.
+- [`pi-steering-commit-format`](../pi-steering-commit-format) — a sibling package in this monorepo. Ships the `commitFormat` predicate plus a `commitFormatFactory` for composing custom format checkers; bundled formats include Conventional Commits 1.0.0 (Angular preset type allowlist) and bracketed JIRA-style references.
+
+### Ecosystem discovery
+
+Tag your plugin's `package.json` `keywords` with:
+
+```jsonc
+{
+  "keywords": [
+    "pi-package",            // surfaces on pi.dev alongside every pi extension
+    "pi-steering-package"    // surfaces specifically for pi-steering plugins
+    // ...plus any domain tags (cli, git, test-runner, ...)
+  ]
+}
+```
+
+- `pi-package` is pi's ecosystem-wide convention.
+- `pi-steering-package` is the pi-steering plugin-specific tag. Community plugins using it will be surfaced in pi-steering's plugin directory (once one exists) without needing a manual registry.
+
+Publishing conventions:
+
+- **Package name**: `pi-steering-<domain>` (unscoped). Mirrors `pi-steering` core and `pi-steering-flags`. Scoped names (`@org/pi-steering-<x>`) are fine for internal packages.
+- **Peer range**: pin to a major once `pi-steering` is v1+ (`"pi-steering": "^1"`). During the v0.x window, match the release train closely (`"pi-steering": "^0.1.0"`).
+- **License**: MIT by default, matching the core. Amazon-internal / proprietary plugins use their own license; the core has no opinion on this.
+
+### Overriding a built-in rule
+
+Plugin-shipped rules are individually exported from their plugins (see `pi-steering/plugins/git`'s named exports). To tighten a rule's reason message — e.g. pointing your agents at an internal skill or team runbook — disable the original and re-register under a new name:
+
+```ts
+import { defineConfig } from "pi-steering";
+import gitPlugin, { noMainCommit } from "pi-steering/plugins/git";
+
+// Reuse everything about the original, just swap the reason.
+const myNoMainCommit = {
+  ...noMainCommit,
+  name: "myorg-no-main-commit",
+  reason:
+    noMainCommit.reason +
+    "\n\nFor our workflow, see skill `git-discipline@myorg` or run `pi-help git-flow`.",
+} as const satisfies Rule;
+
+export default defineConfig({
+  plugins: [gitPlugin],
+  disabledRules: ["no-main-commit"],  // original off
+  rules: [myNoMainCommit],            // replacement on
+});
+```
+
+`as const satisfies Rule` preserves literal types so `defineConfig`'s cross-reference checks (on `happened.event`, `observer`, etc.) still run on the replacement. No need to restate `pattern` / `when` / `observer` / `onFire` — the spread carries them through.
+
+Changing more than the reason (tightening the pattern, scoping by cwd, swapping the observer) works the same way: spread the original, then override the fields you want to change.
 
 ## Walker extensibility
 
-Plugin authors who need a new walker state dimension (something beyond `cwd` / `branch`) register a `Tracker<T>` under `Plugin.trackers`. The engine composes trackers at config load and feeds the merged map into unbash-walker's `walk()`.
+Plugin authors who need a new walker state dimension (something beyond `cwd` / `env` / `branch`) register a `Tracker<T>` under `Plugin.trackers`. The engine composes trackers at config load and feeds the merged map into unbash-walker's `walk()`.
 
 Tracker authoring is a larger topic — see the [unbash-walker README](../unbash-walker/) for the full `Tracker<T>` / `Modifier<T>` API. Plugins extend an existing tracker (e.g. layering a `--git-dir=…` parser on the core cwd tracker) via `Plugin.trackerExtensions`. Name collisions on `Plugin.trackers` are a hard error; modifier collisions log a WARN and keep the first-registered.
 
 Most users never need this — plugin-registered predicates alone cover 90% of use cases.
+
+### Shell-var expansion (`envTracker` + `resolveWord`)
+
+The engine ships an `envTracker` alongside the built-in `cwdTracker`. It captures statically-resolvable env mutations from the same bash chain:
+
+- Bare assignments: `WS_DIR=/ws; cd "$WS_DIR/pkg"` → `walkerState.env.get("WS_DIR") === "/ws"` at the `cd`, `walkerState.cwd === "/ws/pkg"` at the following commands.
+- `export NAME=VALUE` and `unset NAME`.
+- Subshell isolation: `(FOO=/s; cd "$FOO"); cmd` — outer `cmd` sees neither `FOO` nor the subshell's `cd`.
+- Seeded from `process.env.{HOME, USER, PWD}` at tracker initialization, so `~` / `$HOME` / `$USER` / `$PWD` expand out of the box.
+
+Out of scope for v0.1.0: `readonly`, `local`, `declare`, `typeset`, `source` / `.`, function-body walking. The envTracker's module-level JSDoc (`packages/unbash-walker/src/trackers/env.ts`) lists the full deferred-scope inventory and graduation criteria.
+
+**`resolveWord(word, env)`** — re-exported from the package root — is the shared helper the built-in `cd` modifier uses to resolve a dynamic word (`$VAR`, `${VAR}`, `~`) through an env map. Plugin predicates that want the same semantics on user-supplied args should reuse it:
+
+```ts
+import { resolveWord, type PredicateHandler } from "pi-steering";
+
+export const matchesHome: PredicateHandler = (args, ctx) => {
+  const word = /* one of ctx.input.args */ args as Word;
+  const resolved = resolveWord(word, ctx.walkerState!.env);
+  return resolved !== undefined && resolved.startsWith("/home/");
+};
+```
+
+Returning `undefined` means the word is statically intractable (unknown var, command substitution, arithmetic, parameter-expansion with modifiers). Handle it via an `onUnknown`-style policy on your predicate's option shape.
 
 ## Testing rules
 
@@ -572,166 +744,13 @@ No config → "No steering config found." and exit 0.
 
 ### `pi-steering import-json`
 
-One-shot migration from a v0.0.x JSON config to a v0.1.0 TypeScript config:
+One-shot conversion from a v1 JSON config to a v0.1.0 TypeScript config:
 
 ```bash
 pi-steering import-json .pi/steering.json -o .pi/steering/index.ts
 ```
 
-Emits a `defineConfig({...})` module using JSON-literal rendering. Rule patterns come across verbatim; `requires` / `unless` / override semantics are preserved. See [Migrating from v0.0.0-poc](#migrating-from-v000-poc) for the full migration.
-
-## Migrating from v0.0.0-poc
-
-The v0.1.0 release introduces several breaking changes. If you authored a config or plugin against v0.0.0-poc, update in this order:
-
-### 1. Package rename
-
-`@cad0p/pi-steering-hooks` → `pi-steering` (unscoped).
-
-```diff
-// package.json
-  "dependencies": {
--   "@cad0p/pi-steering-hooks": "*"
-+   "pi-steering": "*"
-  }
-```
-
-```diff
-// every import
-- import { defineConfig } from "@cad0p/pi-steering-hooks";
-+ import { defineConfig } from "pi-steering";
-```
-
-Subpath imports (`pi-steering/plugins/git`, `pi-steering/testing`) follow the same rename.
-
-### 2. Upstream pi package rename
-
-`@mariozechner/pi-coding-agent` → `@earendil-works/pi-coding-agent`.
-
-Only affects plugin authors who import pi types directly (`ExtensionAPI`, `ExtensionContext`, `ToolCallEvent`, etc.). Config authors using only this package's re-exports don't need to change anything.
-
-### 3. `turnIndex` → `agentLoopIndex`
-
-The engine's monotonic counter is now bumped on `pi.on("agent_start")` (one agent loop = one user prompt + its tool calls), not `turn_start`. Renamed everywhere:
-
-```diff
-- ctx.turnIndex
-+ ctx.agentLoopIndex
-
-- if (entry.data._turnIndex === ctx.turnIndex) { ... }
-+ if (entry.data._agentLoopIndex === ctx.agentLoopIndex) { ... }
-```
-
-Grep your config for `turnIndex` and rename every occurrence.
-
-### 4. `when.happened.in`: `"turn"` → `"agent_loop"`
-
-```diff
-  when: {
--   happened: { event: "doc-read", in: "turn" }
-+   happened: { event: "doc-read", in: "agent_loop" }
-  }
-```
-
-The engine throws a hard error with a migration hint if `in: "turn"` is seen. Unknown `in` values now throw at eval time with the offending rule name.
-
-### 5. `when.happened.type` → `when.happened.event`
-
-```diff
-  when: {
--   happened: { type: "doc-read", in: "agent_loop" }
-+   happened: { event: "doc-read", in: "agent_loop" }
-  }
-```
-
-The field name changed because `type` collided with standard TypeScript reading (type aliases, union discriminants). `event` reads as `happened: { event: X, in: Y }` — "the X event happened in Y scope" — and pairs naturally with the `_EVENT` suffix convention for event-literal constants (e.g. `DOC_READ_EVENT`).
-
-This rename is independent of the `"turn"` → `"agent_loop"` rename above: if you track master between PR #3 and PR #4 you may have already moved to `in: "agent_loop"` while still using `type:` — run this rename separately.
-
-### 6. Block reason format
-
-Block reasons changed from `[steering:<name>]` to `[steering:<name>@<source>]`:
-
-```diff
-- [steering:no-force-push] Force-push rewrites history. …
-+ [steering:no-force-push@user] Force-push rewrites history. …
-```
-
-Source is `user` for user-authored rules, and the plugin name for plugin-shipped rules. **Update any CI grep that parses block reasons.** Tests using `expectBlocks({ rule: "no-force-push" })` work unchanged — the `rule:` matcher strips the source.
-
-### 7. Auto-tagged session entries
-
-The engine now auto-tags every `appendEntry` write with `_agentLoopIndex`, including `steering-override` audit entries. If your code parses session JSONL for overrides, accept the extra field:
-
-```diff
-  // Old shape:
-  { ruleName: "no-force-push", command: "…" }
-
-  // New shape:
-  { ruleName: "no-force-push", command: "…", _agentLoopIndex: 3 }
-```
-
-### 8. Array / Date / Error payloads wrap
-
-The auto-tag wrapper merges into plain objects, but **wraps non-plain-object payloads** as `{ value: <payload>, _agentLoopIndex: N }`. Affected: arrays, `Date`, `Map`, `Set`, `Error`, class instances.
-
-```diff
-  observer.onResult = (_, ctx) => {
-    ctx.appendEntry("my-list", [1, 2, 3]);
-  };
-
-  // Read back:
-- const arr = ctx.findEntries<number[]>("my-list")[0].data;
-+ const arr = ctx.findEntries<{ value: number[]; _agentLoopIndex: number }>("my-list")[0].data.value;
-```
-
-Migration tip: if you care about backwards-compat, switch to writing a plain object: `ctx.appendEntry("my-list", { items: [1, 2, 3] })` — that merges cleanly.
-
-### 9. `disable` / `disablePlugins` renamed
-
-The two selective opt-out lists on `SteeringConfig` were renamed to
-past-participle form for shape-at-a-glance readability — lists read
-as "these things are disabled" (predicates on state), while the
-boolean `disableDefaults` flag keeps its imperative action form:
-
-```diff
-  defineConfig({
--   disable: ["no-main-commit"],
-+   disabledRules: ["no-main-commit"],
--   disablePlugins: ["git"],
-+   disabledPlugins: ["git"],
-    disableDefaults: true,   // unchanged — imperative flag stays imperative
-  });
-```
-
-The TypeScript compiler will point you at every site that needs
-updating. `.pi/steering.json` (v1 JSON) continues to use the old
-`disable` key; only the TypeScript surface changed.
-
-### 10. Nothing-new-to-do (additive)
-
-These are new in v0.1.0 but don't require migration:
-
-- **`Rule.writes`** / **`Observer.writes`** — optional arrays; purely type-level plumbing through `defineConfig`.
-- **`Rule.onFire`** — optional hook; omit if you don't need self-marking.
-- **`input.args`** / **`input.basename`** on bash predicate inputs — in addition to the existing `input.command`.
-- **`definePredicate<T>`** helper — purely ergonomic; existing `PredicateHandler<T>` manual casts still work.
-- **Wrapper-aware observer matching** — `watch.inputMatches.command` now fires against wrapped refs (`sh -c`, `sudo`, `xargs`, `env`). If you tuned a regex hoping wrappers would NOT match, you need to adjust.
-
-### Quick migration checklist
-
-```
-[ ] package.json:       @cad0p/pi-steering-hooks → pi-steering
-[ ] imports:            @cad0p/pi-steering-hooks → pi-steering
-[ ] pi types (plugin):  @mariozechner/…           → @earendil-works/…
-[ ] grep -r turnIndex       → rename to agentLoopIndex
-[ ] grep -r "in: \"turn\""  → "in: \"agent_loop\""
-[ ] grep -r "happened: { type"  → rename `type` to `event`
-[ ] CI grep for block reasons → add @source support
-[ ] session-JSONL parsers     → tolerate _agentLoopIndex field
-[ ] pnpm -r typecheck         → green
-[ ] pnpm -r test              → green
-```
+Emits a `defineConfig({...})` module using JSON-literal rendering. Rule patterns come across verbatim; `requires` / `unless` / override semantics are preserved. Plugins, observers, and function-valued predicates are rejected — those features only exist in the TypeScript shape and must be authored directly.
 
 ## Override comments
 
@@ -804,6 +823,7 @@ Future versions will add a session-manager-side index keyed by `customType`, mov
 
 ## Further reading
 
+- [`examples/`](./examples/) — rule-pack examples (`force-push-strict`, `no-amend`, `draft-prs-only`, `combined-git-discipline`) — copy-paste starting points.
 - [`examples/work-item-plugin/`](./examples/work-item-plugin/) — canonical plugin reference.
 - [`src/plugins/git/`](./src/plugins/git) — production plugin with trackers and tracker extensions.
 - [`../unbash-walker/`](../unbash-walker/) — the AST walker.

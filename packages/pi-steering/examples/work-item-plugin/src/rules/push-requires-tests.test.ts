@@ -191,8 +191,8 @@ describe("push-requires-tests", () => {
 		assert.ok(result && "block" in result, "post-pull push should block");
 	});
 
-	it("chain-aware: `npm test && git push` is allowed pre-execution", async () => {
-		// Demonstrates the PR #4 chain-aware speculative allow. The
+	it("`&&`-chain: `npm test && git push` is allowed pre-execution", async () => {
+		// Demonstrates the PR #4 speculative allow. The
 		// evaluator runs BEFORE the chain executes, so the observer
 		// hasn't written TEST_PASSED_EVENT yet — but because the prior
 		// `&&` ref matches the npm-test observer's watch, the engine
@@ -209,7 +209,7 @@ describe("push-requires-tests", () => {
 		});
 	});
 
-	it("chain-aware: `git push && npm test` is NOT allowed (push is first)", async () => {
+	it("`&&`-chain: `git push && npm test` is NOT allowed (push is first)", async () => {
 		// Order matters — the speculative allow looks at PRIOR && refs
 		// only. Here push is first, so there's no prior observer to
 		// cite; the rule fires normally.
@@ -226,7 +226,7 @@ describe("push-requires-tests", () => {
 		);
 	});
 
-	it("chain-aware: `npm test ; git push` still blocks (`;` does not qualify)", async () => {
+	it("`&&`-chain: `npm test ; git push` still blocks (`;` does not qualify)", async () => {
 		// Only `&&` predecessors qualify for speculative allow. A
 		// `;`-joined prior doesn't short-circuit, so granting the
 		// allow would be unsafe.

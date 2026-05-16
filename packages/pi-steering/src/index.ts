@@ -106,10 +106,28 @@ export type { DefineConfigInput } from "./define-config.ts";
 // Predicate helper.
 export { definePredicate } from "./define-predicate.ts";
 
+// Guard helpers AND reason-text helpers for custom predicates that
+// read runtime `ctx.cwd` (shell-exec or filesystem queries) rather
+// than walker-tracked state.
+//
+// - `requireKnownCwd` / `requireKnownState`: wrap predicate handlers
+//   to inherit the engine's `onUnknown: "block"` fail-closed
+//   semantics when the walker surfaces its `"unknown"` sentinel for
+//   a dynamic `cd $VAR` target.
+// - `walkerUnknownCwdReason`: composable agent-facing reason text
+//   for ReasonFns to call on the walker-unknown branch of those
+//   wraps.
+export {
+	requireKnownCwd,
+	requireKnownState,
+} from "./helpers/require-known-state.ts";
+export type { BuiltInTrackerDimension } from "./helpers/require-known-state.ts";
+export { walkerUnknownCwdReason } from "./helpers/walker-unknown-cwd-reason.ts";
+
 // Loader — walk-up config discovery + merge.
 export { buildConfig, loadConfigs, loadSteeringConfig } from "./loader.ts";
 
-// JSON compat — migrate v0.0.x JSON configs to v0.1+ TS configs.
+// JSON compat — convert v1 JSON configs to v2 TS configs.
 export { FromJSONError, fromJSON } from "./compat.ts";
 
 // Auto-tag key for session-entry writes. Exposed so plugin authors
@@ -119,6 +137,7 @@ export { AGENT_LOOP_INDEX_KEY } from "./evaluator-internals/context.ts";
 
 // Schema types — the public authoring surface.
 export type {
+	AnyPredicateHandler,
 	ExecOpts,
 	ExecResult,
 	BaseRule,
@@ -133,10 +152,12 @@ export type {
 	PredicateFn,
 	PredicateHandler,
 	PredicateToolInput,
+	ReasonFn,
 	Rule,
 	SteeringConfig,
 	ToolResultEvent,
 	WhenClause,
+	WhenWalkerState,
 	WriteRule,
 } from "./schema.ts";
 
@@ -161,6 +182,7 @@ export type {
 // unbash-walker extraction.
 export {
 	cwdTracker,
+	envTracker,
 	expandWrapperCommands,
 	extractAllCommandsFromAST,
 	formatCommand,
@@ -169,8 +191,11 @@ export {
 	getCommandName,
 	isStaticallyResolvable,
 	parse,
+	resolveWord,
 	walk,
 } from "unbash-walker";
+
+export type { EnvState } from "unbash-walker";
 
 // Testing primitives — re-exported at the root for discoverability.
 // The canonical import path is `pi-steering/testing`;
@@ -188,6 +213,7 @@ export {
 	mockContext,
 	mockExtensionContext,
 	mockObserverContext,
+	priorEntry,
 	runMatrix,
 	testObserver,
 	testPredicate,
@@ -206,6 +232,7 @@ export type {
 	MockContextOptions,
 	MockObserverContextOptions,
 	MockEntry,
+	PriorEntryOptions,
 	RecordedExecCall,
 	RecordedSessionEntry,
 	RecordingHost,

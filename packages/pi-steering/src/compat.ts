@@ -2,15 +2,14 @@
 // Part of pi-steering.
 
 /**
- * `fromJSON` — one-shot migration helper from the v1 JSON config shape
- * to the v2 {@link SteeringConfig}.
+ * `fromJSON` — convert the v1 JSON config shape to a v2
+ * {@link SteeringConfig}.
  *
  * Per the accepted ADR ("Design → File layout and loader behavior"):
  * JSON is not a first-class config format in v2. `fromJSON` exists so
- * teams with existing `.pi/steering.json` files can migrate
- * programmatically without losing their ruleset — either as a library
- * call (this module) or as a one-shot `pi-steering import-json` CLI
- * wrapping it (future work).
+ * `.pi/steering.json` files authored against the PoC shape can be
+ * loaded programmatically — either as a library call (this module)
+ * or via the `pi-steering import-json` CLI wrapping it.
  *
  * Scope:
  *
@@ -37,9 +36,9 @@ import type { Rule, SteeringConfig, WhenClause } from "./schema.ts";
 
 /**
  * Error thrown when the input JSON uses a feature the v1 → v2 helper
- * can't migrate. Carries a `path` pointing at the offending location
+ * can't represent. Carries a `path` pointing at the offending location
  * (e.g. `rules[2].when.branch`) so callers can point the user at the
- * rule to fix by hand.
+ * rule to rewrite in TypeScript.
  */
 export class FromJSONError extends Error {
 	readonly path: string;
@@ -61,7 +60,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  *
  * The input is typed `unknown` deliberately — this helper accepts
  * whatever came out of `JSON.parse`, validates the shape, and throws
- * {@link FromJSONError} on anything it can't migrate.
+ * {@link FromJSONError} on anything it can't represent.
  */
 export function fromJSON(json: unknown): SteeringConfig {
 	if (!isPlainObject(json)) {

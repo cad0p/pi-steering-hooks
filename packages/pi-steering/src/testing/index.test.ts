@@ -38,6 +38,7 @@ import {
 	mockContext,
 	mockExtensionContext,
 	mockObserverContext,
+	priorEntry,
 	runMatrix,
 	testObserver,
 	testPredicate,
@@ -365,7 +366,14 @@ describe("mockContext", () => {
 		assert.equal(typeof ctx.exec, "function");
 		assert.equal(typeof ctx.appendEntry, "function");
 		assert.equal(typeof ctx.findEntries, "function");
-		assert.deepEqual(ctx.walkerState, { cwd: "/tmp/test" });
+		// Default walkerState populates cwd + an empty env map (Tier B /
+		// D1: plugin authors reading `walkerState.env.get(...)` get a
+		// well-typed Map even when the test doesn't wire up the env
+		// tracker explicitly).
+		assert.deepEqual(ctx.walkerState, {
+			cwd: "/tmp/test",
+			env: new Map<string, string>(),
+		});
 	});
 
 	it("applies cwd / agentLoopIndex / tool / input / walkerState overrides", () => {
@@ -384,7 +392,14 @@ describe("mockContext", () => {
 			path: "/a.ts",
 			content: "x",
 		});
-		assert.deepEqual(ctx.walkerState, { cwd: "/work", branch: "main" });
+		// walkerState overrides merge OVER the defaults (shallow merge),
+		// so branch lands, cwd overrides the default, and env stays as the
+		// default empty Map — matching production evaluator shape.
+		assert.deepEqual(ctx.walkerState, {
+			cwd: "/work",
+			env: new Map(),
+			branch: "main",
+		});
 	});
 
 	it("derives default input shape per tool", () => {
@@ -501,78 +516,149 @@ describe("mockContext", () => {
 		]);
 	});
 
-	// ---- Chain-aware fields: priorAndChainedRefs + observersByWrittenEvent ----
+	// ---- toolCallEvents: walkerState.events surface for tool_call-
+	// ---- scope `when.happened` and plugin predicates over synthesized entries
 
-	it("priorAndChainedRefs defaults to undefined on the returned ctx", () => {
-		// Matches the production shape for non-bash candidates or when the
-		// evaluator has no prior-&& refs to thread in.
+	it("toolCallEvents default: walkerState has no `events` key when the option is omitted", () => {
+		// Matches the production shape for non-bash candidates or configs
+		// with no eligible observer — the evaluator's synthesis pass runs
+		// only for bash, and mockContext doesn't manufacture one on the
+		// caller's behalf.
 		const ctx = mockContext();
-		assert.equal(ctx.priorAndChainedRefs, undefined);
-	});
-
-	it("observersByWrittenEvent defaults to undefined on the returned ctx", () => {
-		const ctx = mockContext();
-		assert.equal(ctx.observersByWrittenEvent, undefined);
-	});
-
-	it("threads priorAndChainedRefs through to the ctx (chain-aware scenario)", () => {
-		const ctx = mockContext({
-			priorAndChainedRefs: [{ text: "sync" }, { text: "echo ok" }],
-		});
-		assert.deepEqual(ctx.priorAndChainedRefs, [
-			{ text: "sync" },
-			{ text: "echo ok" },
-		]);
-	});
-
-	it("threads observersByWrittenEvent through to the ctx (chain-aware scenario)", () => {
-		const obs: Observer = {
-			name: "test-obs",
-			writes: ["X"],
-			watch: {
-				toolName: "bash",
-				inputMatches: { command: /^sync\b/ },
-			},
-			onResult: () => {},
-		};
-		const map = new Map<string, readonly Observer[]>([["X", [obs]]]);
-		const ctx = mockContext({ observersByWrittenEvent: map });
-		assert.equal(ctx.observersByWrittenEvent, map);
-		assert.deepEqual(ctx.observersByWrittenEvent?.get("X"), [obs]);
-	});
-
-	it("testPredicate forwards chain-aware fields so the built-in happened speculative-allow path can be driven", async () => {
-		// Surface-level: a plugin author can write a custom predicate that
-		// introspects chain-aware state and exercise it via testPredicate
-		// without dropping to loadHarness. Here we simulate a predicate
-		// that fires iff at least one prior-&& ref matches an observer
-		// writing the requested event — a hand-rolled sketch of the
-		// built-in happened speculative-allow path.
-		const spyPredicate: PredicateHandler<string> = async (event, ctx) => {
-			const obs = ctx.observersByWrittenEvent?.get(event) ?? [];
-			const refs = ctx.priorAndChainedRefs ?? [];
-			return obs.length > 0 && refs.length > 0;
-		};
-		const syncObs: Observer = {
-			name: "sync-tracker",
-			writes: ["SYNC"],
-			watch: { toolName: "bash", inputMatches: { command: /^sync\b/ } },
-			onResult: () => {},
-		};
-		const map = new Map<string, readonly Observer[]>([["SYNC", [syncObs]]]);
-
-		const without = await testPredicate(spyPredicate, "SYNC", {});
-		assert.equal(without, false, "no chain-aware state → predicate sees nothing");
-
-		const withChain = await testPredicate(spyPredicate, "SYNC", {
-			priorAndChainedRefs: [{ text: "sync" }],
-			observersByWrittenEvent: map,
-		});
 		assert.equal(
-			withChain,
-			true,
-			"with both fields populated, the predicate can reason about chain-aware state",
+			(ctx.walkerState as Record<string, unknown> | undefined)?.["events"],
+			undefined,
 		);
+	});
+
+	it("toolCallEvents threads through to ctx.walkerState.events", () => {
+		// Surface-level: plugin authors drive `when.happened` with `in: "tool_call"`
+		// in isolation by passing `toolCallEvents`. The option merges
+		// into walkerState under the reserved `events` key, same shape
+		// the walker-level synthesis pass produces in production.
+		const events = {
+			SYNC: [
+				{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
+			],
+		};
+		const ctx = mockContext({ toolCallEvents: events });
+		const got = (ctx.walkerState as Record<string, unknown>)["events"];
+		assert.equal(got, events);
+	});
+
+	it("toolCallEvents overrides an `events` entry placed on walkerState directly", () => {
+		// Explicit option wins: the caller who opts into `toolCallEvents`
+		// gets the canonical shape without having to strip their own
+		// `walkerState.events` entry. Mirrors the evaluator's merge order
+		// (`{ ...trackerState, events }`).
+		const override = { X: [{ data: 1, timestamp: 7, speculative: true as const }] };
+		const ctx = mockContext({
+			walkerState: { cwd: "/w", events: { X: [] } },
+			toolCallEvents: override,
+		});
+		const got = (ctx.walkerState as Record<string, unknown>)["events"];
+		assert.equal(got, override);
+	});
+
+	it("testPredicate forwards toolCallEvents so plugin predicates over walkerState.events can be driven", async () => {
+		// End-to-end: a plugin predicate introspects walkerState.events,
+		// and testPredicate (which forwards the full options object to
+		// mockContext) lets the caller exercise both branches.
+		const fires: PredicateHandler<string> = async (event, ctx) => {
+			const events = (ctx.walkerState as Record<string, unknown> | undefined)?.[
+				"events"
+			] as Record<string, readonly unknown[]> | undefined;
+			return (events?.[event]?.length ?? 0) > 0;
+		};
+
+		const cold = await testPredicate(fires, "SYNC", {});
+		assert.equal(cold, false, "no toolCallEvents → predicate sees nothing");
+
+		const warm = await testPredicate(fires, "SYNC", {
+			toolCallEvents: {
+				SYNC: [
+					{ data: {}, timestamp: 2 ** 52 + 1, speculative: true as const },
+				],
+			},
+		});
+		assert.equal(warm, true, "toolCallEvents populated → predicate fires");
+	});
+
+	// -------------------------------------------------------------------
+	// Env surface (Tier B / PR #5 — D1)
+	// -------------------------------------------------------------------
+
+	it("default walkerState carries an empty env Map", () => {
+		const ctx = mockContext();
+		const env = ctx.walkerState?.["env"];
+		assert.ok(env instanceof Map, "walkerState.env is a Map");
+		assert.equal((env as Map<string, string>).size, 0);
+	});
+
+	it("walkerState override SHALLOW-MERGES with defaults so env stays a Map (M8)", () => {
+		// Correctness fix M8: `mockContext({ walkerState: { cwd: "/x" } })`
+		// previously replaced the entire default, dropping `env: new Map()`
+		// and crashing any predicate that did `ctx.walkerState.env.get(...)`.
+		// The merge now preserves defaults for fields the override omits.
+		const ctx = mockContext({ walkerState: { cwd: "/x" } });
+		assert.equal(ctx.walkerState?.["cwd"], "/x", "override cwd lands");
+		const env = ctx.walkerState?.["env"];
+		assert.ok(
+			env instanceof Map,
+			"walkerState.env is still a Map — default not dropped by partial override",
+		);
+		assert.equal((env as Map<string, string>).size, 0);
+	});
+
+	it("walkerState.env override threads through to ctx", () => {
+		const ctx = mockContext({
+			walkerState: {
+				cwd: "/ws/pkg",
+				env: new Map([["WS", "/ws"]]),
+			},
+		});
+		const env = ctx.walkerState?.["env"] as ReadonlyMap<string, string>;
+		assert.equal(env.get("WS"), "/ws");
+		assert.equal(ctx.walkerState?.["cwd"], "/ws/pkg");
+	});
+
+	it("walkerState.cwd === 'unknown' is a legal input (exercises onUnknown branch)", async () => {
+		// Spec requirement: mockContext should accept walkerState.cwd
+		// at the "unknown" sentinel so tests can exercise the
+		// fail-closed `onUnknown: 'block'` path without wiring up a
+		// full walker.
+		const ctx = mockContext({
+			walkerState: { cwd: "unknown", env: new Map() },
+		});
+		assert.equal(ctx.walkerState?.["cwd"], "unknown");
+
+		// Sanity: a plugin predicate reading the sentinel can discriminate.
+		const onUnknownBlock = async (_args: unknown, c: typeof ctx) =>
+			c.walkerState?.["cwd"] === "unknown";
+		assert.equal(await onUnknownBlock(null, ctx), true);
+	});
+
+	it("env is consumable by a ReasonFn-style predicate via testPredicate", async () => {
+		// End-to-end: a plugin reads walkerState.env.get('NAME') and
+		// fires the rule when the var resolves to a specific value.
+		const envGuard: PredicateHandler<string> = async (name, ctx) => {
+			const env = ctx.walkerState?.["env"] as
+				| ReadonlyMap<string, string>
+				| undefined;
+			return env?.get(name) === "/workspace";
+		};
+		const hit = await testPredicate(envGuard, "WS", {
+			walkerState: {
+				cwd: "/start",
+				env: new Map([["WS", "/workspace"]]),
+			},
+		});
+		assert.equal(hit, true);
+
+		const miss = await testPredicate(envGuard, "WS", {
+			walkerState: { cwd: "/start", env: new Map() },
+		});
+		assert.equal(miss, false);
 	});
 });
 
@@ -1274,5 +1360,70 @@ describe("mockExtensionContext", () => {
 			0,
 		);
 		assert.equal(allowed, undefined);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// priorEntry
+// ---------------------------------------------------------------------------
+
+describe("priorEntry", () => {
+	it("merges _agentLoopIndex into plain-object data", () => {
+		const entry = priorEntry("ws-sync-done", { note: "merged" }, { agentLoopIndex: 5 });
+		assert.deepEqual(entry, {
+			type: "custom",
+			customType: "ws-sync-done",
+			timestamp: "2026-01-01T00:00:00.000Z",
+			data: { note: "merged", _agentLoopIndex: 5 },
+		});
+	});
+
+	it("wraps primitive data as { value, _agentLoopIndex }", () => {
+		const entry = priorEntry("counter", 42, { agentLoopIndex: 2 });
+		assert.deepEqual(entry.data, { value: 42, _agentLoopIndex: 2 });
+	});
+
+	it("wraps array data as { value, _agentLoopIndex } (not merged)", () => {
+		const entry = priorEntry("list", [1, 2, 3], { agentLoopIndex: 1 });
+		assert.deepEqual(entry.data, { value: [1, 2, 3], _agentLoopIndex: 1 });
+	});
+
+	it("wraps undefined data as { value: undefined, _agentLoopIndex }", () => {
+		const entry = priorEntry("flag", undefined, { agentLoopIndex: 3 });
+		assert.deepEqual(entry.data, { value: undefined, _agentLoopIndex: 3 });
+	});
+
+	it("wraps null data as { value: null, _agentLoopIndex } (null is not a plain object)", () => {
+		const entry = priorEntry("sentinel", null, { agentLoopIndex: 0 });
+		assert.deepEqual(entry.data, { value: null, _agentLoopIndex: 0 });
+	});
+
+	it("defaults agentLoopIndex to 0 when opts omitted", () => {
+		const entry = priorEntry("marker", {});
+		assert.deepEqual(entry.data, { _agentLoopIndex: 0 });
+		assert.equal(entry.timestamp, "2026-01-01T00:00:00.000Z");
+		assert.equal(entry.type, "custom");
+		assert.equal(entry.customType, "marker");
+	});
+
+	it("respects custom timestamp when provided", () => {
+		const entry = priorEntry("t", {}, {
+			agentLoopIndex: 0,
+			timestamp: "2026-06-15T12:34:56.789Z",
+		});
+		assert.equal(entry.timestamp, "2026-06-15T12:34:56.789Z");
+	});
+
+	it("round-trip with mockContext: entry is visible to findEntries with scope tag intact", () => {
+		// The entry should flow from `entries` through `findEntries` with
+		// its data shape preserved, INCLUDING the _agentLoopIndex tag —
+		// that's what lets the engine's agent_loop scope filter match it.
+		const ctx = mockContext({
+			agentLoopIndex: 5,
+			entries: [priorEntry("ws-sync-done", {}, { agentLoopIndex: 5 })],
+		});
+		const hits = ctx.findEntries<{ _agentLoopIndex: number }>("ws-sync-done");
+		assert.equal(hits.length, 1);
+		assert.equal(hits[0]?.data._agentLoopIndex, 5);
 	});
 });

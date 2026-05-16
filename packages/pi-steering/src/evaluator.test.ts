@@ -377,27 +377,72 @@ describe("buildEvaluator: when.cwd", () => {
 			when: { cwd: { pattern: "/never-matches/", onUnknown: "block" } },
 		};
 		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
-		// `cd $VAR` today returns the current cwd (Phase-1 exception in
-		// cwdTracker). Use a more aggressively non-static form — command
-		// substitution — which cwdTracker's `cdModifier` still treats as
-		// "not static"; the returned value is the pre-cd cwd in v1 but
-		// the test asserts the onUnknown path shouldn't blow up on
-		// resolvable paths either.
-		//
-		// For the *onUnknown* exercise the cleanest surface is plugin
-		// predicates (see the plugin-predicate test below). This test
-		// documents the observable v1 behaviour: cd $(...) does NOT
-		// trigger unknown; cwd stays pre-cd.
+		// Tier B (PR #5): `cd $(pwd)` is statically intractable — the walker
+		// emits the cwdTracker's `unknown` sentinel, and the engine's
+		// `when.cwd` with `onUnknown: 'block'` fires the rule (fail-closed).
+		// This supersedes the pre-Tier-B Phase 1 exception that would have
+		// carried /repo forward silently.
 		const res = await evaluator.evaluate(
 			bashEvent("cd $(pwd) && rm foo"),
 			makeCtx("/repo"),
 			0,
 		);
-		// With Phase-1 exception, cwd remains "/repo", which doesn't
-		// match "/never-matches/" and doesn't flag as unknown — so the
-		// rule doesn't fire. This pins the current behavior and guards
-		// against an accidental change of the exception.
-		assert.equal(res, undefined);
+		assert.ok(res, "rule must fire when cwd is unknown and onUnknown:'block'");
+		assert.match(
+			(res as { reason: string }).reason,
+			/block-unknown-cwd/,
+			"block reason names the firing rule",
+		);
+	});
+
+	it("object-form with onUnknown:'allow' skips on unresolvable cd target (opt-out of fail-closed)", async () => {
+		// Opposite of the block case above. An author who knows their
+		// rule should NOT fire on unresolvable cwd opts in via
+		// onUnknown: "allow". The walker still emits "unknown"; the
+		// built-in evaluateCwd routes to the allow branch.
+		const rule: Rule = {
+			name: "dont-block-on-unknown",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "would block, but onUnknown allows",
+			when: { cwd: { pattern: "/never-matches/", onUnknown: "allow" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"rule must NOT fire when cwd is unknown and onUnknown:'allow'",
+		);
+	});
+
+	it("object-form without onUnknown defaults to 'block' (fail-closed)", async () => {
+		// Pins the default: omitting `onUnknown` is equivalent to
+		// `onUnknown: 'block'`. Covers the evaluator's hot-path branch
+		// where obj.onUnknown is undefined.
+		const rule: Rule = {
+			name: "default-block-on-unknown",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "default-block",
+			when: { cwd: { pattern: "/never-matches/" } },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/repo"),
+			0,
+		);
+		assert.ok(
+			res,
+			"rule must fire on unknown when onUnknown is omitted (default: block)",
+		);
 	});
 
 	it("plugin predicate with onUnknown:'block' fires when handler sees unknown", async () => {
@@ -419,7 +464,7 @@ describe("buildEvaluator: when.cwd", () => {
 		};
 		const plugin: Plugin = {
 			name: "git",
-			predicates: { branch: branchPredicate as PredicateHandler },
+			predicates: { branch: branchPredicate },
 		};
 		const ruleBlock: Rule = {
 			name: "no-main-commit",
@@ -453,6 +498,74 @@ describe("buildEvaluator: when.cwd", () => {
 			await evalAllow.evaluate(bashEvent("git commit -m x"), makeCtx("/r"), 0),
 			undefined,
 		);
+	});
+
+	// ---------------------------------------------------------------
+	// Tier B / PR #5 — D1/D2 success criteria.
+	//
+	// Pin the end-to-end chain through the real engine (buildEvaluator
+	// wires cwdTracker + envTracker by default). These asserts guard
+	// against future tracker-composition regressions — a change that
+	// drops env tracker registration, or re-introduces the Phase 1
+	// exception, would surface here first.
+	// ---------------------------------------------------------------
+
+	it("chain: `WS=/ws; cd \"$WS/pkg\"; cmd` — rule with when.cwd: /ws\\/pkg/ fires on cmd", async () => {
+		const rule: Rule = {
+			name: "block-rm-in-pkg",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "no rm inside the package",
+			when: { cwd: "/ws/pkg" },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent('WS=/ws; cd "$WS/pkg"; rm foo'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.ok(res, "env-expanded cwd /ws/pkg should match the rule");
+		assert.match((res as { reason: string }).reason, /block-rm-in-pkg/);
+	});
+
+	it("chain: `cd \"$UNDEFINED\"; rm foo` — fail-closed onUnknown:'block' fires rule", async () => {
+		const rule: Rule = {
+			name: "workspace-only",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: "only allowed in /workspace",
+			when: { cwd: /\/workspace/ },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent('cd "$UNDEFINED"; rm foo'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.ok(res, "unresolvable cd target must fail-close via onUnknown:'block'");
+		assert.match((res as { reason: string }).reason, /workspace-only/);
+	});
+
+	it("subshell isolation: `(FOO=/s; cd \"$FOO\"); cmd` — outer cmd sees initial cwd, no leaked env", async () => {
+		const rule: Rule = {
+			name: "in-s-only",
+			tool: "bash",
+			field: "command",
+			pattern: "^cmd\\b",
+			reason: "only allowed at /s",
+			when: { cwd: "^/s$" },
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		// Outer cmd runs at /start (subshell's cd /s didn't leak out).
+		// The rule wants cwd === /s; it shouldn't fire.
+		const res = await evaluator.evaluate(
+			bashEvent('(FOO=/s; cd "$FOO"); cmd'),
+			makeCtx("/start"),
+			0,
+		);
+		assert.equal(res, undefined, "outer cmd's cwd is /start, not /s — no block");
 	});
 });
 
@@ -662,20 +775,17 @@ describe("buildEvaluator: when.happened", () => {
 		}
 	});
 
-	it('isolates the "turn" migration error (S1 × migration)', async () => {
-		// The "turn" → "agent_loop" migration error path is still the
-		// correct thing to throw from inside the predicate (it's how
-		// migrating users get told what to rename). With S1, the throw is
-		// now CAUGHT by the evaluator — the user sees a warning on
-		// startup / first fire and the rule stops firing, rather than the
-		// error leaking back to the LLM via pi's tool-result shim.
+	it('treats legacy "turn" scope as an unknown-scope typo (S1)', async () => {
+		// "turn" was the removed PoC scope name. v0.1.0 has no special-case
+		// hint for it — it falls through to the generic "unknown scope"
+		// error, same as any other typo.
 		const rule: Rule = {
 			name: "legacy-turn",
 			tool: "bash",
 			field: "command",
 			pattern: "^cr\\b",
 			reason: "legacy",
-			// @ts-expect-error — "turn" is the removed v0.0.0-poc scope name
+			// @ts-expect-error — "turn" is the removed PoC scope name
 			when: { happened: { event: "ws-sync-done", in: "turn" } },
 		};
 		const warnings = captureWarnings();
@@ -693,7 +803,7 @@ describe("buildEvaluator: when.happened", () => {
 			assert.equal(result, undefined);
 			assert.ok(
 				warnings.some((w) =>
-					/predicate threw for rule "legacy-turn"@user.*"turn" is no longer supported/.test(
+					/predicate threw for rule "legacy-turn"@user.*when\.happened\.in must be.*"agent_loop", "session", or "tool_call"/.test(
 						w,
 					),
 				),
@@ -729,7 +839,7 @@ describe("buildEvaluator: when.happened", () => {
 			assert.equal(result, undefined);
 			assert.ok(
 				warnings.some((w) =>
-					/predicate threw for rule "typo"@user.*when\.happened\.in must be.*"agent_loop" or "session"/.test(
+					/predicate threw for rule "typo"@user.*when\.happened\.in must be.*"agent_loop", "session", or "tool_call"/.test(
 						w,
 					),
 				),
@@ -742,10 +852,10 @@ describe("buildEvaluator: when.happened", () => {
 
 	it("untagged entries are treated as 'not happened this loop' (G5)", async () => {
 		// Simulates a pre-feature entry (hand-written session JSONL,
-		// migration across pi-steering versions, plugin that bypassed
-		// the wrapper): `data` has no `_agentLoopIndex` key. The
-		// agent_loop filter must NOT treat undefined as a match, so the
-		// rule's `when.happened` predicate still fires (rule blocks).
+		// or a plugin that bypassed the wrapper): `data` has no
+		// `_agentLoopIndex` key. The agent_loop filter must NOT treat
+		// undefined as a match, so the rule's `when.happened` predicate
+		// still fires (rule blocks).
 		const rule: Rule = {
 			name: "cr-needs-sync",
 			tool: "bash",
@@ -1064,7 +1174,7 @@ describe("buildEvaluator: when.happened.since (temporal ordering)", () => {
 	});
 });
 
-describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () => {
+describe("buildEvaluator: `&&`-chain speculative allow via when.happened", () => {
 	// When the current bash tool_call contains a prior `&&`-chained ref
 	// that matches an observer writing the required event, the engine
 	// speculatively treats the event as "about to happen" and declines
@@ -1464,12 +1574,12 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 
 	// ---- Observer dedup (user wins, matches dispatcher) ----
 
-	it("user observer shadows plugin observer of the same name in chain-aware allow", async () => {
+	it("user observer shadows plugin observer of the same name in speculative allow", async () => {
 		// Plugin ships an observer `chain-sync-tracker` with a LOOSE watch
 		// (`/^sync\b/`) that would match `sync`. User declares their own
 		// observer of the same name with a TIGHT watch (`/^sync --lock\b/`)
 		// that does NOT match bare `sync`. The dispatcher fires only the
-		// user's observer (dedup-by-name, user wins); chain-aware reverse-
+		// user's observer (dedup-by-name, user wins); speculative-synthesis reverse-
 		// index must apply the same semantics or it will grant on a
 		// pattern that never actually produces the event.
 		const userTightObserver: Observer = {
@@ -1528,14 +1638,15 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 	});
 
 	it("conservative-under: `foo && (bar ; sync) && cr` — only sync in prior, foo is dropped at `;`", async () => {
-		// GAP-02 regression fence. The walker flattens to
+		// `&&` joiner flattening visibility. The walker flattens to
 		// `foo.joiner='&&', bar.joiner=';', sync.joiner='&&',
 		// cr.joiner=undefined`. The `;` inside the subshell clears the
 		// prior chain, so cr's prior set is `[sync]` only — NOT
 		// `[foo, sync]`. This is the intentional conservative-under trade-
-		// off documented on `computePriorAndChains`; pin it so a future
-		// walker change that treats the outer `&&` as bridging across the
-		// `;` doesn't silently flip to an over-allow.
+		// off of the chain-reachability walk in
+		// `evaluator-internals/speculative-synthesis.ts`; pin it so a
+		// future walker change that treats the outer `&&` as bridging
+		// across the `;` doesn't silently flip to an over-allow.
 		//
 		// We prove it with an observer that matches ONLY `foo` (not sync).
 		// If foo were in cr's prior chain the rule would wrongly
@@ -1564,6 +1675,377 @@ describe("buildEvaluator: chain-aware when.happened (&&-speculative allow)", () 
 		assert.ok(
 			res && res.block === true,
 			"conservative-under: cr's prior is [sync] after `;`; fooObserver can't allow",
+		);
+	});
+
+	// ---- Pinned correctness case: two-speculative-writes + since ----
+
+	it("blocks `A && B && cr` when A writes X and B writes Y (X since Y)", async () => {
+		// Walker-producer unification correctness case. Pre-unification,
+		// speculative-allow was a boolean "any prior && ref matches an
+		// observer writing the event" — it ignored cross-type invalidators
+		// written by OTHER prior && refs. So `A && B && cr` with X-writer A
+		// and Y-writer B (Y being X's since-invalidator) incorrectly
+		// speculative-allowed: A's write of X counted even though B's later
+		// write of Y would stale it.
+		//
+		// Post-unification, speculative entries carry AST-ordered timestamps
+		// (baseline + 1 + index), so the synthetic X at ts=baseline+1 is
+		// older than synthetic Y at ts=baseline+2. `when.happened: { event:
+		// X, since: Y }` correctly reads X as stale and fires the rule.
+		const EVENT_X = "chain-two-writes-x" as const;
+		const EVENT_Y = "chain-two-writes-y" as const;
+		const aObserver: Observer = {
+			name: "a-writer",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObserver: Observer = {
+			name: "b-writer",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-y-blocks",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver, bObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"unification: synthetic X older than synthetic Y → X is stale → rule fires",
+		);
+	});
+
+	it("allows `A && B && cr` when the since-type matches NEITHER prior ref's observer", async () => {
+		// Regression guard for the inverse scenario. If only X's observer
+		// is registered (no one writes Y), A's write of X makes the event
+		// fresh AND the invalidator is absent in scope — happened degrades
+		// to simple-presence semantics, rule does NOT fire. Confirms the
+		// unification still grants allow when there's no cross-type
+		// invalidator in play.
+		const EVENT_X = "chain-only-x" as const;
+		const EVENT_Y_ABSENT = "chain-only-x-since-absent" as const;
+		const aObserver: Observer = {
+			name: "a-writer-only",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-absent-allows",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y_ABSENT,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"synthetic X present + Y absent → simple-presence → rule does NOT fire",
+		);
+	});
+
+	it("allows `B && A && cr` (AST-reversed): X newer than Y does NOT fire", async () => {
+		// Mirror of the blocks-case above. Same observers, same rule, but
+		// the command chain is AST-REVERSED: Y-writer first, X-writer second.
+		// Synthetic Y at ts=baseline+1, synthetic X at ts=baseline+2 → X is
+		// AST-newer than Y → `happened: { event: X, since: Y }` reads X as
+		// FRESH (written after the since-invalidator) → rule does NOT fire.
+		//
+		// This case is the integration-layer guard for the strict-ordering
+		// property of speculative timestamps. Under a mutation that ties all
+		// speculative timestamps (e.g., every speculative at baseline+1),
+		// `eventLatest <= sinceLatest` would flip to true (tie case), the
+		// rule would incorrectly fire, and this test would fail. The paired
+		// blocks-case above passes under that mutation because a tie still
+		// satisfies `<=` → the fix is guarded on both sides only when this
+		// test is present.
+		const EVENT_X = "chain-reversed-x" as const;
+		const EVENT_Y = "chain-reversed-y" as const;
+		const aObserver: Observer = {
+			name: "a-writer-reversed",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObserver: Observer = {
+			name: "b-writer-reversed",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-since-y-allows-reversed",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X is stale (Y written after)",
+			when: {
+				happened: {
+					event: EVENT_X,
+					in: "agent_loop",
+					since: EVENT_Y,
+				},
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObserver, bObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("bravo && alpha && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"AST-reversed: synthetic X newer than synthetic Y → X is fresh → rule does NOT fire",
+		);
+	});
+});
+
+describe("buildEvaluator: when.happened with in='tool_call'", () => {
+	// `tool_call` scope narrows `happened` to the speculative-only
+	// timeline: real (session-persisted) entries are ignored entirely.
+	// Fires when the speculative event is absent from THIS tool_call's
+	// `&&`-chain; does NOT fire when a prior chained ref writes the
+	// event. Use for "must be chained directly before" semantics, vs
+	// `agent_loop`'s "must have happened anywhere this loop".
+
+	it("event in chain: `sync && cr` — synthetic write satisfies tool_call presence", async () => {
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("sync && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.equal(
+			res,
+			undefined,
+			"speculative sync in chain → tool_call happened → rule does NOT fire",
+		);
+	});
+
+	it("event absent from chain: bare `cr` — no speculative write → rule fires", async () => {
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(
+			res && res.block === true,
+			"bare cr, no sync in chain → tool_call presence check fails → rule fires",
+		);
+	});
+
+	it("ignores real entries: `sync` ran in prior tool_call, now bare `cr` — rule still fires", async () => {
+		// The defining characteristic of tool_call vs agent_loop:
+		// real (persisted) entries from PRIOR tool_calls are ignored.
+		// With in: "agent_loop" the same fixture would NOT fire because
+		// sync already happened this loop. With in: "tool_call", only
+		// speculative entries in the CURRENT chain count.
+		const EVENT = "chain-only-sync" as const;
+		const observer: Observer = {
+			name: "sync-writer",
+			writes: [EVENT],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^sync\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-needs-chained-sync",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "sync must be chained directly before cr",
+			when: {
+				happened: { event: EVENT, in: "tool_call" },
+			},
+		};
+		const host = makeHost();
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [observer] },
+			resolve(),
+			host,
+		);
+		// Pre-seed a real entry simulating a prior successful sync in
+		// this agent loop (what agent_loop scope would satisfy).
+		host.appendEntry(EVENT, { _agentLoopIndex: 0, priorRun: true });
+		const res = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(
+			res && res.block === true,
+			"real prior-tool_call sync entry is ignored under in='tool_call' → rule fires",
+		);
+	});
+
+	it("tool_call + since: in-chain invalidator stales the in-chain event", async () => {
+		// `alpha && bravo && cr` where alpha writes X and bravo writes Y.
+		// Y is the since-invalidator for X. Under tool_call scope, both
+		// X and Y are speculative-only; AST ordering gives X.ts < Y.ts
+		// → X is stale → rule fires.
+		const EVENT_X = "tc-since-x" as const;
+		const EVENT_Y = "tc-since-y" as const;
+		const aObs: Observer = {
+			name: "a-writer",
+			writes: [EVENT_X],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^alpha\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const bObs: Observer = {
+			name: "b-writer",
+			writes: [EVENT_Y],
+			watch: {
+				toolName: "bash",
+				inputMatches: { command: /^bravo\b/ },
+				exitCode: "success",
+			},
+			onResult: () => {},
+		};
+		const rule: Rule = {
+			name: "cr-x-since-y-tc",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "X stale (Y written after)",
+			when: {
+				happened: { event: EVENT_X, in: "tool_call", since: EVENT_Y },
+			},
+		};
+		const evaluator = buildEvaluator(
+			{ rules: [rule], observers: [aObs, bObs] },
+			resolve(),
+			makeHost(),
+		);
+		const res = await evaluator.evaluate(
+			bashEvent("alpha && bravo && cr --review"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.ok(
+			res && res.block === true,
+			"speculative X older than speculative Y → tool_call: X is stale → rule fires",
 		);
 	});
 });
@@ -1752,10 +2234,10 @@ describe("buildEvaluator: plugin predicates", () => {
 		const plugin: Plugin = {
 			name: "p",
 			predicates: {
-				commitsAhead: ((args, _ctx) => {
+				commitsAhead: (args, _ctx) => {
 					seenArgs.push(args);
 					return true;
-				}) as PredicateHandler,
+				},
 			},
 		};
 		const rule: Rule = {
@@ -2101,6 +2583,202 @@ describe("buildEvaluator: Rule.onFire", () => {
 		);
 		assert.ok(res && res.block === true);
 		assert.equal(called, true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Rule.reason as a ReasonFn (D3 of Tier B / PR #5)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: Rule.reason function form", () => {
+	it("invokes the function with the PredicateContext and prefixes the result", async () => {
+		let invoked = false;
+		let seenCwd: string | undefined;
+		const rule: Rule = {
+			name: "dyn-reason",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: (ctx) => {
+				invoked = true;
+				seenCwd = ctx.cwd;
+				return `cannot rm at ${ctx.cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/work/proj"),
+			0,
+		);
+		assert.ok(invoked, "reason function must be invoked");
+		assert.equal(seenCwd, "/work/proj", "ctx.cwd passed through");
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:dyn-reason@user] cannot rm at /work/proj",
+		);
+	});
+
+	it("awaits async function reasons", async () => {
+		const rule: Rule = {
+			name: "async-reason",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: async (ctx) => {
+				await new Promise((r) => setTimeout(r, 1));
+				return `async at ${ctx.cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/work"),
+			0,
+		);
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:async-reason@user] async at /work",
+		);
+	});
+
+	it("appends override hint when the rule is overridable", async () => {
+		const rule: Rule = {
+			name: "overridable-dyn",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: () => "dynamic body",
+			noOverride: false,
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("rm foo"),
+			makeCtx("/x"),
+			0,
+		);
+		assert.ok(res);
+		const reason = (res as { reason: string }).reason;
+		assert.match(reason, /^\[steering:overridable-dyn@user\] dynamic body/);
+		assert.match(
+			reason,
+			/To override, include a comment: `# steering-override: overridable-dyn/,
+		);
+	});
+
+	it("throwing function: logs console.warn and emits fail-safe fallback", async () => {
+		const warnings = captureWarnings();
+		try {
+			const rule: Rule = {
+				name: "broken-reason",
+				tool: "bash",
+				field: "command",
+				pattern: "^rm\\b",
+				reason: () => {
+					throw new Error("boom");
+				},
+			};
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const res = await evaluator.evaluate(
+				bashEvent("rm foo"),
+				makeCtx("/x"),
+				0,
+			);
+			// Block must still fire — the reason failure doesn't release the
+			// rule's guard.
+			assert.ok(res, "block verdict preserved even when reason fn throws");
+			assert.equal(
+				(res as { reason: string }).reason,
+				"[steering:broken-reason@user] (reason failed to format; see log)",
+			);
+			// Warn message format pinned so tests can detect the throw in CI
+			// output.
+			const hit = warnings.find((w) =>
+				/reason function threw/.test(w),
+			);
+			assert.ok(
+				hit,
+				`expected a 'reason function threw' warning; got: ${warnings.join("\n")}`,
+			);
+			assert.match(
+				hit!,
+				/\[pi-steering\] Rule "broken-reason"@user: reason function threw: boom/,
+			);
+			assert.match(hit!, /at /, "warning includes the stack");
+		} finally {
+			warnings.restore();
+		}
+	});
+
+	it("rejecting async function: also triggers fallback + console.warn", async () => {
+		const warnings = captureWarnings();
+		try {
+			const rule: Rule = {
+				name: "async-broken",
+				tool: "bash",
+				field: "command",
+				pattern: "^rm\\b",
+				reason: async () => {
+					throw new Error("async boom");
+				},
+			};
+			const evaluator = buildEvaluator(
+				{ rules: [rule] },
+				resolve(),
+				makeHost(),
+			);
+			const res = await evaluator.evaluate(
+				bashEvent("rm foo"),
+				makeCtx("/x"),
+				0,
+			);
+			assert.ok(res);
+			assert.equal(
+				(res as { reason: string }).reason,
+				"[steering:async-broken@user] (reason failed to format; see log)",
+			);
+			assert.ok(
+				warnings.some((w) => /reason function threw: async boom/.test(w)),
+			);
+		} finally {
+			warnings.restore();
+		}
+	});
+
+	it("reason fn reads ctx.walkerState.cwd — the canonical use case", async () => {
+		// Lock in the RDS-migration-findings workflow: a rule reads the
+		// walker-resolved cwd to produce a contextual block message.
+		// Uses `cd $(pwd)` to push cwd into 'unknown'; reason fn reports
+		// that to the agent so they know the chain was intractable.
+		const rule: Rule = {
+			name: "cwd-reporter",
+			tool: "bash",
+			field: "command",
+			pattern: "^rm\\b",
+			reason: (ctx) => {
+				const cwd = ctx.walkerState?.["cwd"] as string;
+				return cwd === "unknown"
+					? "walker could not resolve cwd statically"
+					: `rm blocked at ${cwd}`;
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		const res = await evaluator.evaluate(
+			bashEvent("cd $(pwd) && rm foo"),
+			makeCtx("/orig"),
+			0,
+		);
+		assert.ok(res);
+		assert.equal(
+			(res as { reason: string }).reason,
+			"[steering:cwd-reporter@user] walker could not resolve cwd statically",
+		);
 	});
 });
 
@@ -3665,6 +4343,265 @@ describe("buildEvaluator: PredicateToolInput.basename + args", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PredicateToolInput bash-only field: envAssignments (Phase 1a / I1)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: PredicateToolInput.envAssignments", () => {
+	function captureInput(seen: PredicateContext[]): Rule {
+		return {
+			name: "peek-env",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek-env",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+	}
+
+	it("bash with no env prefix → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.ok(Array.isArray(input.envAssignments));
+		assert.equal(input.envAssignments!.length, 0);
+	});
+
+	it("bash with one env prefix AWS_PROFILE=dev → envAssignments has that word", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("AWS_PROFILE=dev aws s3 ls"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.ok(Array.isArray(input.envAssignments));
+		assert.equal(input.envAssignments!.length, 1);
+		assert.equal(input.envAssignments![0]!.text, "AWS_PROFILE=dev");
+		// args should NOT include the env assignment — only the suffix.
+		assert.equal(input.basename, "aws");
+		const argVals = (
+			input.args as ReadonlyArray<{ value?: string; text?: string }>
+		).map((w) => w.value ?? w.text);
+		assert.deepEqual(argVals, ["s3", "ls"]);
+	});
+
+	it("bash with multiple env prefixes A=1 B=2 → envAssignments preserves order", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=1 B=2 run-me"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.equal(input.envAssignments!.length, 2);
+		assert.equal(input.envAssignments![0]!.text, "A=1");
+		assert.equal(input.envAssignments![1]!.text, "B=2");
+	});
+
+	it("wrapper's own shell prefix stays on the outer ref (A=1 sudo cmd)", async () => {
+		// `A=1 sudo aws s3 ls` — the shell-level prefix `A=1` belongs to
+		// `sudo` (that's where the shell binds env assignments). After
+		// wrapper expansion the walker surfaces both the outer `sudo` ref
+		// AND an inner `aws` ref; envAssignments must reflect the scoping
+		// the shell does — i.e. `A=1` on the outer ref, not smuggled onto
+		// the inner ref.
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=1 sudo aws s3 ls"),
+			makeCtx("/r"),
+			0,
+		);
+		const sudoInput = seen
+			.map((s) => s.input)
+			.find((i) => i.basename === "sudo");
+		const awsInput = seen
+			.map((s) => s.input)
+			.find((i) => i.basename === "aws");
+		assert.ok(sudoInput, "expected a sudo ref");
+		assert.ok(awsInput, "expected an aws ref after wrapper expansion");
+		assert.deepEqual(
+			sudoInput.envAssignments!.map((w) => w.text),
+			["A=1"],
+		);
+		// Inner ref gets its own (empty) prefix — the walker does not
+		// smuggle the outer's shell prefix down to the inner ref.
+		assert.deepEqual(
+			awsInput.envAssignments!.map((w) => w.text),
+			[],
+		);
+	});
+
+	it("dynamic value A=$VAR is preserved verbatim in the Word.text", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [captureInput(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent("A=$VAR run-me"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		const input = seen[0]!.input;
+		assert.equal(input.envAssignments!.length, 1);
+		assert.equal(input.envAssignments![0]!.text, "A=$VAR");
+	});
+
+	it("write tool → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const rule: Rule = {
+			name: "w",
+			tool: "write",
+			field: "content",
+			pattern: /./,
+			reason: "w",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			writeEvent("/tmp/x", "hi"),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		assert.ok(Array.isArray(seen[0]!.input.envAssignments));
+		assert.equal(seen[0]!.input.envAssignments!.length, 0);
+	});
+
+	it("edit tool → envAssignments is []", async () => {
+		const seen: PredicateContext[] = [];
+		const rule: Rule = {
+			name: "e",
+			tool: "edit",
+			field: "content",
+			pattern: /./,
+			reason: "e",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false;
+				},
+			},
+		};
+		const evaluator = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+		await evaluator.evaluate(
+			editEvent("/tmp/x", [{ oldText: "a", newText: "b" }]),
+			makeCtx("/r"),
+			0,
+		);
+		assert.equal(seen.length, 1);
+		assert.ok(Array.isArray(seen[0]!.input.envAssignments));
+		assert.equal(seen[0]!.input.envAssignments!.length, 0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// buildEvaluator: PredicateContext.walkerState.env (Tier B end-to-end)
+// ---------------------------------------------------------------------------
+
+describe("buildEvaluator: PredicateContext.walkerState.env", () => {
+	function envCapture(seen: PredicateContext[]): Rule {
+		return {
+			name: "peek-env",
+			tool: "bash",
+			field: "command",
+			pattern: /./,
+			reason: "peek-env",
+			when: {
+				condition: (ctx) => {
+					seen.push(ctx);
+					return false; // never block; we only want to observe ctx
+				},
+			},
+		};
+	}
+
+	it("bare assignment earlier in chain surfaces in walkerState.env on the later ref's condition", async () => {
+		// End-to-end evidence that envTracker + walker + buildEvaluator wire
+		// the env snapshot through to PredicateContext for predicates
+		// (not just the testing mockContext harness).
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [envCapture(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(
+			bashEvent('WS="/ws"; cmd'),
+			makeCtx("/r"),
+			0,
+		);
+		// The condition fires against every extracted ref; the `cmd` ref is
+		// the one whose walker-state reflects the threaded env from WS="/ws".
+		const cmdCtx = seen.find(
+			(c) => c.input.tool === "bash" && c.input.basename === "cmd",
+		);
+		assert.ok(cmdCtx, "cmd ref should have fired the condition");
+		assert.ok(cmdCtx.walkerState, "walkerState should be populated");
+		assert.ok(cmdCtx.walkerState.env instanceof Map);
+		assert.equal(
+			(cmdCtx.walkerState.env as ReadonlyMap<string, string>).get("WS"),
+			"/ws",
+		);
+	});
+
+	it("walkerState.env is an empty map when no env-modifying commands ran", async () => {
+		const seen: PredicateContext[] = [];
+		const evaluator = buildEvaluator(
+			{ rules: [envCapture(seen)] },
+			resolve(),
+			makeHost(),
+		);
+		await evaluator.evaluate(bashEvent("git status"), makeCtx("/r"), 0);
+		assert.equal(seen.length, 1);
+		const firstCtx = seen[0];
+		assert.ok(firstCtx);
+		assert.ok(firstCtx.walkerState, "walkerState should be populated");
+		const env = firstCtx.walkerState.env as ReadonlyMap<string, string>;
+		assert.ok(env instanceof Map);
+		// Seeded from process.env at module load — may contain HOME/USER/PWD.
+		// Assertion: does NOT contain names that were never assigned.
+		assert.equal(env.get("WS"), undefined);
+		assert.equal(env.get("SOMETHING_UNSET"), undefined);
+	});
+});
+
+// ---------------------------------------------------------------------------
 // S1: top-level engine fail-closed + per-predicate isolation coverage
 // ---------------------------------------------------------------------------
 
@@ -3865,9 +4802,286 @@ describe("buildEvaluator: user rule-name validation (S3)", () => {
 	});
 });
 
+describe("buildEvaluator: when.happened.notIn (scope subtraction)", () => {
+	const sessionEntry = (
+		customType: string,
+		data: Record<string, unknown>,
+		ts = "2026-01-01T00:00:00.000Z",
+		id = "e1",
+	) => ({
+		type: "custom" as const,
+		customType,
+		data,
+		timestamp: ts,
+		id,
+		parentId: null,
+	});
+
+	const DESC_READ_EVENT = "desc-read" as const;
+
+	const descObserver: Observer = {
+		name: "desc-reader",
+		writes: [DESC_READ_EVENT],
+		watch: {
+			toolName: "bash",
+			inputMatches: { command: /^diff\b/ },
+			exitCode: "success",
+		},
+		onResult: () => {},
+	};
+
+	const descCheck: Rule = {
+		name: "cr-desc-check",
+		tool: "bash",
+		field: "command",
+		pattern: /^cr\b/,
+		reason: "diff first, in a prior tool_call",
+		when: {
+			happened: {
+				event: DESC_READ_EVENT,
+				in: "agent_loop",
+				notIn: "tool_call",
+			},
+		},
+	};
+
+	// ----- Group 1: primary use case (agent_loop \ tool_call) -----
+
+	it("fires when no real entries exist in current agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(fires, "no diff in any prior tool_call → rule fires");
+	});
+
+	it("allows when event happened in a prior tool_call in same agent loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 5 }),
+		]);
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.equal(skips, undefined, "real entry present → rule passes");
+	});
+
+	it("blocks same-tool_call same-tool_call speculative bypass (diff && cr)", async () => {
+		// WITHOUT `notIn: "tool_call"`, the chain would allow via
+		// speculative synthesis. WITH the subtraction, speculative
+		// entries are excluded and the rule fires.
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await evaluator.evaluate(
+			bashEvent("diff && cr --review"),
+			makeCtx("/r"),
+			5,
+		);
+		assert.ok(fires, "same-tool_call speculative entries don't count under notIn:tool_call");
+	});
+
+	it("fires when only entries from a PRIOR agent loop exist", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [descCheck], observers: [descObserver] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 3 }),
+		]);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires, "real entry from loop 3 != ctx.agentLoopIndex 5 → rule fires");
+	});
+
+	// ----- Group 2: session \ agent_loop (prior-loop filter) -----
+
+	const priorLoopRule: Rule = {
+		name: "prior-loop-needed",
+		tool: "bash",
+		field: "command",
+		pattern: /^cr\b/,
+		reason: "must have happened in a prior loop",
+		when: {
+			happened: {
+				event: DESC_READ_EVENT,
+				in: "session",
+				notIn: "agent_loop",
+			},
+		},
+	};
+
+	it("session \\ agent_loop: fires when event only in current agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [priorLoopRule] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 5 }),
+		]);
+		const fires = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.ok(fires, "current-loop entries subtracted → empty → rule fires");
+	});
+
+	it("session \\ agent_loop: allows when event from PRIOR agent_loop", async () => {
+		const evaluator = buildEvaluator(
+			{ rules: [priorLoopRule] },
+			resolve(),
+			makeHost(),
+		);
+		const ctx = makeCtx("/r", [
+			sessionEntry(DESC_READ_EVENT, { _agentLoopIndex: 3 }),
+		]);
+		const skips = await evaluator.evaluate(
+			bashEvent("cr --review"),
+			ctx,
+			5,
+		);
+		assert.equal(skips, undefined, "prior-loop real entry present → rule passes");
+	});
+
+	// ----- Group 3: since interaction -----
+
+	it("notIn:tool_call with since: real event + real invalidator behave correctly", async () => {
+		const INVAL = "invalidator";
+		const ruleWithSince: Rule = {
+			name: "cr-desc-check-since",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "stale after invalidator",
+			when: {
+				happened: {
+					event: DESC_READ_EVENT,
+					in: "agent_loop",
+					since: INVAL,
+					notIn: "tool_call",
+				},
+			},
+		};
+		// Event BEFORE invalidator: event stale → rule fires.
+		const ctxStale = makeCtx("/r", [
+			sessionEntry(
+				DESC_READ_EVENT,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:00.000Z",
+				"e1",
+			),
+			sessionEntry(
+				INVAL,
+				{ _agentLoopIndex: 5 },
+				"2026-01-01T00:00:05.000Z",
+				"i1",
+			),
+		]);
+		const ev = buildEvaluator(
+			{ rules: [ruleWithSince] },
+			resolve(),
+			makeHost(),
+		);
+		const fires = await ev.evaluate(bashEvent("cr --review"), ctxStale, 5);
+		assert.ok(fires, "event older than invalidator → stale → rule fires");
+	});
+
+	// ----- Group 4: invalid-shape runtime errors -----
+	// Errors thrown inside predicate evaluation are caught by the
+	// evaluator's per-rule try/catch (so the LLM never sees them).
+	// Tests capture the console.warn to verify the error was surfaced.
+
+	const mkBadRule = (notIn: unknown): Rule =>
+		({
+			name: "bad-rule",
+			tool: "bash",
+			field: "command",
+			pattern: /^cr\b/,
+			reason: "x",
+			when: {
+				happened: {
+					event: DESC_READ_EVENT,
+					in: "agent_loop",
+					notIn: notIn as never,
+				},
+			},
+		}) as Rule;
+
+	async function assertWarnMatches(
+		rule: Rule,
+		pattern: RegExp,
+	): Promise<void> {
+		const warnings = captureWarnings();
+		try {
+			const ev = buildEvaluator({ rules: [rule] }, resolve(), makeHost());
+			const res = await ev.evaluate(
+				bashEvent("cr --review"),
+				makeCtx("/r"),
+				5,
+			);
+			assert.equal(
+				res,
+				undefined,
+				"predicate threw → rule does not fire (fail-open)",
+			);
+			assert.ok(
+				warnings.some((w) => pattern.test(w)),
+				`no warning matched ${pattern} in:\n${warnings.join("\n")}`,
+			);
+		} finally {
+			warnings.restore();
+		}
+	}
+
+	it("throws when notIn is a superset of in", async () => {
+		// in: agent_loop, notIn: session → session ⊃ agent_loop → error.
+		await assertWarnMatches(mkBadRule("session"), /superset/);
+	});
+
+	it("throws when notIn is identical to in", async () => {
+		await assertWarnMatches(mkBadRule("agent_loop"), /identical/);
+	});
+
+	it('treats legacy "turn" as unknown-scope inside notIn', async () => {
+		await assertWarnMatches(
+			mkBadRule("turn"),
+			/when\.happened\.notIn must be.*"agent_loop", "session", or "tool_call"/,
+		);
+	});
+
+	it("throws when notIn is a non-string (e.g. JSON config passes an object)", async () => {
+		// Pre-v0.1.0 the shape was `not: { in: "tool_call" }` (nested
+		// object). Authors passing that shape get a clear error.
+		await assertWarnMatches(
+			mkBadRule({ in: "tool_call" }),
+			/when\.happened\.notIn must be.*"agent_loop", "session", or "tool_call"/,
+		);
+	});
+});
+
 // Keep `Observer` import referenced — downstream tests in
 // observer-dispatcher.test.ts exercise it directly; keeping the symbol
-// used here avoids "unused import" diagnostics if this file migrates.
+// used here avoids "unused import" diagnostics if this file is refactored.
 const _obsTypeKeepalive = null as unknown as Observer | null;
 void _obsTypeKeepalive;
 // And pull in ToolCallEvent for the narrow type echo below so unused-

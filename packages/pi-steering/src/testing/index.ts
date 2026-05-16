@@ -52,7 +52,9 @@ import type {
 	PredicateToolInput,
 	SteeringConfig,
 	ToolResultEvent as SchemaToolResultEvent,
+	WhenWalkerState,
 } from "../schema.ts";
+import type { SyntheticEntry } from "../evaluator-internals/speculative-synthesis.ts";
 import type {
 	ExecResult as PiExecResult,
 	ExtensionContext,
@@ -60,7 +62,11 @@ import type {
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_PLUGINS, DEFAULT_RULES } from "../defaults.ts";
-import { createAppendEntry } from "../evaluator-internals/context.ts";
+import {
+	AGENT_LOOP_INDEX_KEY,
+	createAppendEntry,
+	isPlainObject,
+} from "../evaluator-internals/context.ts";
 import {
 	buildEvaluator,
 	type EvaluatorHost,
@@ -75,6 +81,7 @@ import {
 	resolvePlugins,
 	type ResolvedPluginState,
 } from "../plugin-merger.ts";
+import { dropUnusedObservers } from "../internal/drop-unused-observers.ts";
 
 // ---------------------------------------------------------------------------
 // Capture tracking
@@ -219,17 +226,33 @@ export function loadHarness(options: LoadHarnessOptions): Harness {
 	const resolved = resolvePlugins(
 		filteredConfig.plugins ?? [],
 		filteredConfig,
-		// `cwd` is injected by the evaluator (built-in `cwdTracker`);
-		// extensions targeting it are valid and must not be treated as
-		// orphans. Keep in sync with `buildSessionRuntime`.
-		["cwd"],
+		// `cwd` and `env` are injected by the evaluator (built-in
+		// cwdTracker + envTracker); extensions targeting them are valid
+		// and must not be treated as orphans. Keep in sync with
+		// `buildSessionRuntime`.
+		["cwd", "env"],
 	);
 
+	// Mirror session-runtime's unused-observer drop so loadHarness
+	// tests produce the same verdicts as production for rules that
+	// rely on observer writes.
+	const userObservers = filteredConfig.observers ?? [];
+	const allRules = [...(filteredConfig.rules ?? []), ...resolved.rules];
+	const pluginDrop = dropUnusedObservers(resolved.observers, allRules);
+	const userDrop = dropUnusedObservers(userObservers, allRules);
+	for (const d of [...pluginDrop.dropped, ...userDrop.dropped]) {
+		console.info(
+			`[pi-steering] observer '${d.name}' dropped; its writes ` +
+				`(${d.writes.join(", ")}) are not consumed by any rule`,
+		);
+	}
+	const filteredResolved = { ...resolved, observers: [...pluginDrop.kept] };
+
 	const host = options.host ?? defaultHarnessHost();
-	const evaluator = buildEvaluator(filteredConfig, resolved, host);
+	const evaluator = buildEvaluator(filteredConfig, filteredResolved, host);
 	const dispatcher = buildObserverDispatcher(
-		resolved,
-		filteredConfig.observers ?? [],
+		filteredResolved,
+		userDrop.kept,
 		host,
 	);
 
@@ -237,7 +260,7 @@ export function loadHarness(options: LoadHarnessOptions): Harness {
 		evaluate: evaluator.evaluate,
 		dispatch: dispatcher.dispatch,
 		config: filteredConfig,
-		resolved,
+		resolved: filteredResolved,
 	};
 }
 
@@ -276,6 +299,89 @@ export interface MockEntry {
 }
 
 /**
+ * Options for {@link priorEntry}.
+ */
+export interface PriorEntryOptions {
+	/**
+	 * Agent-loop index to stamp on the payload. The engine's live
+	 * `appendEntry` wrapper stamps this automatically on every write;
+	 * fixture entries must reproduce the same shape so `when.happened:
+	 * { in: "agent_loop" }` scope filtering works identically whether
+	 * the entry was written at runtime or seeded into the mock.
+	 *
+	 * Defaults to `0`. Set to the value of {@link MockContextOptions.agentLoopIndex}
+	 * to place the entry in the current agent loop; set to a lower
+	 * value (or 0 with `agentLoopIndex: 1+` on the context) to place
+	 * it in a prior agent loop.
+	 */
+	readonly agentLoopIndex?: number;
+
+	/**
+	 * ISO-8601 timestamp string. Defaults to `"2026-01-01T00:00:00.000Z"`.
+	 * Use distinct, monotonically-increasing timestamps when seeding
+	 * multiple entries the `since` invalidation sentinel needs to
+	 * order.
+	 */
+	readonly timestamp?: string;
+}
+
+/**
+ * Build a {@link MockEntry} for {@link MockContextOptions.entries}
+ * (and the observer-context equivalent) with the reserved
+ * `_agentLoopIndex` tag stamped on the payload exactly as the live
+ * engine's `appendEntry` wrapper would.
+ *
+ * The reserved-key name is kept as an internal detail of the engine
+ * so plugin / fixture authors don't have to remember the underscore
+ * prefix. A typo on the `agentLoopIndex` field of {@link PriorEntryOptions}
+ * is a TypeScript compile error; the equivalent typo on a hand-rolled
+ * `data: { agentLoopIndex: 5 }` literal is silent — the entry passes
+ * through `findEntries` but then fails to match the current
+ * agent-loop scope, and the rule under test appears to misbehave.
+ *
+ * Payload shaping mirrors the live `createAppendEntry`:
+ *   - Plain-object `data`: merged as `{ ...data, _agentLoopIndex }`.
+ *   - Anything else (arrays, Date, Map, Set, Error, primitives,
+ *     null, undefined): wrapped as `{ value: data, _agentLoopIndex }`.
+ *
+ * @example
+ *   const ctx = mockContext({
+ *     agentLoopIndex: 5,
+ *     entries: [
+ *       priorEntry("ws-sync-done", {}, { agentLoopIndex: 5 }),
+ *     ],
+ *   });
+ *   // `when.happened: { event: "ws-sync-done", in: "agent_loop" }`
+ *   // now sees the entry as "happened in the current loop".
+ */
+export function priorEntry(
+	customType: string,
+	data?: unknown,
+	opts?: PriorEntryOptions,
+): MockEntry {
+	const agentLoopIndex = opts?.agentLoopIndex ?? 0;
+	const tagged = isPlainObject(data)
+		? { ...data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex }
+		: { value: data, [AGENT_LOOP_INDEX_KEY]: agentLoopIndex };
+	return {
+		type: "custom",
+		customType,
+		timestamp: opts?.timestamp ?? "2026-01-01T00:00:00.000Z",
+		data: tagged,
+	};
+}
+
+/**
+ * Re-exported for plugin authors constructing `toolCallEvents`
+ * fixtures on {@link MockContextOptions}. Structurally `{ data,
+ * timestamp, speculative: true }` — the same shape the walker-level
+ * speculative-entry synthesis pass produces in production. Plugin
+ * predicates that filter out speculative entries check
+ * `entry.speculative === true`.
+ */
+export type { SyntheticEntry } from "../evaluator-internals/speculative-synthesis.ts";
+
+/**
  * Options for {@link mockContext}.
  */
 export interface MockContextOptions {
@@ -301,11 +407,25 @@ export interface MockContextOptions {
 
 	/**
 	 * Walker-state snapshot the predicate sees via
-	 * {@link PredicateContext.walkerState}. Defaults to
-	 * `{ cwd: options.cwd }` so built-in `when.cwd` reads the right
-	 * effective cwd without any walker having to run.
+	 * {@link PredicateContext.walkerState}.
+	 *
+	 * Defaults to `{ cwd: options.cwd, env: new Map() }` so the
+	 * built-in `when.cwd` predicate and any plugin reading
+	 * `walkerState.env` work without wiring up a full walker. Callers
+	 * who want a specific env map or branch tracker state pass it in
+	 * via this option.
+	 *
+	 * The typed shape is {@link WhenWalkerState} with every field
+	 * optional (partial) so tests that only care about one dimension
+	 * don't have to fill in the others. The engine's production path
+	 * always populates `cwd` + `env`; the mock's default matches.
+	 *
+	 * Partial override: fields you pass merge over the defaults, so
+	 * `mockContext({ walkerState: { cwd: "/x" } })` keeps the default
+	 * empty env Map (same shape as production). Pass `env` explicitly
+	 * only when you need a seeded map.
 	 */
-	readonly walkerState?: Record<string, unknown>;
+	readonly walkerState?: Partial<WhenWalkerState> & Record<string, unknown>;
 
 	/**
 	 * Stub for `ctx.exec`. Defaults to rejecting with a clear error
@@ -323,30 +443,33 @@ export interface MockContextOptions {
 	 * Prior session entries `findEntries` reads from. Filtered by
 	 * customType; timestamps parsed from the ISO string to epoch-ms,
 	 * matching the production shape.
+	 *
+	 * For rules that use `when.happened: { in: "agent_loop" }` (or
+	 * `in: "session"` with the same-loop filter), construct entries
+	 * via {@link priorEntry} so the engine's reserved
+	 * `_agentLoopIndex` tag is stamped correctly — hand-rolled
+	 * literals with a typo (`agentLoopIndex` instead of the underscore
+	 * form) silently fail to match the current agent-loop scope and
+	 * the rule appears to misbehave.
 	 */
 	readonly entries?: ReadonlyArray<MockEntry>;
 
 	/**
-	 * Chain-aware prior-`&&` refs (see
-	 * {@link PredicateContext.priorAndChainedRefs}). Empty by default —
-	 * single-ref bash tool_calls don't have any prior-&& siblings. Set
-	 * this to simulate `A && B && C` scenarios when unit-testing a
-	 * predicate that introspects chain-aware state (including the
-	 * built-in `happened` speculative-allow path).
+	 * Per-ref speculative events the built-in `when.happened` predicate
+	 * reads from `ctx.walkerState.events` (see
+	 * {@link PredicateContext.walkerState}'s reserved `events` key).
+	 * Keys are the `customType` event literals; values are the
+	 * synthetic entries for that type. When provided, overwrites any
+	 * `events` entry on the caller's {@link walkerState}.
+	 *
+	 * Use this to drive `when.happened` with `in: "tool_call"` (or any plugin
+	 * predicate that introspects `walkerState.events`) in isolation
+	 * without wiring up `loadHarness` + a full bash event. The shape
+	 * matches what the walker-level synthesis pass produces in
+	 * production — `{ data, timestamp, speculative: true }` per entry.
 	 */
-	readonly priorAndChainedRefs?: readonly { text: string }[];
-
-	/**
-	 * Chain-aware observer reverse-index (see
-	 * {@link PredicateContext.observersByWrittenEvent}). Defaults to
-	 * undefined, which matches the production shape when no observer
-	 * declares `writes`. Provide a populated map to simulate
-	 * chain-aware speculative allow: key is the event literal, value
-	 * the list of observers writing it.
-	 */
-	readonly observersByWrittenEvent?: ReadonlyMap<
-		string,
-		readonly Observer[]
+	readonly toolCallEvents?: Readonly<
+		Record<string, readonly SyntheticEntry[]>
 	>;
 }
 
@@ -362,7 +485,28 @@ export function mockContext(
 	const cwd = options.cwd ?? "/tmp/test";
 	const tool = options.tool ?? "bash";
 	const input = options.input ?? defaultInputFor(tool);
-	const walkerState = options.walkerState ?? { cwd };
+	// Default walker state satisfies the required `cwd` + `env` fields
+	// of {@link WhenWalkerState}. Callers supplying their own
+	// walkerState get a shallow merge: defaults first, override last,
+	// so `mockContext({ walkerState: { cwd: "/x" } })` keeps the
+	// default env Map instead of dropping it (which would crash any
+	// predicate that reads `ctx.walkerState.env.get(...)`). This
+	// matches the production evaluator, which always populates both
+	// cwd and env.
+	const baseWalkerState: Record<string, unknown> = {
+		cwd,
+		env: new Map<string, string>(),
+		...(options.walkerState as Record<string, unknown> | undefined),
+	};
+	// Fold `toolCallEvents` (option) into `walkerState.events` (ctx
+	// shape) the same way the evaluator's `prepareBashState` does —
+	// the caller doesn't have to know the reserved-key convention.
+	// Explicit option wins over any `events` entry the caller placed
+	// directly on `walkerState`.
+	const walkerState: Record<string, unknown> =
+		options.toolCallEvents !== undefined
+			? { ...baseWalkerState, events: options.toolCallEvents }
+			: baseWalkerState;
 	const agentLoopIndex = options.agentLoopIndex ?? 0;
 	const buffer: CapturedEntry[] = [];
 
@@ -384,17 +528,15 @@ export function mockContext(
 		exec: buildExec(options.exec, "mockContext"),
 		appendEntry: createAppendEntry(bufferingHost, agentLoopIndex),
 		findEntries: buildFindEntries(options.entries ?? []),
-		walkerState,
-		// Chain-aware state. Both fields are optional on the production
-		// `PredicateContext`, so omitting the option yields the same shape
-		// the evaluator produces for non-bash candidates or configs with
-		// no observer `writes`.
-		...(options.priorAndChainedRefs !== undefined
-			? { priorAndChainedRefs: options.priorAndChainedRefs }
-			: {}),
-		...(options.observersByWrittenEvent !== undefined
-			? { observersByWrittenEvent: options.observersByWrittenEvent }
-			: {}),
+		// Cast: mockContext's walkerState may be a user-supplied `Partial<
+		// WhenWalkerState>`. The default path above fills in cwd + env;
+		// explicit-override callers might omit them intentionally (testing
+		// plugin predicates that don't read cwd / env). The production
+		// evaluator always populates both, so tests that care match that
+		// via the default. The Partial<> option shape signals "bring what
+		// you need"; this cast acknowledges the resulting schema-strict
+		// shape is the mock's responsibility.
+		walkerState: walkerState as Readonly<WhenWalkerState>,
 	};
 
 	appendBuffers.set(ctx, buffer);
@@ -430,7 +572,7 @@ function defaultInputFor(
  */
 export type MockObserverContextOptions = Omit<
 	MockContextOptions,
-	"tool" | "input" | "walkerState" | "priorAndChainedRefs" | "observersByWrittenEvent"
+	"tool" | "input" | "walkerState" | "toolCallEvents"
 >;
 
 /**
@@ -922,10 +1064,11 @@ function resolveToolResultEvent(
  * ```
  *
  * Chain-aware predicates (e.g. the built-in `happened` with its
- * `&&`-chain speculative allow) read `ctx.priorAndChainedRefs` and
- * `ctx.observersByWrittenEvent`. Both are surfaceable through
- * {@link MockContextOptions} so those code paths can be exercised in
- * isolation without wiring up `loadHarness` + a full bash event.
+ * `&&`-chain speculative allow) read per-ref synthetic events from
+ * `ctx.walkerState.events`. Populate `toolCallEvents` (or set
+ * `walkerState` directly) in {@link MockContextOptions} to simulate
+ * that surface in isolation without wiring up `loadHarness` + a
+ * full bash event.
  */
 export async function testPredicate<A = unknown>(
 	predicate: PredicateHandler<A>,
