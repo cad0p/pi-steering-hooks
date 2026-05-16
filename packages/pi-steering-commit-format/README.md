@@ -68,6 +68,32 @@ Empty `require: []` is a no-op (nothing required → nothing fires).
 
 The predicate inspects `ctx.input.command`, extracts the `-m <msg>` value via `extractCommitMessage`, and runs every required checker. Commands without a `-m` (e.g., bare `git commit`, which would open an editor) are NOT validated by this predicate — the editor flow needs a separate hook.
 
+## Combine with custom formats
+
+Use `commitFormatFactory` to build your own predicate that AND-gates the builtins with a custom checker:
+
+```ts
+import {
+  BUILTIN_FORMATS,
+  commitFormatFactory,
+} from "pi-steering-commit-format";
+import type { Plugin } from "pi-steering";
+
+const myCommitFormat = commitFormatFactory({
+  ...BUILTIN_FORMATS,
+  custom: (msg) => /^\[CUSTOM\]/.test(msg),
+});
+
+export const myPlugin = {
+  name: "my-org",
+  predicates: { commitFormat: myCommitFormat },
+} as const satisfies Plugin;
+```
+
+The factory's `require:` arg is type-narrowed to `keyof F`, so TypeScript flags typos at the rule's `when:` slot. Calling with an unknown format name via a JS / `as any` bypass fail-CLOSES (the predicate fires).
+
+`BUILTIN_FORMATS` is the registry of available checkers, NOT a default-required set — callers always pick which formats to AND together via `require:`.
+
 ## License
 
 MIT
