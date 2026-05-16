@@ -32,7 +32,7 @@ export default defineConfig({
       pattern: /^git\s+commit\b/,
       when: { commitFormat: { require: ["conventional"] } },
       reason:
-        "Commit messages must follow Conventional Commits 1.0.0 (feat: ..., fix(scope): ..., etc.).",
+        "Commit messages must follow Conventional Commits 1.0.0 with the Angular preset's type allowlist (feat: ..., fix(scope): ..., etc.).",
     },
     {
       name: "require-jira-and-conventional",
