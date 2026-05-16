@@ -45,7 +45,13 @@ const deployRequiresCleanTree = {
 	tool: "bash",
 	field: "command",
 	pattern: /^npm\s+run\s+deploy\b/,
-	when: { not: { isClean: true } },
+	// Fail-closed semantics under walker-unknown cwd: use `isClean: false`
+	// (the canonical "fires when dirty" form per gitPlugin's predicates.ts
+	// JSDoc) NOT `not: { isClean: true }`. The requireKnownCwd wrap returns
+	// true unconditionally under walker-unknown cwd; the `not:` form
+	// inverts that to false and silently fails OPEN. See README
+	// "Why isClean: false, not not: { isClean: true }" subsection.
+	when: { isClean: false },
 	reason: (ctx) => {
 		if (ctx.walkerState?.cwd === "unknown") {
 			// requireKnownCwd-wrap fired: walker couldn't resolve cwd

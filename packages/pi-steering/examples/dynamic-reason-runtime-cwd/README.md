@@ -28,7 +28,38 @@ reason: (ctx) => {
 },
 ```
 
-The agent gets a useful next-step in both cases instead of a generic "rule blocked" message.
+The rule is gated by `when: { isClean: false }` — NOT
+`when: { not: { isClean: true } }`. See the next subsection.
+
+## Why `isClean: false`, not `not: { isClean: true }`
+
+Both shapes look equivalent at first glance ("the working tree is
+NOT clean"). They are not, because gitPlugin's `isClean` is
+`requireKnownCwd`-wrapped: under walker-unknown cwd, the wrap returns
+`true` unconditionally (so the engine fires the rule fail-closed,
+matching the `onUnknown: "block"` policy). Wrapping that wrap in
+`not:` inverts the fail-closed `true` back to `false` — silent
+fail-OPEN.
+
+Truth table for the three states this rule must handle (predicate
+result `→` rule-fires? after `when:` evaluation):
+
+| state                | `isClean` returns | `when: { isClean: false }` | `when: { not: { isClean: true } }` |
+|----------------------|-------------------|----------------------------|------------------------------------|
+| walker-unknown cwd   | `true` (wrap)     | fires ✅ (fail-closed)      | does NOT fire ❌ (fail-OPEN)        |
+| walker-known + clean | `true` (impl)     | does NOT fire ✅            | does NOT fire ✅                    |
+| walker-known + dirty | `false` (impl)    | fires ✅                    | fires ✅                            |
+
+The two shapes agree on the static-cwd cases but diverge on the
+walker-unknown branch — the case the `requireKnownCwd` wrap exists
+for in the first place.
+
+Rule of thumb for any future plugin author copying this example:
+over a `requireKnownCwd`-wrapped predicate, prefer the predicate's
+documented inverted shape (e.g., `isClean: false`,
+`hasStagedChanges: false`) to `not: { ... }`. gitPlugin's
+`predicates.ts` JSDoc documents both polarities of every wrapped
+predicate exactly so this anti-pattern is unnecessary.
 
 ## When to use this pattern
 

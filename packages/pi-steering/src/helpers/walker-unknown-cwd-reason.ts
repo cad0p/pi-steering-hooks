@@ -52,7 +52,7 @@ import type { PredicateContext } from "../schema.ts";
  *   name: "deploy-requires-clean-tree",
  *   tool: "bash", field: "command",
  *   pattern: /^npm\s+run\s+deploy/,
- *   when: { not: { isClean: true } },
+ *   when: { isClean: false },
  *   reason: (ctx) => {
  *     if (ctx.walkerState?.cwd === "unknown") {
  *       return walkerUnknownCwdReason(ctx, "working tree status");
@@ -61,6 +61,16 @@ import type { PredicateContext } from "../schema.ts";
  *   },
  * };
  * ```
+ *
+ * @warning Avoid `when: { not: { someRequireKnownCwdWrappedPredicate:
+ *          true } }` over a {@link requireKnownCwd}-wrapped predicate.
+ *          The wrap returns `true` unconditionally on the
+ *          walker-unknown branch (so the engine fires fail-closed);
+ *          inverting that with `not:` flips fail-closed back to
+ *          fail-OPEN silently. Use the predicate's documented
+ *          inverted form instead — for `isClean`, that is
+ *          `{ isClean: false }` (gitPlugin's `predicates.ts` JSDoc
+ *          documents both polarities for exactly this reason).
  */
 export function walkerUnknownCwdReason(
 	ctx: PredicateContext,

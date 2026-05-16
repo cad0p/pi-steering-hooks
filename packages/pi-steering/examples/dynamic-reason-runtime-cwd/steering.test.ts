@@ -16,9 +16,10 @@
  *
  * Also smoke-test the config shape (registered rule, bash/command,
  * non-empty reason callable). The third branch (walker-known + clean
- * tree → no fire) is a property of `gitPlugin.isClean`'s predicate,
- * not of this rule's ReasonFn — out of scope for the reason-text
- * pinning above.
+ * tree → no fire) is covered structurally via the rule-shape pin
+ * below — inverting the `when:` clause regresses the test — rather
+ * than via a full engine roundtrip; full-engine coverage of the
+ * three-branch matrix is a v0.1.x candidate.
  */
 
 import assert from "node:assert/strict";
@@ -58,6 +59,17 @@ async function callReason(ctx: PredicateContext): Promise<string> {
 }
 
 describe("example: dynamic-reason-runtime-cwd", () => {
+	it("rule.when uses canonical fail-closed shape (not the `not:` anti-pattern)", () => {
+		// Pins the rule's `when:` to `{ isClean: false }`. The
+		// alternative `{ not: { isClean: true } }` looks equivalent but
+		// silently fails OPEN on the walker-unknown-cwd branch (the
+		// `requireKnownCwd` wrap returns `true` unconditionally so the
+		// engine fires fail-closed; `not:` inverts that to `false`).
+		// See README "Why isClean: false, not not: { isClean: true }".
+		const rule = getDeployRule();
+		assert.deepEqual(rule.when, { isClean: false });
+	});
+
 	it("registers the deploy-requires-clean-tree rule (bash/command)", () => {
 		const rule = getDeployRule();
 		assert.equal(rule.tool, "bash");
