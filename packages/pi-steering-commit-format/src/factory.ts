@@ -67,7 +67,7 @@ export function commitFormatFactory<F extends Record<string, FormatChecker>>(
 	formats: F,
 ): PredicateHandler<CommitFormatArgs<keyof F & string>> {
 	return async (args, ctx: PredicateContext) => {
-		const cmd = (ctx.input as { command?: string }).command ?? "";
+		const cmd = ctx.input.command ?? "";
 		const msg = extractCommitMessage(cmd);
 		if (!msg) return false; // no -m to validate
 		for (const fmt of args.require) {

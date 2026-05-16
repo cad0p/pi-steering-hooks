@@ -22,8 +22,7 @@ import {
 
 /**
  * Build a {@link PredicateContext} stubbed with a `bash`/`command`
- * input shape — what the predicate inspects via
- * `(ctx.input as { command? }).command`.
+ * input shape — the predicate inspects `ctx.input.command`.
  */
 function ctxWithCommand(command: string): PredicateContext {
 	return mockContext({
