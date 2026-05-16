@@ -73,6 +73,14 @@ describe("isConventionalCommit — fail cases", () => {
 		assert.equal(isConventionalCommit("wibble: do something"), false);
 	});
 
+	it("rejects 1.0.0-conformant types outside the Angular allowlist (`release:`, `merge:`)", () => {
+		// The README, package.json description, and conventional.ts JSDoc
+		// all call out these tokens explicitly as 1.0.0-conformant-but-rejected.
+		// Pin them so an allowlist widening can't slip past silently.
+		assert.equal(isConventionalCommit("release: tag v1.2.3"), false);
+		assert.equal(isConventionalCommit("merge: branch foo"), false);
+	});
+
 	it("rejects leading whitespace", () => {
 		// Anchored regex: leading whitespace is a contract violation
 		// (commit messages are read by tools that strip surrounding
