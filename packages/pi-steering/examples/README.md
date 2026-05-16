@@ -11,6 +11,7 @@ with rationale.
 | [no-amend](./no-amend) | No `git commit --amend`. Includes a cwd-scoped variant | Review-driven workflows where commit-SHA stability matters |
 | [draft-prs-only](./draft-prs-only) | `gh pr create` requires `--draft` | Teams that require human review before marking ready |
 | [combined-git-discipline](./combined-git-discipline) | All three above | Starting point for disciplined PR teams |
+| [dynamic-reason-runtime-cwd](./dynamic-reason-runtime-cwd) | Composes a `requireKnownCwd`-wrapped predicate (`isClean`) with a two-branch `ReasonFn` using `walkerUnknownCwdReason` | Plugin authors writing rules over runtime-cwd predicates that need useful agent reasons on the walker-unknown branch |
 | [work-item-plugin](./work-item-plugin) | Canonical example PLUGIN (not a rule-pack). See the plugin's own README. | Authors writing a new plugin |
 
 Each rule-pack directory has smoke tests (`steering.test.ts`) that
