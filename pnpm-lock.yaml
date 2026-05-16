@@ -31,6 +31,15 @@ importers:
         specifier: ^5.4.5
         version: 5.9.3
 
+  packages/pi-steering-commit-format:
+    devDependencies:
+      pi-steering:
+        specifier: workspace:*
+        version: link:../pi-steering
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+
   packages/pi-steering-flags:
     devDependencies:
       pi-steering:
