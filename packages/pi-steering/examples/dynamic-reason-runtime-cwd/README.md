@@ -44,7 +44,6 @@ matching the `onUnknown: "block"` policy). Wrapping that wrap in
 `not:` inverts the fail-closed `true` to `false` — silent
 fail-OPEN.
 
-
 Truth table for the four states this rule must handle (predicate
 result `→` rule-fires? after `when:` evaluation):
 
@@ -71,8 +70,7 @@ on TWO branches in OPPOSITE directions:
   fail-closed across BOTH branches standalone — `{ isClean: false }`
   covers walker-unknown but loses git-fails, while
   `{ not: { isClean: true } }` covers git-fails but loses
-  walker-unknown. Pair `isClean` with `upstream` to close both
-  branches (per gitPlugin's `predicates.ts` JSDoc).
+  walker-unknown.
 
 For full fail-closed coverage across both branches, pair `isClean`
 with an `upstream` check exactly as gitPlugin's `predicates.ts`
