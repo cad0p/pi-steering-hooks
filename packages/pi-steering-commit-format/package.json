@@ -2,7 +2,7 @@
 	"name": "pi-steering-commit-format",
 	"version": "0.0.0-poc.0",
 	"private": true,
-	"description": "Commit-message format validation predicates for pi-steering. Bundled formats: Conventional Commits 1.0.0, bracketed JIRA-style ticket references. Extensible via `commitFormatFactory`.",
+	"description": "Commit-message format validation predicates for pi-steering. Bundled formats: Conventional Commits 1.0.0 (Angular preset type allowlist), bracketed JIRA-style ticket references. Extensible via `commitFormatFactory`.",
 	"keywords": [
 		"pi-package",
 		"pi-steering-package",

@@ -6,7 +6,9 @@
  * predicates for pi-steering rules.
  *
  * Bundled formats:
- *   - Conventional Commits 1.0.0 (`feat: ...`, `fix(scope): ...`, etc.)
+ *   - Conventional Commits 1.0.0 with the Angular preset's 11-token
+ *     type allowlist (`feat: ...`, `fix(scope): ...`, etc. — see
+ *     `conventional.ts` JSDoc for the full allowlist + caveats)
  *   - Bracketed JIRA-style ticket references (`[ABC-123]`)
  *
  * Extensible via `commitFormatFactory`: bring your own format
