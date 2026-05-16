@@ -41,7 +41,7 @@ export default defineConfig({
       pattern: /^git\s+commit\b/,
       when: { commitFormat: { require: ["conventional", "jira"] } },
       reason:
-        "Commit messages must follow Conventional Commits AND include a bracketed JIRA reference (e.g. [ABC-123]).",
+        "Commit messages must follow Conventional Commits 1.0.0 with the Angular preset's type allowlist AND include a bracketed JIRA reference (e.g. [ABC-123]).",
     },
   ],
 });

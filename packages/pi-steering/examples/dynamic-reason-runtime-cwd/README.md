@@ -41,8 +41,9 @@ NOT clean"). They are not, because gitPlugin's `isClean` is
 `requireKnownCwd`-wrapped: under walker-unknown cwd, the wrap returns
 `true` unconditionally (so the engine fires the rule fail-closed,
 matching the `onUnknown: "block"` policy). Wrapping that wrap in
-`not:` inverts the fail-closed `true` back to `false` — silent
+`not:` inverts the fail-closed `true` to `false` — silent
 fail-OPEN.
+
 
 Truth table for the four states this rule must handle (predicate
 result `→` rule-fires? after `when:` evaluation):
@@ -67,7 +68,11 @@ on TWO branches in OPPOSITE directions:
   `getWorkingTreeClean` returns `null` and the handler short-circuits
   to `false`), the polarity flips: `{ isClean: false }` is fail-OPEN
   and `{ not: { isClean: true } }` is fail-closed. Neither shape is
-  fail-closed standalone in this state.
+  fail-closed across BOTH branches standalone — `{ isClean: false }`
+  covers walker-unknown but loses git-fails, while
+  `{ not: { isClean: true } }` covers git-fails but loses
+  walker-unknown. Pair `isClean` with `upstream` to close both
+  branches (per gitPlugin's `predicates.ts` JSDoc).
 
 For full fail-closed coverage across both branches, pair `isClean`
 with an `upstream` check exactly as gitPlugin's `predicates.ts`

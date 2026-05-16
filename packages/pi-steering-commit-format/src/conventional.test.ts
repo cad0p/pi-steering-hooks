@@ -74,9 +74,9 @@ describe("isConventionalCommit — fail cases", () => {
 	});
 
 	it("rejects 1.0.0-conformant types outside the Angular allowlist (`release:`, `merge:`)", () => {
-		// The README, package.json description, and conventional.ts JSDoc
-		// all call out these tokens explicitly as 1.0.0-conformant-but-rejected.
-		// Pin them so an allowlist widening can't slip past silently.
+		// The README and conventional.ts JSDoc both call out these tokens
+		// explicitly as 1.0.0-conformant-but-rejected. Pin them so an
+		// allowlist widening can't slip past silently.
 		assert.equal(isConventionalCommit("release: tag v1.2.3"), false);
 		assert.equal(isConventionalCommit("merge: branch foo"), false);
 	});
