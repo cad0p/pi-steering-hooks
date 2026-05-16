@@ -24,8 +24,8 @@ import type { PredicateContext } from "../schema.ts";
  * guidance (e.g., "run cr from inside src/<Package>") composes at the
  * call site by string concatenation.
  *
- * Signature shape: `ctx` first matches `walkerString` /
- * `walkerStringValue` convention. Reading `ctx.cwd` (not
+ * Signature shape: `ctx` first matches the `walkerString` convention.
+ * Reading `ctx.cwd` (not
  * `process.cwd()`) keeps the helper pure, testable via
  * {@link mockContext}, and accurate when pi runs predicates in
  * sandboxed/forked contexts where `process.cwd()` may diverge from
