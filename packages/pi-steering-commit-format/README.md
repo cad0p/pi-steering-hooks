@@ -4,7 +4,7 @@ Commit-message format validation predicates for [pi-steering](https://github.com
 
 Bundled formats:
 
-- **Conventional Commits 1.0.0** — `feat: `, `fix(scope): `, `refactor!: …`, etc.
+- **Conventional Commits 1.0.0 (Angular preset type allowlist)** — `feat: `, `fix(scope): `, `refactor!: …`, etc. The 11-token Angular preset (`feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert`); 1.0.0-conformant types outside that set (`release:`, `merge:`, …) are rejected.
 - **Bracketed JIRA-style ticket references** — `[ABC-123]`, `[PROJ-1234]`, etc.
 
 Extensible via `commitFormatFactory` — bring your own format checker and combine with the builtins.
@@ -61,7 +61,7 @@ commitFormat: {
 
 The default plugin ships with two format checkers:
 
-- `"conventional"` — Conventional Commits 1.0.0 header check.
+- `"conventional"` — Conventional Commits 1.0.0 header check, restricted to the Angular preset's 11-token type allowlist (see the package overview above).
 - `"jira"` — at least one bracketed JIRA-style reference (`[ABC-123]`).
 
 Empty `require: []` is a no-op (nothing required → nothing fires).

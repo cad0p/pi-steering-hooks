@@ -4,10 +4,12 @@
 /**
  * Tests for `isConventionalCommit`.
  *
- * Conventional Commits 1.0.0 spec compliance: pass cases for each of
- * the 11 type tokens, optional scope syntax, optional breaking-change
- * `!`. Fail cases: missing colon, missing space after colon, unknown
- * type, leading whitespace.
+ * Conventional Commits 1.0.0 with the Angular preset type allowlist:
+ * pass cases for each of the 11 type tokens, optional scope syntax,
+ * optional breaking-change `!`. Fail cases: missing colon, missing
+ * space after colon, unknown type (the allowlist boundary —
+ * 1.0.0-conformant types like `release:` are intentionally rejected),
+ * leading whitespace.
  */
 
 import assert from "node:assert/strict";
