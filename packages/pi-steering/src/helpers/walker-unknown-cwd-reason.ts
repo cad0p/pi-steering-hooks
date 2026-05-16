@@ -66,7 +66,7 @@ import type { PredicateContext } from "../schema.ts";
  *          true } }` over a {@link requireKnownCwd}-wrapped predicate.
  *          The wrap returns `true` unconditionally on the
  *          walker-unknown branch (so the engine fires fail-closed);
- *          inverting that with `not:` flips fail-closed back to
+ *          inverting that with `not:` flips fail-closed to
  *          fail-OPEN silently. Use the predicate's documented
  *          inverted form instead — for `isClean`, that is
  *          `{ isClean: false }` (gitPlugin's `predicates.ts` JSDoc
