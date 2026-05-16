@@ -28,6 +28,9 @@ reason: (ctx) => {
 },
 ```
 
+The agent gets a useful next-step in both cases instead of a
+generic "rule blocked" message.
+
 The rule is gated by `when: { isClean: false }` — NOT
 `when: { not: { isClean: true } }`. See the next subsection.
 
@@ -41,18 +44,37 @@ matching the `onUnknown: "block"` policy). Wrapping that wrap in
 `not:` inverts the fail-closed `true` back to `false` — silent
 fail-OPEN.
 
-Truth table for the three states this rule must handle (predicate
+Truth table for the four states this rule must handle (predicate
 result `→` rule-fires? after `when:` evaluation):
 
-| state                | `isClean` returns | `when: { isClean: false }` | `when: { not: { isClean: true } }` |
-|----------------------|-------------------|----------------------------|------------------------------------|
-| walker-unknown cwd   | `true` (wrap)     | fires ✅ (fail-closed)      | does NOT fire ❌ (fail-OPEN)        |
-| walker-known + clean | `true` (impl)     | does NOT fire ✅            | does NOT fire ✅                    |
-| walker-known + dirty | `false` (impl)    | fires ✅                    | fires ✅                            |
+| state                       | `isClean` returns | `when: { isClean: false }`         | `when: { not: { isClean: true } }`  |
+|-----------------------------|-------------------|------------------------------------|-------------------------------------|
+| walker-unknown cwd          | `true` (wrap)     | fires ✅ (fail-closed)              | does NOT fire ❌ (fail-OPEN)         |
+| walker-known + clean        | `true` (impl)     | does NOT fire ✅                    | does NOT fire ✅                     |
+| walker-known + dirty        | `false` (impl)    | fires ✅                            | fires ✅                             |
+| walker-known + git fails    | `false` (impl)    | does NOT fire ❌ (fail-OPEN)        | fires ✅ (fail-closed, opposite)     |
 
-The two shapes agree on the static-cwd cases but diverge on the
-walker-unknown branch — the case the `requireKnownCwd` wrap exists
-for in the first place.
+The two shapes agree on the static-cwd happy-path rows but diverge
+on TWO branches in OPPOSITE directions:
+
+- On the **walker-unknown** branch — the case the `requireKnownCwd`
+  wrap exists for in the first place — `{ isClean: false }` is
+  fail-closed and `{ not: { isClean: true } }` is fail-OPEN. This
+  is the more common cwd-uncertainty case in agentic flows and the
+  reason `{ isClean: false }` is the canonical shape.
+- On the **walker-known + git-fails** branch (e.g., `cwd` resolves
+  to a non-repo, `git status` exits non-zero so
+  `getWorkingTreeClean` returns `null` and the handler short-circuits
+  to `false`), the polarity flips: `{ isClean: false }` is fail-OPEN
+  and `{ not: { isClean: true } }` is fail-closed. Neither shape is
+  fail-closed standalone in this state.
+
+For full fail-closed coverage across both branches, pair `isClean`
+with an `upstream` check exactly as gitPlugin's `predicates.ts`
+JSDoc directs ("Non-zero exit returns `false` (unknown); pair with
+an `upstream` check for fail-closed behavior."). The git-fails
+branch is rare in practice — if `cwd` is known the package is
+typically a real git repo — but it should be explicit, not implied.
 
 Rule of thumb for any future plugin author copying this example:
 over a `requireKnownCwd`-wrapped predicate, prefer the predicate's
