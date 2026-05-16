@@ -312,6 +312,10 @@ export const branch: PredicateHandler = async (value, ctx) => {
  * into `onUnknown: "allow"` would get a silent fail-OPEN. {@link
  * requireKnownCwd} fires the predicate instead, mirroring the engine's
  * `onUnknown: "block"` default. See `hasStagedChanges` JSDoc.
+ *
+ * @see {@link walkerUnknownCwdReason} - compose the agent-facing
+ *      reason text for the walker-unknown-cwd fail-closed branch in
+ *      your rule's ReasonFn.
  */
 export const upstream: PredicateHandler = requireKnownCwd(
 	async (value, ctx) => {
@@ -379,6 +383,10 @@ export interface CommitsAheadArgs {
  * the rule (fail-OPEN). {@link requireKnownCwd} fires the predicate
  * instead, matching the fail-closed policy used by the other
  * runtime-cwd predicates in this plugin.
+ *
+ * @see {@link walkerUnknownCwdReason} - compose the agent-facing
+ *      reason text for the walker-unknown-cwd fail-closed branch in
+ *      your rule's ReasonFn.
  */
 export const commitsAhead: PredicateHandler<CommitsAheadArgs> = requireKnownCwd(
 	async (args, ctx) => {
@@ -423,6 +431,10 @@ export const commitsAhead: PredicateHandler<CommitsAheadArgs> = requireKnownCwd(
  * the handler to fire instead of silently querying the wrong repo,
  * mirroring the engine's `onUnknown: "block"` default. See
  * `helpers/require-known-state.ts` for the full rationale.
+ *
+ * @see {@link walkerUnknownCwdReason} - compose the agent-facing
+ *      reason text for the walker-unknown-cwd fail-closed branch in
+ *      your rule's ReasonFn.
  */
 export const hasStagedChanges: PredicateHandler<boolean> = requireKnownCwd(
 	async (args, ctx) => {
@@ -454,6 +466,10 @@ export const hasStagedChanges: PredicateHandler<boolean> = requireKnownCwd(
  * {@link requireKnownCwd} fires the predicate when the walker couldn't
  * statically resolve the command's effective cwd, rather than
  * silently running `git status` at the pi session cwd.
+ *
+ * @see {@link walkerUnknownCwdReason} - compose the agent-facing
+ *      reason text for the walker-unknown-cwd fail-closed branch in
+ *      your rule's ReasonFn.
  */
 export const isClean: PredicateHandler<boolean> = requireKnownCwd(
 	async (args, ctx) => {
@@ -482,6 +498,10 @@ export const isClean: PredicateHandler<boolean> = requireKnownCwd(
  * the walker couldn't statically resolve the command's effective cwd
  * — querying the wrong repo's remote would silently mis-route a
  * repo-gated rule. Same rationale as {@link hasStagedChanges}.
+ *
+ * @see {@link walkerUnknownCwdReason} - compose the agent-facing
+ *      reason text for the walker-unknown-cwd fail-closed branch in
+ *      your rule's ReasonFn.
  */
 export const remote: PredicateHandler = requireKnownCwd(
 	async (value, ctx) => {
