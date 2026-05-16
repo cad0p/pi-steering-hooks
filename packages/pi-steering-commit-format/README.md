@@ -5,7 +5,7 @@ Commit-message format validation predicates for [pi-steering](https://github.com
 Bundled formats:
 
 - **Conventional Commits 1.0.0** — `feat: `, `fix(scope): `, `refactor!: …`, etc.
-- **Bracketed JIRA-style ticket references** — `[ABC-123]`, `[ORACLE-1234]`, etc.
+- **Bracketed JIRA-style ticket references** — `[ABC-123]`, `[PROJ-1234]`, etc.
 
 Extensible via `commitFormatFactory` — bring your own format checker and combine with the builtins.
 

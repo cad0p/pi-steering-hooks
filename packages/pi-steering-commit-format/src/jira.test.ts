@@ -28,7 +28,7 @@ describe("hasJiraReference — pass cases", () => {
 	});
 
 	it("accepts a long digit suffix", () => {
-		assert.equal(hasJiraReference("[ORACLE-1234567]"), true);
+		assert.equal(hasJiraReference("[PROJECT-1234567]"), true);
 	});
 
 	it("matches in the message body, not just header", () => {

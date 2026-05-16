@@ -4,7 +4,7 @@
 /**
  * Bracketed JIRA-style ticket reference detector.
  *
- * Matches references like `[ABC-123]`, `[ORACLE-1234]`, `[XY-9]` —
+ * Matches references like `[ABC-123]`, `[PROJ-1234]`, `[XY-9]` —
  * any uppercase letter prefix of length >= 2 followed by a hyphen
  * and one or more digits, all wrapped in square brackets. Anywhere
  * in the message (header, body, or footer).
